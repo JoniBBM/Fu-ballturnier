@@ -729,7 +729,10 @@ function loadLiveControl() {
     
     // Start timer updates for live matches
     if (liveMatches.length > 0) {
+        console.log(`Found ${liveMatches.length} live matches, starting updates`);
         startLiveUpdates();
+    } else {
+        console.log('No live matches found');
     }
 }
 
@@ -839,12 +842,12 @@ function calculateMatchTime(liveScore) {
     const now = new Date();
     const startTime = new Date(liveScore.startTime);
     const halfTimeMinutes = liveScore.halfTimeMinutes || 45;
-    const halfTimeMs = halfTimeMinutes * 60 * 1000;
     
     // Wenn pausiert, Zeit bei Pausenbeginn stoppen
     if (liveScore.isPaused && !liveScore.halfTimeBreak) {
+        const pausedMinute = liveScore.minute || 0;
         return {
-            displayTime: formatMinutes(liveScore.minute || 0),
+            displayTime: formatMinutes(pausedMinute),
             halfInfo: 'PAUSIERT',
             status: 'paused'
         };
@@ -859,14 +862,16 @@ function calculateMatchTime(liveScore) {
         };
     }
     
-    let elapsedTime = 0;
     let currentMinute = 0;
     let halfInfo = '';
     let status = 'running';
     
     if (liveScore.currentHalf === 1) {
-        // Erste Halbzeit
-        elapsedTime = now - startTime - (liveScore.pausedTime || 0);
+        // Erste Halbzeit - berechne seit Spielstart
+        let elapsedTime = now - startTime;
+        if (liveScore.pausedTime) {
+            elapsedTime -= liveScore.pausedTime;
+        }
         currentMinute = Math.floor(elapsedTime / (1000 * 60));
         
         if (currentMinute >= halfTimeMinutes) {
@@ -877,9 +882,9 @@ function calculateMatchTime(liveScore) {
             halfInfo = '1. HALBZEIT';
         }
     } else if (liveScore.currentHalf === 2 && liveScore.secondHalfStartTime) {
-        // Zweite Halbzeit
+        // Zweite Halbzeit - berechne seit 2. Halbzeit Start
         const secondHalfStart = new Date(liveScore.secondHalfStartTime);
-        elapsedTime = now - secondHalfStart - (liveScore.pausedTime || 0);
+        let elapsedTime = now - secondHalfStart;
         currentMinute = Math.floor(elapsedTime / (1000 * 60));
         
         if (currentMinute >= halfTimeMinutes) {
@@ -897,10 +902,12 @@ function calculateMatchTime(liveScore) {
 }
 
 function formatMinutes(minutes) {
-    return Math.min(minutes, 99).toString().padStart(2, '0') + ':00';
+    return Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0') + ':00';
 }
 
 function startLiveUpdates() {
+    console.log('Starting live updates...');
+    
     if (liveUpdateInterval) {
         clearInterval(liveUpdateInterval);
     }
@@ -914,7 +921,9 @@ function startLiveUpdates() {
             const liveMatches = latestMatches.filter(m => m.liveScore?.isLive);
             
             if (liveMatches.length === 0) {
+                console.log('No live matches found, stopping updates');
                 clearInterval(liveUpdateInterval);
+                liveUpdateInterval = null;
                 return;
             }
             
@@ -926,7 +935,10 @@ function startLiveUpdates() {
                     const timerElement = matchElement.querySelector('.current-time');
                     const halfElement = matchElement.querySelector('.half-info');
                     
-                    if (timerElement) timerElement.textContent = timeInfo.displayTime;
+                    if (timerElement) {
+                        timerElement.textContent = timeInfo.displayTime;
+                        console.log(`Updated timer for match ${match.id}: ${timeInfo.displayTime}`);
+                    }
                     if (halfElement) halfElement.textContent = timeInfo.halfInfo;
                     
                     // Update button states based on status
@@ -1079,10 +1091,14 @@ function scheduleMatch(matchId) {
     const field = prompt('Spielfeld:', 'Hauptplatz');
     
     if (time && /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
+        console.log(`Scheduling match for time: ${time}`);
+        
         // Aktuelles Datum mit der eingegebenen Uhrzeit kombinieren
         const today = new Date();
-        const [hours, minutes] = time.split(':');
-        const datetime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), parseInt(hours), parseInt(minutes));
+        const [hours, minutes] = time.split(':').map(num => parseInt(num));
+        const datetime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+        
+        console.log(`Scheduled datetime: ${datetime.toLocaleString('de-DE')}`);
         
         fetch('/api/admin/schedule', {
             method: 'POST',
@@ -1100,6 +1116,9 @@ function scheduleMatch(matchId) {
             } else {
                 showNotification(data.error, 'error');
             }
+        }).catch(error => {
+            console.error('Error scheduling match:', error);
+            showNotification('Fehler beim Planen des Spiels', 'error');
         });
     } else if (time) {
         showNotification('Ungültiges Zeitformat. Bitte HH:MM verwenden.', 'error');
@@ -1116,6 +1135,14 @@ async function scheduleAllMatches() {
     
     if (!startTime || !matchDuration) return;
     
+    // Validiere Zeitformat
+    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+        showNotification('Ungültiges Zeitformat. Bitte HH:MM verwenden.', 'error');
+        return;
+    }
+    
+    console.log(`Auto-scheduling: Start at ${startTime}, duration ${matchDuration}min`);
+    
     try {
         const response = await fetch('/api/admin/schedule-all', {
             method: 'POST',
@@ -1131,13 +1158,14 @@ async function scheduleAllMatches() {
         const data = await response.json();
         
         if (data.success) {
-            showNotification(`${data.scheduledMatches} Spiele automatisch geplant!`);
+            showNotification(`${data.scheduledMatches} Spiele automatisch geplant ab ${startTime} Uhr!`);
             await loadInitialData();
             loadMatches();
         } else {
             showNotification(data.error, 'error');
         }
     } catch (error) {
+        console.error('Error auto-scheduling:', error);
         showNotification('Fehler beim automatischen Planen', 'error');
     }
 }

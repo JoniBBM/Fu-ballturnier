@@ -401,6 +401,8 @@ async function loadLiveMatch() {
 }
 
 function startLiveUpdates(liveMatch) {
+    console.log('Starting live updates for viewers...');
+    
     // Clear existing interval
     if (liveUpdateInterval) {
         clearInterval(liveUpdateInterval);
@@ -413,7 +415,10 @@ function startLiveUpdates(liveMatch) {
             const timerElement = document.getElementById('live-timer');
             const halfElement = document.getElementById('live-half-info');
             
-            if (timerElement) timerElement.textContent = timeInfo.displayTime;
+            if (timerElement) {
+                timerElement.textContent = timeInfo.displayTime;
+                console.log(`Updated viewer timer: ${timeInfo.displayTime}`);
+            }
             if (halfElement) halfElement.textContent = timeInfo.halfInfo;
             
             // Fetch latest score
@@ -422,6 +427,7 @@ function startLiveUpdates(liveMatch) {
             
             if (!data.liveMatch) {
                 // Match ended, reload page
+                console.log('Match ended, reloading live match display');
                 loadLiveMatch();
                 return;
             }

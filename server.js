@@ -12,8 +12,14 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// Persistenz-Datei
-const DATA_FILE = path.join(__dirname, 'tournament-data.json');
+// Saves-Ordner
+const SAVES_DIR = path.join(__dirname, 'saves');
+
+// Saves-Ordner erstellen falls nicht vorhanden
+if (!fs.existsSync(SAVES_DIR)) {
+    fs.mkdirSync(SAVES_DIR);
+    console.log('Saves-Ordner erstellt:', SAVES_DIR);
+}
 
 // In-Memory-Datenbank
 let tournaments = [];
@@ -21,31 +27,35 @@ let teams = [];
 let matches = [];
 let currentTournament = null;
 
-// Daten laden beim Start
-function loadData() {
+// Daten für bestimmtes Jahr laden
+function loadDataForYear(year) {
+    const filename = path.join(SAVES_DIR, `${year}.json`);
     try {
-        if (fs.existsSync(DATA_FILE)) {
-            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        if (fs.existsSync(filename)) {
+            const data = JSON.parse(fs.readFileSync(filename, 'utf8'));
             tournaments = data.tournaments || [];
             teams = data.teams || [];
             matches = data.matches || [];
             currentTournament = data.currentTournament || null;
-            console.log(`Daten geladen: ${tournaments.length} Turniere, ${teams.length} Teams, ${matches.length} Spiele`);
-        } else {
-            console.log('Keine gespeicherten Daten gefunden - Start mit leerer Datenbank');
+            console.log(`Daten für ${year} geladen: ${teams.length} Teams, ${matches.length} Spiele`);
+            return true;
         }
     } catch (error) {
-        console.error('Fehler beim Laden der Daten:', error);
-        // Bei Fehler mit leeren Arrays starten
-        tournaments = [];
-        teams = [];
-        matches = [];
-        currentTournament = null;
+        console.error(`Fehler beim Laden der Daten für ${year}:`, error);
     }
+    return false;
 }
 
-// Daten speichern
+// Daten für aktuelles Jahr speichern
 function saveData() {
+    if (!currentTournament) {
+        console.log('Keine aktuellen Turnierdaten zum Speichern');
+        return;
+    }
+    
+    const year = currentTournament.year;
+    const filename = path.join(SAVES_DIR, `${year}.json`);
+    
     try {
         const data = {
             tournaments,
@@ -54,16 +64,28 @@ function saveData() {
             currentTournament,
             lastUpdated: new Date().toISOString()
         };
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-        console.log('Daten gespeichert');
+        fs.writeFileSync(filename, JSON.stringify(data, null, 2));
+        console.log(`Daten für ${year} gespeichert in:`, filename);
     } catch (error) {
-        console.error('Fehler beim Speichern der Daten:', error);
+        console.error(`Fehler beim Speichern der Daten für ${year}:`, error);
     }
 }
 
 // Automatisches Speichern bei Änderungen
 function autoSave() {
     saveData();
+}
+
+// Beim Start das aktuelle Jahr laden
+function loadCurrentYearData() {
+    const currentYear = new Date().getFullYear();
+    if (!loadDataForYear(currentYear)) {
+        console.log(`Keine gespeicherten Daten für ${currentYear} gefunden - Start mit leerer Datenbank`);
+        tournaments = [];
+        teams = [];
+        matches = [];
+        currentTournament = null;
+    }
 }
 
 // Admin-Authentifizierung (vereinfacht)
@@ -255,9 +277,19 @@ app.post('/api/admin/tournament', (req, res) => {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
     }
     
+    const tournamentYear = year || new Date().getFullYear();
+    
+    // Lade Daten für das Jahr falls vorhanden
+    loadDataForYear(tournamentYear);
+    
+    // Prüfe ob bereits ein Turnier für das Jahr existiert
+    if (currentTournament && currentTournament.year === tournamentYear) {
+        return res.status(400).json({ error: `Für ${tournamentYear} existiert bereits ein Turnier` });
+    }
+    
     currentTournament = {
         id: Date.now(),
-        year: year || new Date().getFullYear(),
+        year: tournamentYear,
         settings: {},
         status: 'registration', // registration, closed, active, finished
         groups: [],
@@ -274,7 +306,7 @@ app.post('/api/admin/tournament', (req, res) => {
     // Teams und Matches zurücksetzen für neues Turnier
     teams = [];
     matches = [];
-    tournaments.push(currentTournament);
+    tournaments = [currentTournament]; // Nur aktuelles Turnier in Array
     
     autoSave();
     
@@ -401,18 +433,30 @@ app.post('/api/admin/schedule-all', (req, res) => {
         });
     }
     
-    // Parse Startzeit
-    const [hours, minutes] = startTime.split(':');
+    // Parse Startzeit korrekt
+    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+        return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
+    }
+    
+    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
+    console.log(`Parsed time: ${hours}:${minutes.toString().padStart(2, '0')}`);
+    
+    // Heutiges Datum mit korrekter Uhrzeit
     const today = new Date();
-    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), parseInt(hours), parseInt(minutes));
+    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+    
+    console.log(`Starting at: ${currentTime.toLocaleString('de-DE')}`);
     
     // Plane alle Spiele
-    alternatingSchedule.forEach(match => {
+    alternatingSchedule.forEach((match, index) => {
         match.scheduled = {
             datetime: new Date(currentTime),
             field: field || 'Hauptplatz'
         };
-        currentTime = new Date(currentTime.getTime() + matchDuration * 60000); // Nächste Zeit
+        console.log(`Match ${index + 1}: ${match.team1} vs ${match.team2} at ${currentTime.toLocaleTimeString('de-DE')}`);
+        
+        // Nächste Zeit berechnen (matchDuration Minuten später)
+        currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
     });
     
     autoSave();
@@ -722,11 +766,11 @@ app.post('/api/admin/login', (req, res) => {
 });
 
 // Daten beim Start laden
-loadData();
+loadCurrentYearData();
 
 // Server starten
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`CVJM Fellbach Fußballturnier-Server läuft auf Port ${PORT}`);
     console.log(`Admin-Passwort: ${ADMIN_PASSWORD}`);
-    console.log(`Daten werden in ${DATA_FILE} gespeichert`);
+    console.log(`Daten werden in ${SAVES_DIR} gespeichert`);
 });
