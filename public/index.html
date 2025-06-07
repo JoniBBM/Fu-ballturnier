@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVJM Fellbach - Fußballturnier</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-futbol"></i> CVJM Fellbach Fußballturnier</h1>
+                <button id="admin-btn" class="admin-btn">
+                    <i class="fas fa-user-shield"></i> Admin
+                </button>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav">
+            <button class="nav-btn active" data-tab="home">
+                <i class="fas fa-home"></i> Übersicht
+            </button>
+            <button class="nav-btn" data-tab="live">
+                <i class="fas fa-broadcast-tower"></i> Live
+            </button>
+            <button class="nav-btn" data-tab="register">
+                <i class="fas fa-plus-circle"></i> Team anmelden
+            </button>
+            <button class="nav-btn" data-tab="teams">
+                <i class="fas fa-users"></i> Teams
+            </button>
+            <button class="nav-btn" data-tab="schedule">
+                <i class="fas fa-calendar"></i> Spielplan
+            </button>
+            <button class="nav-btn" data-tab="tables">
+                <i class="fas fa-table"></i> Tabellen
+            </button>
+        </nav>
+
+        <!-- Content -->
+        <main class="main">
+            <!-- Home Tab -->
+            <div id="home" class="tab-content active">
+                <div class="welcome-card">
+                    <h2><i class="fas fa-trophy"></i> Willkommen zum CVJM Fellbach Fußballturnier!</h2>
+                    <p>Hier findest du alle Informationen zum diesjährigen Turnier des CVJM Fellbach.</p>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-number" id="team-count">0</div>
+                            <div class="stat-label">Angemeldete Teams</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number" id="match-count">0</div>
+                            <div class="stat-label">Geplante Spiele</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number" id="completed-count">0</div>
+                            <div class="stat-label">Abgeschlossene Spiele</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Tab -->
+            <div id="live" class="tab-content">
+                <div class="live-card">
+                    <h2><i class="fas fa-broadcast-tower"></i> Live-Übertragung</h2>
+                    <div id="live-content">
+                        <!-- Live-Inhalt wird dynamisch geladen -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Register Tab -->
+            <div id="register" class="tab-content">
+                <div class="form-card">
+                    <h2><i class="fas fa-plus-circle"></i> Team anmelden</h2>
+                    <div id="registration-status">
+                        <!-- Status wird dynamisch geladen -->
+                    </div>
+                    <form id="team-form" style="display: none;">
+                        <div class="form-group">
+                            <label for="team-name">
+                                <i class="fas fa-shield-alt"></i> Teamname
+                            </label>
+                            <input type="text" id="team-name" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="contact-name">
+                                <i class="fas fa-user"></i> Ansprechpartner
+                            </label>
+                            <input type="text" id="contact-name" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="contact-info">
+                                <i class="fas fa-phone"></i> E-Mail oder Handynummer
+                            </label>
+                            <input type="text" id="contact-info" required>
+                        </div>
+                        
+                        <div class="privacy-notice">
+                            <i class="fas fa-shield-alt"></i>
+                            <small>Diese Kontaktdaten sind nicht öffentlich einsehbar und werden nur von den Organisatoren verwendet.</small>
+                        </div>
+                        
+                        <button type="submit" class="submit-btn">
+                            <i class="fas fa-check"></i> Team anmelden
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Teams Tab -->
+            <div id="teams" class="tab-content">
+                <div class="teams-card">
+                    <h2><i class="fas fa-users"></i> Angemeldete Teams</h2>
+                    <div id="teams-list" class="teams-grid">
+                        <!-- Teams werden dynamisch geladen -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Tab -->
+            <div id="schedule" class="tab-content">
+                <div class="schedule-card">
+                    <h2><i class="fas fa-calendar"></i> Spielplan</h2>
+                    <div id="schedule-content">
+                        <!-- Spielplan wird dynamisch geladen -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tables Tab -->
+            <div id="tables" class="tab-content">
+                <div class="tables-card">
+                    <h2><i class="fas fa-table"></i> Tabellen</h2>
+                    <div id="tables-content">
+                        <!-- Tabellen werden dynamisch geladen -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Admin Modal -->
+    <div id="admin-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-user-shield"></i> Admin-Bereich</h3>
+                <button class="close-btn" id="close-admin">&times;</button>
+            </div>
+            
+            <div id="admin-login" class="admin-section">
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="admin-password">
+                            <i class="fas fa-lock"></i> Passwort
+                        </label>
+                        <input type="password" id="admin-password" required>
+                    </div>
+                    <button type="submit" class="submit-btn">
+                        <i class="fas fa-sign-in-alt"></i> Anmelden
+                    </button>
+                </form>
+            </div>
+            
+            <div id="admin-panel" class="admin-section" style="display: none;">
+                <div class="admin-tabs">
+                    <button class="admin-tab-btn active" data-admin-tab="teams">Teams verwalten</button>
+                    <button class="admin-tab-btn" data-admin-tab="tournament">Turnier erstellen</button>
+                    <button class="admin-tab-btn" data-admin-tab="results">Ergebnisse</button>
+                </div>
+                
+                <div id="admin-teams" class="admin-tab-content active">
+                    <h4>Registrierte Teams</h4>
+                    <div id="admin-teams-list"></div>
+                </div>
+                
+                <div id="admin-tournament" class="admin-tab-content">
+                    <h4>Turnier erstellen</h4>
+                    <form id="tournament-form">
+                        <div class="form-group">
+                            <label for="tournament-year">Jahr</label>
+                            <input type="number" id="tournament-year" value="2025" required>
+                        </div>
+                        <button type="submit" class="submit-btn">
+                            <i class="fas fa-trophy"></i> Turnier erstellen
+                        </button>
+                    </form>
+                </div>
+                
+                <div id="admin-results" class="admin-tab-content">
+                    <h4>Ergebnisse eintragen</h4>
+                    <div id="matches-for-results"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div id="notification" class="notification"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>

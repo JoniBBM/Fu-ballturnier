@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVJM Fellbach - Admin Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="admin.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="admin-container">
+        <!-- Sidebar -->
+        <nav class="admin-sidebar">
+            <div class="sidebar-header">
+                <h2><i class="fas fa-user-shield"></i> Admin Panel</h2>
+                <p>CVJM Fellbach</p>
+            </div>
+            
+            <ul class="sidebar-menu">
+                <li><a href="#dashboard" class="menu-item active" data-tab="dashboard">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                </a></li>
+                <li><a href="#tournament" class="menu-item" data-tab="tournament">
+                    <i class="fas fa-trophy"></i> Turnier erstellen
+                </a></li>
+                <li><a href="#teams" class="menu-item" data-tab="teams">
+                    <i class="fas fa-users"></i> Teams verwalten
+                </a></li>
+                <li><a href="#matches" class="menu-item" data-tab="matches">
+                    <i class="fas fa-calendar"></i> Spielplan
+                </a></li>
+                <li><a href="#live" class="menu-item" data-tab="live">
+                    <i class="fas fa-broadcast-tower"></i> Live-Verwaltung
+                </a></li>
+                <li><a href="#results" class="menu-item" data-tab="results">
+                    <i class="fas fa-chart-bar"></i> Ergebnisse
+                </a></li>
+                <li><a href="#settings" class="menu-item" data-tab="settings">
+                    <i class="fas fa-cog"></i> Einstellungen
+                </a></li>
+            </ul>
+            
+            <div class="sidebar-footer">
+                <a href="/" class="btn btn-outline">
+                    <i class="fas fa-arrow-left"></i> Zur Website
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="admin-main">
+            <!-- Header -->
+            <header class="admin-header">
+                <h1 id="page-title">Dashboard</h1>
+                <div class="header-actions">
+                    <div class="current-tournament" id="current-tournament-info">
+                        Kein aktives Turnier
+                    </div>
+                </div>
+            </header>
+
+            <!-- Login Screen -->
+            <div id="login-screen" class="login-screen">
+                <div class="login-card">
+                    <h2><i class="fas fa-lock"></i> Admin-Anmeldung</h2>
+                    <p>CVJM Fellbach Turnier-Verwaltung</p>
+                    <form id="admin-login-form">
+                        <div class="form-group">
+                            <label for="admin-password">
+                                <i class="fas fa-key"></i> Admin-Passwort
+                            </label>
+                            <input type="password" id="admin-password" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-sign-in-alt"></i> Anmelden
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Dashboard Content -->
+            <div id="admin-content" class="admin-content" style="display: none;">
+                
+                <!-- Dashboard Tab -->
+                <div id="dashboard-tab" class="admin-tab active">
+                    <div class="stats-grid">
+                        <div class="stat-card primary">
+                            <div class="stat-icon">
+                                <i class="fas fa-users"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-number" id="total-teams">0</div>
+                                <div class="stat-label">Angemeldete Teams</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card success">
+                            <div class="stat-icon">
+                                <i class="fas fa-calendar"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-number" id="total-matches">0</div>
+                                <div class="stat-label">Geplante Spiele</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card warning">
+                            <div class="stat-icon">
+                                <i class="fas fa-check-circle"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-number" id="completed-matches">0</div>
+                                <div class="stat-label">Abgeschlossen</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card danger">
+                            <div class="stat-icon">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-number" id="pending-matches">0</div>
+                                <div class="stat-label">Ausstehend</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-grid">
+                        <div class="dashboard-card">
+                            <h3><i class="fas fa-broadcast-tower"></i> Aktuelles Spiel</h3>
+                            <div id="current-match-display">
+                                Kein Spiel läuft gerade
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-card">
+                            <h3><i class="fas fa-list"></i> Nächste Spiele</h3>
+                            <div id="upcoming-matches">
+                                Keine bevorstehenden Spiele
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tournament Tab -->
+                <div id="tournament-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-trophy"></i> Turnier verwalten</h3>
+                        
+                        <div id="tournament-status">
+                            <!-- Status wird dynamisch geladen -->
+                        </div>
+                        
+                        <div id="tournament-creation" style="display: none;">
+                            <h4>Neues Turnier erstellen</h4>
+                            <form id="tournament-creation-form">
+                                <div class="form-group">
+                                    <label for="tournament-year">Turnierjahr</label>
+                                    <input type="number" id="tournament-year" value="2025" required>
+                                </div>
+                                
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Turnier erstellen
+                                </button>
+                            </form>
+                        </div>
+                        
+                        <div id="registration-management" style="display: none;">
+                            <!-- Anmeldung verwalten -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Teams Tab -->
+                <div id="teams-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-users"></i> Registrierte Teams</h3>
+                        <div id="admin-teams-list" class="teams-admin-list">
+                            <!-- Teams werden hier geladen -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Matches Tab -->
+                <div id="matches-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-calendar"></i> Spielplan verwalten</h3>
+                        <div id="matches-schedule-admin">
+                            <!-- Spielplan wird hier geladen -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Tab -->
+                <div id="live-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-broadcast-tower"></i> Live-Verwaltung</h3>
+                        <div id="live-match-control">
+                            <!-- Live-Steuerung wird hier geladen -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Tab -->
+                <div id="results-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-chart-bar"></i> Ergebnisse eintragen</h3>
+                        <div id="results-input">
+                            <!-- Ergebnisse werden hier geladen -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div id="settings-tab" class="admin-tab">
+                    <div class="card">
+                        <h3><i class="fas fa-cog"></i> Turniereinstellungen</h3>
+                        <div id="tournament-settings">
+                            <!-- Einstellungen werden hier geladen -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification -->
+    <div id="notification" class="notification"></div>
+
+    <script src="admin.js"></script>
+</body>
+</html>
