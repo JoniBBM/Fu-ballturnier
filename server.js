@@ -484,6 +484,433 @@ app.get('/api/admin/teams', (req, res) => {
     res.json(teams);
 });
 
+// Admin: Team löschen
+app.delete('/api/admin/teams/:teamId', (req, res) => {
+    const { password } = req.body;
+    const teamId = parseInt(req.params.teamId);
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const teamIndex = teams.findIndex(t => t.id === teamId);
+    if (teamIndex === -1) {
+        return res.status(404).json({ error: 'Team nicht gefunden' });
+    }
+    
+    const teamName = teams[teamIndex].name;
+    
+    // Entferne Team aus allen Matches
+    matches.forEach(match => {
+        if (match.team1 === teamName || match.team2 === teamName) {
+            match.team1 = match.team1 === teamName ? 'GELÖSCHT' : match.team1;
+            match.team2 = match.team2 === teamName ? 'GELÖSCHT' : match.team2;
+        }
+    });
+    
+    // Entferne Team aus Gruppen
+    if (currentTournament && currentTournament.groups) {
+        currentTournament.groups.forEach(group => {
+            group.teams = group.teams.filter(t => t.name !== teamName);
+            group.table = group.table.filter(t => t.team !== teamName);
+        });
+    }
+    
+    teams.splice(teamIndex, 1);
+    autoSave();
+    
+    res.json({ success: true, message: `Team "${teamName}" erfolgreich gelöscht` });
+});
+
+// Admin: Team bearbeiten
+app.put('/api/admin/teams/:teamId', (req, res) => {
+    const { password, teamName, contactName, contactInfo } = req.body;
+    const teamId = parseInt(req.params.teamId);
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const team = teams.find(t => t.id === teamId);
+    if (!team) {
+        return res.status(404).json({ error: 'Team nicht gefunden' });
+    }
+    
+    const oldName = team.name;
+    
+    // Prüfe ob neuer Name bereits vergeben ist (außer bei gleichem Team)
+    if (teamName !== oldName && teams.find(t => t.name === teamName)) {
+        return res.status(400).json({ error: 'Teamname bereits vergeben' });
+    }
+    
+    // Update Team
+    team.name = teamName;
+    team.contact.name = contactName;
+    team.contact.info = contactInfo;
+    
+    // Update Team in Matches
+    if (teamName !== oldName) {
+        matches.forEach(match => {
+            if (match.team1 === oldName) match.team1 = teamName;
+            if (match.team2 === oldName) match.team2 = teamName;
+            if (match.referee && match.referee.team === oldName) {
+                match.referee.team = teamName;
+            }
+        });
+        
+        // Update Team in Gruppen
+        if (currentTournament && currentTournament.groups) {
+            currentTournament.groups.forEach(group => {
+                group.teams.forEach(t => {
+                    if (t.name === oldName) t.name = teamName;
+                });
+                group.table.forEach(t => {
+                    if (t.team === oldName) t.team = teamName;
+                });
+            });
+        }
+    }
+    
+    autoSave();
+    res.json({ success: true, team });
+});
+
+// Admin: Match löschen
+app.delete('/api/admin/matches/:matchId', (req, res) => {
+    const { password } = req.body;
+    const matchId = req.params.matchId;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const matchIndex = matches.findIndex(m => m.id === matchId);
+    if (matchIndex === -1) {
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
+    }
+    
+    const match = matches[matchIndex];
+    
+    // Update Group Table falls completed
+    if (match.completed && match.phase === 'group') {
+        matches.splice(matchIndex, 1); // Temporarily remove to recalculate
+        updateGroupTable(match.group, matches);
+        matches.splice(matchIndex, 0, match); // Add back for final removal
+    }
+    
+    matches.splice(matchIndex, 1);
+    autoSave();
+    
+    res.json({ success: true, message: `Spiel "${match.team1} vs ${match.team2}" erfolgreich gelöscht` });
+});
+
+// Admin: Match bearbeiten
+app.put('/api/admin/matches/:matchId', (req, res) => {
+    const { password, team1, team2, group, referee, datetime, field } = req.body;
+    const matchId = req.params.matchId;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match) {
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
+    }
+    
+    // Update match details
+    if (team1) match.team1 = team1;
+    if (team2) match.team2 = team2;
+    if (group) match.group = group;
+    
+    // Update referee
+    if (referee !== undefined) {
+        if (referee === null || referee === '') {
+            delete match.referee;
+        } else {
+            match.referee = referee;
+        }
+    }
+    
+    // Update scheduling
+    if (datetime || field) {
+        if (!match.scheduled) match.scheduled = {};
+        if (datetime) match.scheduled.datetime = new Date(datetime);
+        if (field) match.scheduled.field = field;
+    }
+    
+    // Update group table if this match was completed
+    if (match.completed && match.phase === 'group') {
+        updateGroupTable(match.group, matches);
+    }
+    
+    autoSave();
+    res.json({ success: true, match });
+});
+
+// Admin: Ergebnis bearbeiten
+app.put('/api/admin/results/:matchId', (req, res) => {
+    const { password, score1, score2 } = req.body;
+    const matchId = req.params.matchId;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match) {
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
+    }
+    
+    match.score1 = parseInt(score1);
+    match.score2 = parseInt(score2);
+    match.completed = true;
+    
+    // Update group table
+    if (match.phase === 'group') {
+        updateGroupTable(match.group, matches);
+    }
+    
+    autoSave();
+    res.json({ success: true, match });
+});
+
+// Admin: Neues Match hinzufügen
+app.post('/api/admin/matches', (req, res) => {
+    const { password, team1, team2, group, phase, referee, datetime, field } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!team1 || !team2) {
+        return res.status(400).json({ error: 'Beide Teams sind erforderlich' });
+    }
+    
+    const newMatch = {
+        id: `manual_${Date.now()}`,
+        phase: phase || 'group',
+        group: group || 'Manuell',
+        team1: team1,
+        team2: team2,
+        score1: null,
+        score2: null,
+        completed: false
+    };
+    
+    // Add referee if provided
+    if (referee) {
+        newMatch.referee = referee;
+    }
+    
+    // Add scheduling if provided
+    if (datetime || field) {
+        newMatch.scheduled = {};
+        if (datetime) newMatch.scheduled.datetime = new Date(datetime);
+        if (field) newMatch.scheduled.field = field;
+    }
+    
+    matches.push(newMatch);
+    autoSave();
+    
+    res.json({ success: true, match: newMatch });
+});
+
+// Admin: Turnier-Status ändern
+app.put('/api/admin/tournament/status', (req, res) => {
+    const { password, status } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier' });
+    }
+    
+    const validStatuses = ['registration', 'closed', 'active', 'finished'];
+    if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Ungültiger Status' });
+    }
+    
+    currentTournament.status = status;
+    currentTournament.lastUpdated = new Date().toISOString();
+    
+    autoSave();
+    res.json({ success: true, tournament: currentTournament });
+});
+
+// Admin: Turnier komplett zurücksetzen
+app.delete('/api/admin/tournament/reset', (req, res) => {
+    const { password, confirmText } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (confirmText !== 'RESET') {
+        return res.status(400).json({ error: 'Bestätigung erforderlich: Schreibe "RESET"' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier zum Zurücksetzen' });
+    }
+    
+    const year = currentTournament.year;
+    
+    // Alles zurücksetzen
+    teams = [];
+    matches = [];
+    currentTournament = null;
+    tournaments = [];
+    tournamentRules = "";
+    
+    // Datei löschen
+    const filename = path.join(SAVES_DIR, `${year}.json`);
+    try {
+        if (fs.existsSync(filename)) {
+            fs.unlinkSync(filename);
+            console.log(`Turnierdatei ${filename} gelöscht`);
+        }
+    } catch (error) {
+        console.error('Fehler beim Löschen der Turnierdatei:', error);
+    }
+    
+    console.log(`Turnier ${year} komplett zurückgesetzt`);
+    
+    res.json({ 
+        success: true, 
+        message: `Turnier ${year} wurde komplett zurückgesetzt. Alle Teams, Spiele und Einstellungen wurden gelöscht.` 
+    });
+});
+
+// Admin: Gruppen neu organisieren
+app.post('/api/admin/tournament/reorganize-groups', (req, res) => {
+    const { password, groupSize } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier' });
+    }
+    
+    if (teams.length === 0) {
+        return res.status(400).json({ error: 'Keine Teams zum Organisieren' });
+    }
+    
+    // Lösche alle aktuellen Gruppenmatchs
+    matches = matches.filter(m => m.phase !== 'group');
+    
+    // Erstelle neue Gruppen
+    const newGroups = createGroups(teams, groupSize || 4);
+    currentTournament.groups = newGroups;
+    currentTournament.settings.groupSize = groupSize || 4;
+    
+    // Generiere neue Gruppenspiele
+    const groupMatches = generateGroupMatches(newGroups, currentTournament.settings.maxGamesPerTeam);
+    const matchesWithReferees = assignReferees(groupMatches, newGroups);
+    
+    // Füge neue Matches hinzu
+    matches = [...matches, ...matchesWithReferees];
+    
+    currentTournament.lastUpdated = new Date().toISOString();
+    autoSave();
+    
+    res.json({ 
+        success: true, 
+        tournament: currentTournament,
+        newMatches: matchesWithReferees.length,
+        message: `Gruppen neu organisiert: ${newGroups.length} Gruppen mit ${matchesWithReferees.length} neuen Spielen`
+    });
+});
+
+// Admin: Alle Matches zurücksetzen (Ergebnisse löschen)
+app.post('/api/admin/matches/reset-results', (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    let resetCount = 0;
+    matches.forEach(match => {
+        if (match.completed) {
+            match.score1 = null;
+            match.score2 = null;
+            match.completed = false;
+            if (match.liveScore) {
+                match.liveScore.isLive = false;
+            }
+            resetCount++;
+        }
+    });
+    
+    // Reset alle Group Tables
+    if (currentTournament && currentTournament.groups) {
+        currentTournament.groups.forEach(group => {
+            group.table.forEach(entry => {
+                entry.games = 0;
+                entry.wins = 0;
+                entry.draws = 0;
+                entry.losses = 0;
+                entry.goalsFor = 0;
+                entry.goalsAgainst = 0;
+                entry.goalDiff = 0;
+                entry.points = 0;
+            });
+        });
+    }
+    
+    autoSave();
+    res.json({ 
+        success: true, 
+        message: `${resetCount} Spielergebnisse zurückgesetzt und Tabellen geleert` 
+    });
+});
+
+// Admin: Alle Zeitplanungen zurücksetzen
+app.post('/api/admin/matches/reset-schedule', (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    let resetCount = 0;
+    matches.forEach(match => {
+        if (match.scheduled) {
+            delete match.scheduled;
+            resetCount++;
+        }
+    });
+    
+    autoSave();
+    res.json({ 
+        success: true, 
+        message: `${resetCount} Zeitplanungen zurückgesetzt` 
+    });
+});
+
+// Admin: Daten exportieren
+app.get('/api/admin/export/:year?', (req, res) => {
+    const year = req.params.year || (currentTournament ? currentTournament.year : new Date().getFullYear());
+    
+    const exportData = {
+        year: year,
+        tournament: currentTournament,
+        teams: teams,
+        matches: matches,
+        rules: tournamentRules,
+        exportedAt: new Date().toISOString()
+    };
+    
+    res.setHeader('Content-Disposition', `attachment; filename="turnier_${year}_export.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(exportData);
+});
+
 // Regeln abrufen
 app.get('/api/rules', (req, res) => {
     res.json({ rules: tournamentRules });
@@ -996,6 +1423,71 @@ app.post('/api/admin/result', (req, res) => {
     
     autoSave();
     res.json({ success: true, match });
+});
+
+// Admin: Daten importieren
+app.post('/api/admin/import', (req, res) => {
+    const { password, importData } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    try {
+        // Validiere Import-Daten
+        if (!importData || typeof importData !== 'object') {
+            return res.status(400).json({ error: 'Ungültige Import-Daten' });
+        }
+        
+        let importedTeams = 0;
+        let importedMatches = 0;
+        
+        // Importiere Turnier falls vorhanden
+        if (importData.tournament) {
+            currentTournament = importData.tournament;
+            console.log('Tournament imported:', currentTournament.year);
+        }
+        
+        // Importiere Teams falls vorhanden
+        if (importData.teams && Array.isArray(importData.teams)) {
+            teams = importData.teams;
+            importedTeams = teams.length;
+            console.log('Teams imported:', importedTeams);
+        }
+        
+        // Importiere Matches falls vorhanden
+        if (importData.matches && Array.isArray(importData.matches)) {
+            matches = importData.matches;
+            importedMatches = matches.length;
+            console.log('Matches imported:', importedMatches);
+        }
+        
+        // Importiere Regeln falls vorhanden
+        if (importData.rules || importData.tournamentRules) {
+            tournamentRules = importData.rules || importData.tournamentRules || "";
+            console.log('Rules imported');
+        }
+        
+        // Speichere importierte Daten
+        autoSave();
+        
+        console.log(`Import completed: ${importedTeams} teams, ${importedMatches} matches`);
+        
+        res.json({ 
+            success: true, 
+            message: `Daten erfolgreich importiert`,
+            imported: {
+                teams: importedTeams,
+                matches: importedMatches,
+                tournament: !!importData.tournament,
+                rules: !!(importData.rules || importData.tournamentRules)
+            }
+        });
+        
+    } catch (error) {
+        console.error('Import error:', error);
+        res.status(500).json({ error: 'Fehler beim Importieren der Daten' });
+    }
 });
 
 // Admin-Login prüfen
