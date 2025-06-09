@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,7 +8,9 @@ const PORT = 5678;
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
+// KORREKTUR: express.json() ist die moderne, integrierte Methode, um JSON-Bodies zu parsen.
+// Dies ersetzt den Bedarf am separaten 'body-parser'-Paket für JSON.
+app.use(express.json());
 app.use(express.static('public'));
 
 // Saves-Ordner

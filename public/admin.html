@@ -413,32 +413,10 @@
     <!-- Notification -->
     <div id="notification" class="notification"></div>
 
-    <!-- Global Helper Functions -->
-    <script>
-        // Helper function to refresh teams display
-        function refreshTeams() {
-            loadInitialData().then(() => {
-                loadTeams();
-                showNotification('Teams aktualisiert');
-            });
-        }
-        
-        // Helper function to update team count display
-        function updateTeamCountDisplay() {
-            const teamCountDisplay = document.getElementById('team-count-display');
-            if (teamCountDisplay) {
-                teamCountDisplay.textContent = `${teams.length} Teams registriert`;
-            }
-        }
-        
-        // Override loadTeams to include count update
-        const originalLoadTeams = loadTeams;
-        loadTeams = function() {
-            originalLoadTeams();
-            updateTeamCountDisplay();
-        };
-    </script>
-    
+    <!-- 
+        KORREKTUR: Der vorherige Inline-Skript-Block wurde entfernt 
+        und seine Logik wurde in admin.js verschoben, um Ladefehler zu beheben.
+    -->
     <script src="admin.js"></script>
 </body>
 </html>

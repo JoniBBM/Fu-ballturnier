@@ -29,6 +29,11 @@ function formatDateTime(date) {
     return new Date(date).toLocaleString('de-DE');
 }
 
+/**
+ * KORREKTUR: Die createModal Funktion wurde überarbeitet, um Event Listener
+ * programmatisch hinzuzufügen, anstatt unsichere inline 'onclick' Attribute zu verwenden.
+ * Dies behebt die "Cannot access '...' before initialization" Fehler.
+ */
 function createModal(title, content, actions = []) {
     const modalId = 'dynamic-modal-' + Date.now();
     const modalHtml = `
@@ -36,14 +41,14 @@ function createModal(title, content, actions = []) {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>${title}</h3>
-                    <button class="close-btn" onclick="closeModal('${modalId}')">&times;</button>
+                    <button class="close-btn">&times;</button>
                 </div>
                 <div class="modal-body" style="padding: 2rem;">
                     ${content}
                 </div>
                 ${actions.length > 0 ? `
                     <div class="modal-footer" style="padding: 1rem 2rem; border-top: 1px solid var(--gray-200); display: flex; gap: 1rem; justify-content: flex-end;">
-                        ${actions.map(action => `<button class="btn ${action.class || 'btn-primary'}" onclick="${action.onclick}">${action.text}</button>`).join('')}
+                        ${actions.map((action, index) => `<button id="modal-action-${modalId}-${index}" class="btn ${action.class || 'btn-primary'}">${action.text}</button>`).join('')}
                     </div>
                 ` : ''}
             </div>
@@ -51,7 +56,20 @@ function createModal(title, content, actions = []) {
     `;
     
     document.body.insertAdjacentHTML('beforeend', modalHtml);
-    return modalId;
+    const modalElement = document.getElementById(modalId);
+
+    // Event Listener für Schließen-Button
+    modalElement.querySelector('.close-btn').addEventListener('click', () => closeModal(modalId));
+    
+    // Event Listener für Action-Buttons im Footer
+    actions.forEach((action, index) => {
+        const button = modalElement.querySelector(`#modal-action-${modalId}-${index}`);
+        if (button && typeof action.handler === 'function') {
+            button.addEventListener('click', () => action.handler(modalId)); 
+        }
+    });
+
+    return modalElement;
 }
 
 function closeModal(modalId) {
@@ -119,7 +137,7 @@ function setupTournamentForm() {
     const form = document.getElementById('tournament-creation-form');
     if (form) {
         console.log('Tournament form found, adding event listener');
-        // Entferne alte Event Listener
+        // Entferne alte Event Listener, um Duplikate zu vermeiden
         const newForm = form.cloneNode(true);
         form.parentNode.replaceChild(newForm, form);
         
@@ -671,7 +689,7 @@ async function changeTournamentStatus() {
         `<option value="${s.value}" ${s.value === currentTournament.status ? 'selected' : ''}>${s.label}</option>`
     ).join('');
     
-    const modalId = createModal('Turnier-Status ändern', `
+    createModal('Turnier-Status ändern', `
         <div class="form-group">
             <label for="new-status">Neuer Status:</label>
             <select id="new-status" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
@@ -679,8 +697,8 @@ async function changeTournamentStatus() {
             </select>
         </div>
     `, [
-        { text: 'Status ändern', onclick: `saveNewStatus('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Status ändern', handler: (modalId) => saveNewStatus(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -716,7 +734,7 @@ async function saveNewStatus(modalId) {
 async function reorganizeGroups() {
     if (!currentTournament) return;
     
-    const modalId = createModal('Gruppen neu organisieren', `
+    createModal('Gruppen neu organisieren', `
         <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
             <i class="fas fa-exclamation-triangle" style="color: #f59e0b;"></i>
             <strong>Achtung:</strong> Alle bestehenden Gruppenspiele werden gelöscht und neu erstellt!
@@ -731,8 +749,8 @@ async function reorganizeGroups() {
         </div>
         <p><strong>Aktuelle Teams:</strong> ${teams.length}</p>
     `, [
-        { text: 'Gruppen neu organisieren', class: 'btn-warning', onclick: `executeReorganizeGroups('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Gruppen neu organisieren', class: 'btn-warning', handler: (modalId) => executeReorganizeGroups(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -766,7 +784,7 @@ async function executeReorganizeGroups(modalId) {
 
 // Reset All Results
 async function resetAllResults() {
-    const modalId = createModal('Alle Ergebnisse zurücksetzen', `
+    createModal('Alle Ergebnisse zurücksetzen', `
         <div class="warning-box" style="background: #fef2f2; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
             <i class="fas fa-exclamation-triangle" style="color: #dc2626;"></i>
             <strong>Achtung:</strong> Alle Spielergebnisse werden gelöscht und Tabellen zurückgesetzt!
@@ -774,8 +792,8 @@ async function resetAllResults() {
         <p>Diese Aktion löscht alle eingetragenen Ergebnisse und setzt die Tabellen zurück. Die Spielpaarungen bleiben bestehen.</p>
         <p><strong>Betroffen:</strong> ${matches.filter(m => m.completed).length} abgeschlossene Spiele</p>
     `, [
-        { text: 'Ergebnisse zurücksetzen', class: 'btn-danger', onclick: `executeResetResults('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Ergebnisse zurücksetzen', class: 'btn-danger', handler: (modalId) => executeResetResults(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -803,7 +821,7 @@ async function executeResetResults(modalId) {
 
 // Reset All Schedules
 async function resetAllSchedules() {
-    const modalId = createModal('Alle Zeitpläne zurücksetzen', `
+    createModal('Alle Zeitpläne zurücksetzen', `
         <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
             <i class="fas fa-exclamation-triangle" style="color: #f59e0b;"></i>
             <strong>Achtung:</strong> Alle Zeitplanungen werden gelöscht!
@@ -811,8 +829,8 @@ async function resetAllSchedules() {
         <p>Diese Aktion entfernt alle geplanten Zeiten von allen Spielen. Die Spiele bleiben bestehen, müssen aber neu geplant werden.</p>
         <p><strong>Betroffen:</strong> ${matches.filter(m => m.scheduled).length} geplante Spiele</p>
     `, [
-        { text: 'Zeitpläne zurücksetzen', class: 'btn-warning', onclick: `executeResetSchedules('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Zeitpläne zurücksetzen', class: 'btn-warning', handler: (modalId) => executeResetSchedules(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -858,12 +876,12 @@ function exportTournamentData() {
 
 // Reset Tournament Complete
 async function resetTournamentComplete() {
-    const modalId = createModal('Turnier komplett zurücksetzen', `
+    createModal('Turnier komplett zurücksetzen', `
         <div class="danger-box" style="background: #fef2f2; border: 2px solid #dc2626; padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 1rem;">
             <i class="fas fa-exclamation-triangle" style="color: #dc2626; font-size: 2rem; margin-bottom: 1rem;"></i>
             <h4 style="color: #dc2626; margin-bottom: 1rem;">WARNUNG: Unwiderrufliche Aktion!</h4>
             <p><strong>Diese Aktion löscht ALLES:</strong></p>
-            <ul style="margin: 1rem 0; color: #dc2626;">
+            <ul style="margin: 1rem 0; color: #dc2626; list-style-position: inside;">
                 <li>Alle Teams (${teams.length})</li>
                 <li>Alle Spiele (${matches.length})</li>
                 <li>Turnier-Einstellungen</li>
@@ -877,8 +895,8 @@ async function resetTournamentComplete() {
             <input type="text" id="reset-confirm" placeholder="RESET" style="width: 100%; padding: 0.5rem; border: 2px solid #dc2626; border-radius: 0.5rem;">
         </div>
     `, [
-        { text: 'Turnier KOMPLETT löschen', class: 'btn-danger', onclick: `executeResetComplete('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Turnier KOMPLETT löschen', class: 'btn-danger', handler: (modalId) => executeResetComplete(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -1006,7 +1024,7 @@ async function editTeam(teamId) {
     const team = teams.find(t => t.id === teamId);
     if (!team) return;
     
-    const modalId = createModal('Team bearbeiten', `
+    createModal('Team bearbeiten', `
         <div class="form-group">
             <label for="edit-team-name">Teamname:</label>
             <input type="text" id="edit-team-name" value="${team.name}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
@@ -1020,8 +1038,8 @@ async function editTeam(teamId) {
             <input type="text" id="edit-contact-info" value="${team.contact.info}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
     `, [
-        { text: 'Team speichern', onclick: `saveTeamEdit(${teamId}, '${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Team speichern', handler: (modalId) => saveTeamEdit(teamId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -1135,6 +1153,7 @@ function loadMatches() {
             return 1;
         } else {
             // Beide ungeplant: sortiere nach Gruppe
+            if (!a.group || !b.group) return 0;
             return a.group.localeCompare(b.group);
         }
     });
@@ -1294,7 +1313,7 @@ async function addNewMatch() {
         currentTournament.groups.map(g => `<option value="${g.name}">${g.name}</option>`).join('') :
         '<option value="Manuell">Manuell</option>';
     
-    const modalId = createModal('Neues Spiel hinzufügen', `
+    createModal('Neues Spiel hinzufügen', `
         <div class="form-group">
             <label for="new-match-team1">Team 1:</label>
             <select id="new-match-team1" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
@@ -1332,8 +1351,8 @@ async function addNewMatch() {
             <input type="text" id="new-match-field" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
     `, [
-        { text: 'Spiel hinzufügen', onclick: `saveNewMatch('${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Spiel hinzufügen', handler: (modalId) => saveNewMatch(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -1398,7 +1417,7 @@ async function editMatch(matchId) {
     
     const scheduledTime = match.scheduled ? new Date(match.scheduled.datetime).toISOString().slice(0, 16) : '';
     
-    const modalId = createModal('Spiel bearbeiten', `
+    const content = `
         <div class="form-group">
             <label for="edit-match-team1">Team 1:</label>
             <select id="edit-match-team1" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
@@ -1427,19 +1446,29 @@ async function editMatch(matchId) {
             <label for="edit-match-field">Spielfeld:</label>
             <input type="text" id="edit-match-field" value="${match.scheduled?.field || ''}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
-        ${match.referee ? `
-            <div class="form-group">
-                <label>Aktueller Schiedsrichter:</label>
-                <p>${match.referee.team} (${match.referee.group})</p>
-                <button type="button" class="btn btn-small btn-outline" onclick="removeReferee('${matchId}', '${modalId}')">
-                    <i class="fas fa-times"></i> Schiedsrichter entfernen
-                </button>
-            </div>
-        ` : ''}
-    `, [
-        { text: 'Spiel speichern', onclick: `saveMatchEdit('${matchId}', '${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        <div id="referee-section">
+            ${match.referee ? `
+                <div class="form-group">
+                    <label>Aktueller Schiedsrichter:</label>
+                    <p>${match.referee.team} (${match.referee.group})</p>
+                    <button type="button" id="remove-referee-btn" class="btn btn-small btn-outline">
+                        <i class="fas fa-times"></i> Schiedsrichter entfernen
+                    </button>
+                </div>
+            ` : ''}
+        </div>
+    `;
+
+    const modalElement = createModal('Spiel bearbeiten', content, [
+        { text: 'Spiel speichern', handler: (modalId) => saveMatchEdit(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
+    
+    // Add event listener for the remove referee button if it exists
+    const removeBtn = modalElement.querySelector('#remove-referee-btn');
+    if(removeBtn){
+        removeBtn.addEventListener('click', () => removeReferee(matchId, modalElement.id));
+    }
 }
 
 async function saveMatchEdit(matchId, modalId) {
@@ -1477,6 +1506,36 @@ async function saveMatchEdit(matchId, modalId) {
         showNotification('Fehler beim Bearbeiten des Spiels', 'error');
     }
 }
+
+// NEUE Funktion zum Entfernen von Schiedsrichtern
+async function removeReferee(matchId, modalId) {
+    if (!confirm('Schiedsrichter wirklich von diesem Spiel entfernen?')) return;
+
+    try {
+        const response = await fetch(`/api/admin/matches/${matchId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                referee: null // null senden, um den Schiedsrichter zu entfernen
+            })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showNotification('Schiedsrichter entfernt');
+            await loadInitialData();
+            // Modal neu aufbauen, um die Änderung zu zeigen
+            closeModal(modalId);
+            editMatch(matchId);
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Entfernen des Schiedsrichters', 'error');
+    }
+}
+
 
 // Delete Match
 async function deleteMatch(matchId) {
@@ -1668,7 +1727,7 @@ async function editResult(matchId) {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
     
-    const modalId = createModal('Ergebnis bearbeiten', `
+    createModal('Ergebnis bearbeiten', `
         <div class="form-group">
             <h4>${match.team1} vs ${match.team2}</h4>
             <p><small>${match.group || 'Kein Gruppe'}</small></p>
@@ -1681,8 +1740,8 @@ async function editResult(matchId) {
             <span class="team-name">${match.team2}</span>
         </div>
     `, [
-        { text: 'Ergebnis speichern', onclick: `saveResultEdit('${matchId}', '${modalId}')` },
-        { text: 'Abbrechen', class: 'btn-outline', onclick: `closeModal('${modalId}')` }
+        { text: 'Ergebnis speichern', handler: (modalId) => saveResultEdit(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
@@ -2096,10 +2155,10 @@ function scheduleMatch(matchId) {
 
 // Automatische Gruppenplanung
 async function scheduleAllMatches() {
-    if (!confirm('Automatisch alle Spiele planen? (Abwechselnd zwischen Gruppen)')) return;
+    if (!confirm('Automatisch alle Spiele planen? (Intelligenter Algorithmus)')) return;
     
     const startTime = prompt('Startzeit (HH:MM):', '10:00');
-    const matchDuration = prompt('Spieldauer + Pause in Minuten:', '60');
+    const matchDuration = prompt('Spieldauer in Minuten:', '15');
     const field = prompt('Spielfeld:', 'Hauptplatz');
     
     if (!startTime || !matchDuration) return;
@@ -2231,15 +2290,36 @@ async function startSecondHalf(matchId) {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Admin page loaded, DOM ready');
-    
-    // Check if already logged in (for development)
-    if (window.location.hash === '#dev') {
-        adminPassword = '1234qwer!';
-        isLoggedIn = true;
-        loginScreen.style.display = 'none';
-        adminContent.style.display = 'block';
-        loadInitialData().then(() => {
-            loadTournamentManagement();
-        });
-    }
 });
+
+
+// KORREKTUR: Diese Logik wurde von admin.html hierher verschoben,
+// um sicherzustellen, dass sie NACH dem Laden der Funktionen in admin.js ausgeführt wird.
+
+// Helper function to refresh teams display
+function refreshTeams() {
+    loadInitialData().then(() => {
+        loadTeams();
+        showNotification('Teams aktualisiert');
+    });
+}
+
+// Helper function to update team count display
+function updateTeamCountDisplay() {
+    const teamCountDisplay = document.getElementById('team-count-display');
+    if (teamCountDisplay) {
+        teamCountDisplay.textContent = `${teams.length} Teams registriert`;
+    }
+}
+
+// Override loadTeams to include count update
+// This needs to be done carefully after the original loadTeams is defined.
+// We can wrap it in a DOMContentLoaded listener or just place it at the end of the file.
+{
+    // Block-Scope, um `originalLoadTeams` nicht global zu machen
+    const originalLoadTeams = loadTeams;
+    loadTeams = function() {
+        originalLoadTeams();
+        updateTeamCountDisplay();
+    };
+}
