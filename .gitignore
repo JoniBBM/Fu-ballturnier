@@ -91,9 +91,9 @@ temp/
 logs
 *.log
 
-# Turnier-Daten (werden persistent gespeichert)
-saves/
-tournament-data.json
+# Turnier-Daten (werden persistent gespeichert, aber nicht in Git)
+saves/*.json
+!saves/.gitkeep
 
 # IDE files
 .vscode/
@@ -110,3 +110,6 @@ tournament-data.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Docker
+.dockerignore

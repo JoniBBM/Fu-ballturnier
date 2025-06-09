@@ -2,11 +2,20 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Package files kopieren und Dependencies installieren
 COPY package*.json ./
 RUN npm install
 
-COPY . .
+# Nodemon für Live-Reload installieren
+RUN npm install -g nodemon
+
+# Saves-Ordner erstellen
+RUN mkdir -p /app/saves
+
+# Code wird über Volume gemountet, daher hier nicht kopieren
+# COPY . .
 
 EXPOSE 5678
 
-CMD ["npm", "start"]
+# Standard-Command (wird durch docker-compose überschrieben)
+CMD ["npm", "run", "dev"]

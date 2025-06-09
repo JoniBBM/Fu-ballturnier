@@ -6,12 +6,21 @@ services:
     ports:
       - "5678:5678"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     restart: unless-stopped
     volumes:
-      - ./data:/app/data  # Optional: für persistente Daten
+      # Persistente Datenspeicherung
+      - ./saves:/app/saves
+      # Live Code Updates (für Entwicklung)
+      - ./public:/app/public
+      - ./server.js:/app/server.js
+      - ./package.json:/app/package.json
+      # Node modules bleiben im Container
+      - /app/node_modules
     networks:
       - tournament-network
+    # Für Live-Reload
+    command: npm run dev
 
 networks:
   tournament-network:

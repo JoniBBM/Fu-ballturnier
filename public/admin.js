@@ -218,6 +218,7 @@ menuItems.forEach(item => {
             matches: 'Spielplan',
             live: 'Live-Verwaltung',
             results: 'Ergebnisse',
+            rules: 'Regeln verwalten',
             settings: 'Einstellungen'
         };
         pageTitle.textContent = titles[targetTab];
@@ -316,6 +317,9 @@ async function loadTabContent(tab) {
         case 'results':
             loadResults();
             break;
+        case 'rules':
+            loadRulesManagement();
+            break;
         case 'settings':
             loadSettings();
             break;
@@ -344,6 +348,11 @@ function loadDashboard() {
                             <span class="minute">${match.liveScore.minute}'</span>
                         </div>
                     ` : '<p>Spiel läuft</p>'}
+                    ${match.referee ? `
+                        <div class="match-referee">
+                            <small><i class="fas fa-whistle"></i> Schiedsrichter: ${match.referee.team}</small>
+                        </div>
+                    ` : ''}
                 </div>
             `;
         }
@@ -352,18 +361,74 @@ function loadDashboard() {
     }
     
     // Upcoming matches
-    const upcomingMatches = document.getElementById('upcoming-matches');
-    const nextMatches = matches.filter(m => !m.completed && m.scheduled).slice(0, 5);
-    
-    if (nextMatches.length > 0) {
-        upcomingMatches.innerHTML = nextMatches.map(match => `
-            <div class="upcoming-match">
-                <div><strong>${match.team1} vs ${match.team2}</strong></div>
-                <div><small>${formatDateTime(match.scheduled.datetime)}</small></div>
-            </div>
-        `).join('');
-    } else {
-        upcomingMatches.innerHTML = '<p>Keine bevorstehenden Spiele</p>';
+    loadUpcomingMatches();
+}
+
+async function loadUpcomingMatches() {
+    try {
+        const response = await fetch('/api/next-match');
+        const data = await response.json();
+        
+        const upcomingMatches = document.getElementById('upcoming-matches');
+        
+        if (data.nextMatch) {
+            const nextMatch = data.nextMatch;
+            const nextTime = new Date(nextMatch.datetime);
+            const timeUntilMatch = nextTime - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            
+            upcomingMatches.innerHTML = `
+                <div class="next-match-admin">
+                    <div class="next-match-time">
+                        <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                        <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
+                    </div>
+                    <div class="next-match-info">
+                        <strong>${nextMatch.team1} vs ${nextMatch.team2}</strong>
+                        <div class="match-details">
+                            <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
+                            <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
+                        </div>
+                        ${nextMatch.referee ? `
+                            <div class="match-referee">
+                                <i class="fas fa-whistle"></i>
+                                <span>Schiedsrichter: <strong>${nextMatch.referee.team}</strong> (${nextMatch.referee.group})</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="next-match-actions">
+                        <button class="btn btn-small btn-success" onclick="startMatchDialog('${nextMatch.id}')">
+                            <i class="fas fa-play"></i> Spiel starten
+                        </button>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Show next 3 scheduled matches if no specific next match
+            const nextMatches = matches
+                .filter(m => !m.completed && m.scheduled)
+                .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime))
+                .slice(0, 3);
+            
+            if (nextMatches.length > 0) {
+                upcomingMatches.innerHTML = nextMatches.map(match => `
+                    <div class="upcoming-match">
+                        <div><strong>${match.team1} vs ${match.team2}</strong></div>
+                        <div><small>${formatDateTime(match.scheduled.datetime)}</small></div>
+                        ${match.referee ? `
+                            <div class="match-referee">
+                                <small><i class="fas fa-whistle"></i> ${match.referee.team}</small>
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('');
+            } else {
+                upcomingMatches.innerHTML = '<p>Keine bevorstehenden Spiele</p>';
+            }
+        }
+    } catch (error) {
+        console.error('Error loading upcoming matches:', error);
+        document.getElementById('upcoming-matches').innerHTML = '<p>Fehler beim Laden der nächsten Spiele</p>';
     }
 }
 
@@ -393,7 +458,8 @@ async function closeRegistration() {
                 groupSize: tournamentOptions.groupSize,
                 enableThirdPlace: tournamentOptions.thirdPlace,
                 enableFifthPlace: tournamentOptions.fifthPlace,
-                enableSeventhPlace: tournamentOptions.seventhPlace
+                enableSeventhPlace: tournamentOptions.seventhPlace,
+                maxGamesPerTeam: tournamentOptions.maxGamesPerTeam
             })
         });
         
@@ -441,6 +507,21 @@ function createTournamentDialog(possiblePlacements) {
             </select>
         </div>
         
+        <div style="margin-bottom: 1.5rem;">
+            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">
+                Maximale Spiele pro Team in der Gruppenphase:
+            </label>
+            <select id="tournament-max-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                <option value="">Alle möglichen Spiele (Jeder gegen Jeden)</option>
+                <option value="2">Maximal 2 Spiele pro Team</option>
+                <option value="3">Maximal 3 Spiele pro Team</option>
+                <option value="4">Maximal 4 Spiele pro Team</option>
+            </select>
+            <small style="color: #666; margin-top: 0.5rem; display: block;">
+                Wenn z.B. 5 Teams in einer Gruppe sind, können Sie begrenzen, dass jedes Team nur gegen 3 zufällige Gegner spielt.
+            </small>
+        </div>
+        
         <div style="margin-bottom: 1rem;">
             <h5 style="margin-bottom: 0.5rem;">Platzierungsspiele:</h5>
         </div>
@@ -478,7 +559,7 @@ function createTournamentDialog(possiblePlacements) {
     `;
     
     modalDiv.innerHTML = `
-        <div style="background: white; padding: 2rem; border-radius: 1rem; max-width: 500px; width: 90%;">
+        <div style="background: white; padding: 2rem; border-radius: 1rem; max-width: 600px; width: 90%;">
             ${dialogHtml}
             <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
                 <button id="confirm-tournament" style="background: #dc2626; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer;">
@@ -495,8 +576,10 @@ function createTournamentDialog(possiblePlacements) {
     
     return new Promise((resolve) => {
         document.getElementById('confirm-tournament').onclick = () => {
+            const maxGamesValue = document.getElementById('tournament-max-games').value;
             const result = {
                 groupSize: parseInt(document.getElementById('tournament-group-size').value),
+                maxGamesPerTeam: maxGamesValue ? parseInt(maxGamesValue) : null,
                 thirdPlace: document.getElementById('placement-third')?.checked || false,
                 fifthPlace: document.getElementById('placement-fifth')?.checked || false,
                 seventhPlace: document.getElementById('placement-seventh')?.checked || false
@@ -517,6 +600,55 @@ function createTournamentDialog(possiblePlacements) {
             }
         };
     });
+}
+
+// Rules Management
+async function loadRulesManagement() {
+    const rulesManagement = document.getElementById('rules-management');
+    
+    // Load current rules
+    try {
+        const response = await fetch('/api/rules');
+        const data = await response.json();
+        
+        const rulesEditor = document.getElementById('rules-editor');
+        rulesEditor.value = data.rules || '';
+    } catch (error) {
+        console.error('Fehler beim Laden der Regeln:', error);
+        showNotification('Fehler beim Laden der aktuellen Regeln', 'error');
+    }
+}
+
+async function saveRules() {
+    const rulesEditor = document.getElementById('rules-editor');
+    const rules = rulesEditor.value;
+    
+    try {
+        const response = await fetch('/api/admin/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                rules: rules
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Regeln erfolgreich gespeichert!');
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Speichern der Regeln', 'error');
+        console.error('Save rules error:', error);
+    }
+}
+
+async function loadCurrentRules() {
+    await loadRulesManagement();
+    showNotification('Regeln neu geladen');
 }
 
 // Teams verwalten
@@ -573,39 +705,80 @@ function loadMatches() {
         return;
     }
     
-    const groupedMatches = {};
-    matches.forEach(match => {
-        const phase = match.phase === 'group' ? match.group : match.phase;
-        if (!groupedMatches[phase]) {
-            groupedMatches[phase] = [];
+    // Sortiere Matches chronologisch
+    const sortedMatches = [...matches].sort((a, b) => {
+        if (a.scheduled && b.scheduled) {
+            return new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime);
+        } else if (a.scheduled && !b.scheduled) {
+            return -1;
+        } else if (!a.scheduled && b.scheduled) {
+            return 1;
+        } else {
+            // Beide ungeplant: sortiere nach Gruppe
+            return a.group.localeCompare(b.group);
         }
-        groupedMatches[phase].push(match);
     });
     
+    // Gruppiere nach Status
+    const scheduledMatches = sortedMatches.filter(m => m.scheduled);
+    const unscheduledMatches = sortedMatches.filter(m => !m.scheduled);
+    
     let html = '';
-    Object.entries(groupedMatches).forEach(([phase, phaseMatches]) => {
-        html += `<h4>${phase}</h4>`;
-        phaseMatches.forEach(match => {
+    
+    // Add bulk scheduling button für ungeplante Spiele
+    if (unscheduledMatches.length > 0) {
+        html += `
+            <div class="bulk-actions">
+                <button class="btn btn-primary" onclick="scheduleAllMatches()">
+                    <i class="fas fa-brain"></i> Alle ${unscheduledMatches.length} Spiele intelligent planen
+                </button>
+                <small>Berücksichtigt optimale Pausen zwischen Spielen und faire Schiedsrichter-Verteilung</small>
+            </div>
+        `;
+    }
+    
+    // Geplante Spiele chronologisch
+    if (scheduledMatches.length > 0) {
+        html += '<h4><i class="fas fa-clock"></i> Geplante Spiele (chronologisch)</h4>';
+        scheduledMatches.forEach(match => {
+            const matchTime = new Date(match.scheduled.datetime);
             html += `
-                <div class="match-admin-card ${match.liveScore?.isLive ? 'live' : ''}">
-                    <div class="match-header">
+                <div class="match-admin-card ${match.liveScore?.isLive ? 'live' : ''} chronological-admin">
+                    <div class="match-time-admin">
+                        <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                        <small>${match.scheduled.field}</small>
+                    </div>
+                    
+                    <div class="match-info-admin">
                         <div class="match-teams-admin">
                             <span class="team-name">${match.team1}</span>
                             <span class="vs">vs</span>
                             <span class="team-name">${match.team2}</span>
                         </div>
-                        <div class="match-status">
-                            ${match.completed ? 
-                                `<strong>${match.score1}:${match.score2}</strong>` : 
-                                match.liveScore?.isLive ? 
-                                    `<strong class="live-indicator">LIVE ${match.liveScore.score1}:${match.liveScore.score2}</strong>` :
-                                    'Ausstehend'
-                            }
+                        
+                        <div class="match-details-admin">
+                            <span class="match-group">${match.group}</span>
+                            ${match.referee ? `
+                                <span class="match-referee">
+                                    <i class="fas fa-whistle"></i>
+                                    Schiedsrichter: <strong>${match.referee.team}</strong> (${match.referee.group})
+                                </span>
+                            ` : ''}
                         </div>
                     </div>
+                    
+                    <div class="match-status-admin">
+                        ${match.completed ? 
+                            `<strong class="final-score">${match.score1}:${match.score2}</strong>` : 
+                            match.liveScore?.isLive ? 
+                                `<strong class="live-indicator">LIVE ${match.liveScore.score1}:${match.liveScore.score2}</strong>` :
+                                '<span class="pending">Ausstehend</span>'
+                        }
+                    </div>
+                    
                     <div class="match-actions">
                         <button class="btn btn-small" onclick="scheduleMatch('${match.id}')">
-                            <i class="fas fa-calendar"></i> Zeit planen
+                            <i class="fas fa-calendar"></i> Zeit ändern
                         </button>
                         ${!match.completed && !match.liveScore?.isLive ? `
                             <button class="btn btn-small btn-success" onclick="startMatchDialog('${match.id}')">
@@ -616,26 +789,65 @@ function loadMatches() {
                             <i class="fas fa-edit"></i> Bearbeiten
                         </button>
                     </div>
-                    ${match.scheduled ? `
-                        <div class="match-schedule">
-                            <small><i class="fas fa-clock"></i> ${new Date(match.scheduled.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})} - ${match.scheduled.field}</small>
-                        </div>
-                    ` : ''}
                 </div>
             `;
         });
-    });
+    }
     
-    // Add bulk scheduling button
-    const unscheduled = matches.filter(m => !m.scheduled).length;
-    if (unscheduled > 0) {
-        html = `
-            <div class="bulk-actions">
-                <button class="btn btn-primary" onclick="scheduleAllMatches()">
-                    <i class="fas fa-clock"></i> Alle ${unscheduled} Spiele automatisch planen
-                </button>
-            </div>
-        ` + html;
+    // Ungeplante Spiele nach Gruppen
+    if (unscheduledMatches.length > 0) {
+        html += '<h4><i class="fas fa-calendar-plus"></i> Noch zu planende Spiele</h4>';
+        
+        const groupedUnscheduled = {};
+        unscheduledMatches.forEach(match => {
+            if (!groupedUnscheduled[match.group]) {
+                groupedUnscheduled[match.group] = [];
+            }
+            groupedUnscheduled[match.group].push(match);
+        });
+        
+        Object.entries(groupedUnscheduled).forEach(([groupName, groupMatches]) => {
+            html += `<h5>${groupName}</h5>`;
+            groupMatches.forEach(match => {
+                html += `
+                    <div class="match-admin-card">
+                        <div class="match-header">
+                            <div class="match-teams-admin">
+                                <span class="team-name">${match.team1}</span>
+                                <span class="vs">vs</span>
+                                <span class="team-name">${match.team2}</span>
+                            </div>
+                            
+                            ${match.referee ? `
+                                <div class="match-referee-info">
+                                    <small><i class="fas fa-whistle"></i> Schiedsrichter: ${match.referee.team}</small>
+                                </div>
+                            ` : ''}
+                            
+                            <div class="match-status">
+                                ${match.completed ? 
+                                    `<strong>${match.score1}:${match.score2}</strong>` : 
+                                    'Noch nicht geplant'
+                                }
+                            </div>
+                        </div>
+                        <div class="match-actions">
+                            <button class="btn btn-small" onclick="scheduleMatch('${match.id}')">
+                                <i class="fas fa-calendar"></i> Zeit planen
+                            </button>
+                            ${!match.completed && !match.liveScore?.isLive ? `
+                                <button class="btn btn-small btn-success" onclick="startMatchDialog('${match.id}')">
+                                    <i class="fas fa-play"></i> Spiel starten
+                                </button>
+                            ` : ''}
+                            <button class="btn btn-small btn-warning" onclick="editMatch('${match.id}')">
+                                <i class="fas fa-edit"></i> Bearbeiten
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+        });
     }
     
     matchesAdmin.innerHTML = html;
@@ -814,6 +1026,10 @@ function loadSettings() {
                 <p>${currentTournament.settings?.groupSize || 4} Teams</p>
             </div>
             <div class="setting-item">
+                <label>Max. Spiele pro Team</label>
+                <p>${currentTournament.settings?.maxGamesPerTeam || 'Alle'}</p>
+            </div>
+            <div class="setting-item">
                 <label>Spiel um Platz 3</label>
                 <p>${currentTournament.settings?.enableThirdPlace ? 'Aktiviert' : 'Deaktiviert'}</p>
             </div>
@@ -843,11 +1059,24 @@ function calculateMatchTime(liveScore) {
     const startTime = new Date(liveScore.startTime);
     const halfTimeMinutes = liveScore.halfTimeMinutes || 45;
     
-    // Wenn pausiert, Zeit bei Pausenbeginn stoppen
-    if (liveScore.isPaused && !liveScore.halfTimeBreak) {
-        const pausedMinute = liveScore.minute || 0;
+    // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
+    if (liveScore.isPaused && liveScore.pauseStartTime) {
+        const pauseStartTime = new Date(liveScore.pauseStartTime);
+        let elapsedTime = 0;
+        
+        if (liveScore.currentHalf === 1) {
+            elapsedTime = pauseStartTime - startTime - (liveScore.pausedTime || 0);
+        } else if (liveScore.currentHalf === 2 && liveScore.secondHalfStartTime) {
+            const secondHalfStart = new Date(liveScore.secondHalfStartTime);
+            elapsedTime = pauseStartTime - secondHalfStart - (liveScore.pausedTime || 0);
+        }
+        
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        const pausedMinute = Math.floor(totalSeconds / 60);
+        const pausedSecond = totalSeconds % 60;
+        
         return {
-            displayTime: formatMinutes(pausedMinute),
+            displayTime: formatTime(Math.max(0, pausedMinute), Math.max(0, pausedSecond)),
             halfInfo: 'PAUSIERT',
             status: 'paused'
         };
@@ -856,13 +1085,14 @@ function calculateMatchTime(liveScore) {
     // Halbzeitpause
     if (liveScore.halfTimeBreak) {
         return {
-            displayTime: formatMinutes(halfTimeMinutes),
+            displayTime: formatTime(halfTimeMinutes, 0),
             halfInfo: 'HALBZEIT',
             status: 'halftime'
         };
     }
     
     let currentMinute = 0;
+    let currentSecond = 0;
     let halfInfo = '';
     let status = 'running';
     
@@ -872,10 +1102,13 @@ function calculateMatchTime(liveScore) {
         if (liveScore.pausedTime) {
             elapsedTime -= liveScore.pausedTime;
         }
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
         
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
+            currentSecond = 0;
             halfInfo = '1. HALBZEIT ENDE';
             status = 'half-ended';
         } else {
@@ -885,10 +1118,16 @@ function calculateMatchTime(liveScore) {
         // Zweite Halbzeit - berechne seit 2. Halbzeit Start
         const secondHalfStart = new Date(liveScore.secondHalfStartTime);
         let elapsedTime = now - secondHalfStart;
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
+        if (liveScore.pausedTime) {
+            elapsedTime -= liveScore.pausedTime;
+        }
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
         
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
+            currentSecond = 0;
             halfInfo = 'SPIEL ENDE';
             status = 'finished';
         } else {
@@ -896,13 +1135,15 @@ function calculateMatchTime(liveScore) {
         }
     }
     
-    const displayTime = formatMinutes(Math.max(0, currentMinute));
+    const displayTime = formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond));
     
     return { displayTime, halfInfo, status, currentMinute };
 }
 
-function formatMinutes(minutes) {
-    return Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0') + ':00';
+function formatTime(minutes, seconds) {
+    const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
+    const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
 }
 
 function startLiveUpdates() {
@@ -937,12 +1178,23 @@ function startLiveUpdates() {
                     
                     if (timerElement) {
                         timerElement.textContent = timeInfo.displayTime;
-                        console.log(`Updated timer for match ${match.id}: ${timeInfo.displayTime}`);
+                        console.log(`Updated timer for match ${match.id}: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
                     }
                     if (halfElement) halfElement.textContent = timeInfo.halfInfo;
                     
                     // Update button states based on status
                     updateMatchControls(matchElement, match.liveScore, timeInfo.status);
+                    
+                    // Update score inputs only if they are not currently focused
+                    const score1Input = matchElement.querySelector(`#live-score1-${match.id}`);
+                    const score2Input = matchElement.querySelector(`#live-score2-${match.id}`);
+                    
+                    if (score1Input && document.activeElement !== score1Input && score1Input.value != match.liveScore.score1) {
+                        score1Input.value = match.liveScore.score1;
+                    }
+                    if (score2Input && document.activeElement !== score2Input && score2Input.value != match.liveScore.score2) {
+                        score2Input.value = match.liveScore.score2;
+                    }
                 }
             });
             
@@ -1167,6 +1419,51 @@ async function scheduleAllMatches() {
     } catch (error) {
         console.error('Error auto-scheduling:', error);
         showNotification('Fehler beim automatischen Planen', 'error');
+    }
+}
+
+// Automatische Gruppenplanung mit intelligentem Algorithmus
+async function scheduleAllMatches() {
+    if (!confirm('Automatisch alle Spiele intelligent planen? (Mit optimalen Pausen und Schiedsrichter-Verteilung)')) return;
+    
+    const startTime = prompt('Startzeit (HH:MM):', '10:00');
+    const matchDuration = prompt('Spieldauer + Pause in Minuten:', '60');
+    const field = prompt('Spielfeld:', 'Hauptplatz');
+    
+    if (!startTime || !matchDuration) return;
+    
+    // Validiere Zeitformat
+    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+        showNotification('Ungültiges Zeitformat. Bitte HH:MM verwenden.', 'error');
+        return;
+    }
+    
+    console.log(`Intelligent scheduling: Start at ${startTime}, duration ${matchDuration}min`);
+    
+    try {
+        const response = await fetch('/api/admin/schedule-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                startTime,
+                matchDuration: parseInt(matchDuration),
+                field
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification(data.message || `${data.scheduledMatches} Spiele intelligent geplant!`);
+            await loadInitialData();
+            loadMatches();
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        console.error('Error intelligent scheduling:', error);
+        showNotification('Fehler beim intelligenten Planen', 'error');
     }
 }
 

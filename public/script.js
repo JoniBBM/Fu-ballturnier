@@ -82,9 +82,70 @@ navBtns.forEach(btn => {
             case 'tables':
                 loadTables();
                 break;
+            case 'rules':
+                loadRules();
+                break;
         }
     });
 });
+
+// Auto-refresh mechanism for schedule updates
+let lastScheduleUpdate = null;
+let scheduleRefreshInterval = null;
+
+function startScheduleAutoRefresh() {
+    if (scheduleRefreshInterval) {
+        clearInterval(scheduleRefreshInterval);
+    }
+    
+    scheduleRefreshInterval = setInterval(async () => {
+        try {
+            // Check if schedule was updated
+            const response = await fetch('/api/tournament');
+            const data = await response.json();
+            
+            if (data.tournament && data.tournament.lastUpdated) {
+                if (lastScheduleUpdate && new Date(data.tournament.lastUpdated) > new Date(lastScheduleUpdate)) {
+                    console.log('Schedule updated, refreshing content...');
+                    // Refresh current tab content if it's schedule, teams, or tables
+                    const activeTab = document.querySelector('.nav-btn.active').dataset.tab;
+                    if (['schedule', 'teams', 'tables', 'home'].includes(activeTab)) {
+                        loadTabContent(activeTab);
+                    }
+                }
+                lastScheduleUpdate = data.tournament.lastUpdated;
+            }
+        } catch (error) {
+            console.error('Error checking for schedule updates:', error);
+        }
+    }, 5000); // Check every 5 seconds
+}
+
+function loadTabContent(tab) {
+    switch (tab) {
+        case 'home':
+            updateStats();
+            break;
+        case 'live':
+            loadLiveMatch();
+            break;
+        case 'register':
+            checkRegistrationStatus();
+            break;
+        case 'teams':
+            loadTeams();
+            break;
+        case 'schedule':
+            loadSchedule();
+            break;
+        case 'tables':
+            loadTables();
+            break;
+        case 'rules':
+            loadRules();
+            break;
+    }
+}
 
 // Modal Management
 adminBtn.addEventListener('click', () => {
@@ -252,42 +313,62 @@ let liveUpdateInterval = null;
 
 function calculateLiveTime(liveMatch) {
     if (!liveMatch || !liveMatch.startTime) {
-        return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0 };
+        return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0, currentSecond: 0 };
     }
     
     const now = new Date();
     const startTime = new Date(liveMatch.startTime);
     const halfTimeMinutes = liveMatch.halfTimeMinutes || 45;
     
-    // Wenn pausiert, Zeit bei Pausenbeginn stoppen
-    if (liveMatch.isPaused && !liveMatch.halfTimeBreak) {
+    // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
+    if (liveMatch.isPaused && liveMatch.pauseStartTime) {
+        const pauseStartTime = new Date(liveMatch.pauseStartTime);
+        let elapsedTime = 0;
+        
+        if (liveMatch.currentHalf === 1) {
+            elapsedTime = pauseStartTime - startTime - (liveMatch.pausedTime || 0);
+        } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
+            const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
+            elapsedTime = pauseStartTime - secondHalfStart - (liveMatch.pausedTime || 0);
+        }
+        
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        const currentMinute = Math.floor(totalSeconds / 60);
+        const currentSecond = totalSeconds % 60;
+        
         return {
-            displayTime: formatMinutes(liveMatch.minute || 0),
+            displayTime: formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond)),
             halfInfo: 'PAUSIERT',
-            currentMinute: liveMatch.minute || 0
+            currentMinute: Math.max(0, currentMinute),
+            currentSecond: Math.max(0, currentSecond)
         };
     }
     
     // Halbzeitpause
     if (liveMatch.halfTimeBreak) {
         return {
-            displayTime: formatMinutes(halfTimeMinutes),
+            displayTime: formatTime(halfTimeMinutes, 0),
             halfInfo: 'HALBZEIT',
-            currentMinute: halfTimeMinutes
+            currentMinute: halfTimeMinutes,
+            currentSecond: 0
         };
     }
     
     let elapsedTime = 0;
     let currentMinute = 0;
+    let currentSecond = 0;
     let halfInfo = '';
     
     if (liveMatch.currentHalf === 1) {
         // Erste Halbzeit
         elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
         
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
+            currentSecond = 0;
             halfInfo = '1. HALBZEIT ENDE';
         } else {
             halfInfo = '1. HALBZEIT';
@@ -296,94 +377,155 @@ function calculateLiveTime(liveMatch) {
         // Zweite Halbzeit
         const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
         elapsedTime = now - secondHalfStart - (liveMatch.pausedTime || 0);
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
         
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
+            currentSecond = 0;
             halfInfo = 'SPIEL ENDE';
         } else {
             halfInfo = '2. HALBZEIT';
         }
     }
     
-    const displayTime = formatMinutes(Math.max(0, currentMinute));
+    const displayTime = formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond));
     
-    return { displayTime, halfInfo, currentMinute };
+    return { displayTime, halfInfo, currentMinute, currentSecond };
 }
 
-function formatMinutes(minutes) {
-    return Math.min(minutes, 99).toString().padStart(2, '0') + ':00';
+function formatTime(minutes, seconds) {
+    const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
+    const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
 }
 
 async function loadLiveMatch() {
     try {
-        const response = await fetch('/api/live-match');
-        const data = await response.json();
+        const [liveResponse, nextResponse] = await Promise.all([
+            fetch('/api/live-match'),
+            fetch('/api/next-match')
+        ]);
+        
+        const liveData = await liveResponse.json();
+        const nextData = await nextResponse.json();
         
         const liveContent = document.getElementById('live-content');
         
-        if (!data.liveMatch) {
-            liveContent.innerHTML = `
+        let html = '';
+        
+        // Aktuelles Live-Spiel
+        if (liveData.liveMatch) {
+            const liveMatch = liveData.liveMatch;
+            const timeInfo = calculateLiveTime(liveMatch);
+            
+            html += `
+                <div class="live-match-display">
+                    <div class="live-timer-section">
+                        <div class="live-timer" id="live-timer">${timeInfo.displayTime}</div>
+                        <div class="live-half-info" id="live-half-info">${timeInfo.halfInfo}</div>
+                    </div>
+                    
+                    <div class="live-match-info">
+                        <div class="live-teams">
+                            <div class="live-team">
+                                <div class="team-name">${liveMatch.team1}</div>
+                                <div class="team-score" id="live-score1">${liveMatch.score1}</div>
+                            </div>
+                            
+                            <div class="live-vs">
+                                <span>VS</span>
+                            </div>
+                            
+                            <div class="live-team">
+                                <div class="team-name">${liveMatch.team2}</div>
+                                <div class="team-score" id="live-score2">${liveMatch.score2}</div>
+                            </div>
+                        </div>
+                        
+                        ${liveMatch.group ? `
+                            <div class="live-group-info">
+                                <i class="fas fa-layer-group"></i> ${liveMatch.group}
+                            </div>
+                        ` : ''}
+                    </div>
+                    
+                    <div class="live-status">
+                        <span class="live-indicator-badge">
+                            <i class="fas fa-circle"></i> LIVE
+                        </span>
+                    </div>
+                </div>
+            `;
+            
+            // Start live updates
+            startLiveUpdates(liveMatch);
+        }
+        
+        // Nächstes geplantes Spiel
+        if (nextData.nextMatch) {
+            const nextMatch = nextData.nextMatch;
+            const nextTime = new Date(nextMatch.datetime);
+            const timeUntilMatch = nextTime - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            
+            html += `
+                <div class="next-match-section">
+                    <h3><i class="fas fa-forward"></i> Nächstes Spiel</h3>
+                    <div class="next-match-card">
+                        <div class="next-match-time">
+                            <i class="fas fa-clock"></i>
+                            <span class="time">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
+                            <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
+                        </div>
+                        
+                        <div class="next-match-teams">
+                            <span class="team-name">${nextMatch.team1}</span>
+                            <span class="vs">vs</span>
+                            <span class="team-name">${nextMatch.team2}</span>
+                        </div>
+                        
+                        <div class="next-match-details">
+                            <div class="match-group">
+                                <i class="fas fa-layer-group"></i> ${nextMatch.group}
+                            </div>
+                            <div class="match-field">
+                                <i class="fas fa-map-marker-alt"></i> ${nextMatch.field}
+                            </div>
+                            ${nextMatch.referee ? `
+                                <div class="match-referee">
+                                    <i class="fas fa-whistle"></i>
+                                    <span>Schiedsrichter: <strong>${nextMatch.referee.team}</strong></span>
+                                    <small>(${nextMatch.referee.group})</small>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Falls weder Live-Spiel noch nächstes Spiel
+        if (!liveData.liveMatch && !nextData.nextMatch) {
+            html = `
                 <div class="no-live-match">
                     <div class="no-live-icon">
                         <i class="fas fa-pause-circle"></i>
                     </div>
                     <h3>Derzeit kein Live-Spiel</h3>
-                    <p>Aktuell wird kein Spiel übertragen. Schau später nochmal vorbei!</p>
+                    <p>Aktuell wird kein Spiel übertragen und es sind keine weiteren Spiele geplant.</p>
                 </div>
             `;
+            
             // Clear existing interval
             if (liveUpdateInterval) {
                 clearInterval(liveUpdateInterval);
                 liveUpdateInterval = null;
             }
-            return;
         }
         
-        const liveMatch = data.liveMatch;
-        const timeInfo = calculateLiveTime(liveMatch);
-        
-        liveContent.innerHTML = `
-            <div class="live-match-display">
-                <div class="live-timer-section">
-                    <div class="live-timer" id="live-timer">${timeInfo.displayTime}</div>
-                    <div class="live-half-info" id="live-half-info">${timeInfo.halfInfo}</div>
-                </div>
-                
-                <div class="live-match-info">
-                    <div class="live-teams">
-                        <div class="live-team">
-                            <div class="team-name">${liveMatch.team1}</div>
-                            <div class="team-score" id="live-score1">${liveMatch.score1}</div>
-                        </div>
-                        
-                        <div class="live-vs">
-                            <span>VS</span>
-                        </div>
-                        
-                        <div class="live-team">
-                            <div class="team-name">${liveMatch.team2}</div>
-                            <div class="team-score" id="live-score2">${liveMatch.score2}</div>
-                        </div>
-                    </div>
-                    
-                    ${liveMatch.group ? `
-                        <div class="live-group-info">
-                            <i class="fas fa-layer-group"></i> ${liveMatch.group}
-                        </div>
-                    ` : ''}
-                </div>
-                
-                <div class="live-status">
-                    <span class="live-indicator-badge">
-                        <i class="fas fa-circle"></i> LIVE
-                    </span>
-                </div>
-            </div>
-        `;
-        
-        // Start live updates
-        startLiveUpdates(liveMatch);
+        liveContent.innerHTML = html;
         
     } catch (error) {
         console.error('Fehler beim Laden des Live-Spiels:', error);
@@ -410,18 +552,7 @@ function startLiveUpdates(liveMatch) {
     
     liveUpdateInterval = setInterval(async () => {
         try {
-            // Update timer
-            const timeInfo = calculateLiveTime(liveMatch);
-            const timerElement = document.getElementById('live-timer');
-            const halfElement = document.getElementById('live-half-info');
-            
-            if (timerElement) {
-                timerElement.textContent = timeInfo.displayTime;
-                console.log(`Updated viewer timer: ${timeInfo.displayTime}`);
-            }
-            if (halfElement) halfElement.textContent = timeInfo.halfInfo;
-            
-            // Fetch latest score
+            // Fetch latest data first
             const response = await fetch('/api/live-match');
             const data = await response.json();
             
@@ -432,26 +563,74 @@ function startLiveUpdates(liveMatch) {
                 return;
             }
             
+            // Update liveMatch object with fresh data
+            const updatedMatch = data.liveMatch;
+            
+            // Update timer
+            const timeInfo = calculateLiveTime(updatedMatch);
+            const timerElement = document.getElementById('live-timer');
+            const halfElement = document.getElementById('live-half-info');
+            
+            if (timerElement) {
+                timerElement.textContent = timeInfo.displayTime;
+                console.log(`Updated viewer timer: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
+            }
+            if (halfElement) halfElement.textContent = timeInfo.halfInfo;
+            
+            // Update scores
             const score1Element = document.getElementById('live-score1');
             const score2Element = document.getElementById('live-score2');
             
-            if (score1Element) score1Element.textContent = data.liveMatch.score1;
-            if (score2Element) score2Element.textContent = data.liveMatch.score2;
-            
-            // Update liveMatch object for timer calculations
-            liveMatch.score1 = data.liveMatch.score1;
-            liveMatch.score2 = data.liveMatch.score2;
-            liveMatch.halfTimeBreak = data.liveMatch.halfTimeBreak;
-            liveMatch.isPaused = data.liveMatch.isPaused;
-            liveMatch.pausedTime = data.liveMatch.pausedTime;
-            liveMatch.currentHalf = data.liveMatch.currentHalf;
-            liveMatch.secondHalfStartTime = data.liveMatch.secondHalfStartTime;
-            liveMatch.minute = data.liveMatch.minute;
+            if (score1Element) score1Element.textContent = updatedMatch.score1;
+            if (score2Element) score2Element.textContent = updatedMatch.score2;
             
         } catch (error) {
             console.error('Fehler beim Live-Update:', error);
         }
     }, 1000);
+}
+
+// Rules Functions
+async function loadRules() {
+    try {
+        const response = await fetch('/api/rules');
+        const data = await response.json();
+        
+        const rulesContent = document.getElementById('rules-content');
+        
+        if (!data.rules || data.rules.trim() === '') {
+            rulesContent.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-book-open"></i>
+                    <h3>Noch keine Regeln verfügbar</h3>
+                    <p>Die Turnierregeln werden vom Organisator festgelegt und hier veröffentlicht.</p>
+                </div>
+            `;
+        } else {
+            // Format rules with basic HTML (replace line breaks)
+            const formattedRules = data.rules
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>')
+                .replace(/^/, '<p>')
+                .replace(/$/, '</p>');
+            
+            rulesContent.innerHTML = `
+                <div class="rules-text">
+                    ${formattedRules}
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Fehler beim Laden der Regeln:', error);
+        const rulesContent = document.getElementById('rules-content');
+        rulesContent.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Fehler beim Laden</h3>
+                <p>Die Regeln konnten nicht geladen werden.</p>
+            </div>
+        `;
+    }
 }
 
 // Load Functions
@@ -521,22 +700,107 @@ async function loadSchedule() {
         
         currentTournament = tournamentData.tournament;
         
-        // Group by phase
-        const groupMatches = matches.filter(m => m.phase === 'group');
-        const koMatches = matches.filter(m => m.phase !== 'group');
+        if (matches.length === 0) {
+            scheduleContent.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-calendar"></i>
+                    <h3>Spielplan wird vorbereitet</h3>
+                    <p>Der Spielplan wird bald verfügbar sein.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sortiere Matches chronologisch nach geplanter Zeit
+        const sortedMatches = matches.sort((a, b) => {
+            // Spiele mit Zeit zuerst, dann ungeplante
+            if (a.scheduled && b.scheduled) {
+                return new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime);
+            } else if (a.scheduled && !b.scheduled) {
+                return -1;
+            } else if (!a.scheduled && b.scheduled) {
+                return 1;
+            } else {
+                // Beide ungeplant: sortiere nach Gruppe dann Teams
+                if (a.group !== b.group) {
+                    return a.group.localeCompare(b.group);
+                }
+                return a.team1.localeCompare(b.team1);
+            }
+        });
+        
+        // Gruppiere nach Status: Geplant vs. Ungeplant
+        const scheduledMatches = sortedMatches.filter(m => m.scheduled);
+        const unscheduledMatches = sortedMatches.filter(m => !m.scheduled);
         
         let html = '';
         
-        // Group Phase
-        if (groupMatches.length > 0) {
-            html += '<div class="schedule-phase"><h3><i class="fas fa-layer-group"></i> Gruppenphase</h3>';
+        // Geplante Spiele chronologisch
+        if (scheduledMatches.length > 0) {
+            html += '<div class="schedule-section"><h3><i class="fas fa-clock"></i> Geplante Spiele</h3>';
+            html += '<div class="matches-timeline">';
             
-            const groups = [...new Set(groupMatches.map(m => m.group))];
-            groups.forEach(groupName => {
-                const groupMatchesFiltered = groupMatches.filter(m => m.group === groupName);
+            scheduledMatches.forEach(match => {
+                const matchTime = new Date(match.scheduled.datetime);
+                const isLive = match.liveScore?.isLive;
+                const isCompleted = match.completed;
+                
+                html += `
+                    <div class="match-card chronological ${isCompleted ? 'completed' : ''} ${isLive ? 'live' : ''}">
+                        <div class="match-time">
+                            <i class="fas fa-clock"></i>
+                            <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                            <div class="match-field">${match.scheduled.field}</div>
+                        </div>
+                        
+                        <div class="match-info">
+                            <div class="match-teams">
+                                <span class="team-name">${match.team1}</span>
+                                <span class="vs">vs</span>
+                                <span class="team-name">${match.team2}</span>
+                            </div>
+                            
+                            <div class="match-group">${match.group}</div>
+                            
+                            ${match.referee ? `
+                                <div class="match-referee">
+                                    <i class="fas fa-whistle"></i>
+                                    <span>Schiedsrichter: <strong>${match.referee.team}</strong> (${match.referee.group})</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        <div class="match-result">
+                            ${isCompleted ? 
+                                `<span class="final-score">${match.score1} : ${match.score2}</span>` : 
+                                isLive ? 
+                                    `<span class="live-score">LIVE ${match.liveScore.score1} : ${match.liveScore.score2}</span>` :
+                                    '<span class="pending">Ausstehend</span>'
+                            }
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div></div>';
+        }
+        
+        // Ungeplante Spiele nach Gruppen
+        if (unscheduledMatches.length > 0) {
+            html += '<div class="schedule-section"><h3><i class="fas fa-calendar-plus"></i> Noch zu planende Spiele</h3>';
+            
+            const groupedUnscheduled = {};
+            unscheduledMatches.forEach(match => {
+                if (!groupedUnscheduled[match.group]) {
+                    groupedUnscheduled[match.group] = [];
+                }
+                groupedUnscheduled[match.group].push(match);
+            });
+            
+            Object.entries(groupedUnscheduled).forEach(([groupName, groupMatches]) => {
                 html += `<h4>${groupName}</h4><div class="matches-grid">`;
                 
-                groupMatchesFiltered.forEach(match => {
+                groupMatches.forEach(match => {
                     html += `
                         <div class="match-card ${match.completed ? 'completed' : ''}">
                             <div class="match-teams">
@@ -546,11 +810,12 @@ async function loadSchedule() {
                             </div>
                             <div class="match-result">
                                 ${formatScore(match.score1, match.score2)}
-                                ${match.liveScore?.isLive ? 
-                                    `<div class="live-indicator">LIVE ${match.liveScore.minute}'</div>` : 
-                                    ''
-                                }
                             </div>
+                            ${match.referee ? `
+                                <div class="match-referee">
+                                    <small><i class="fas fa-whistle"></i> ${match.referee.team}</small>
+                                </div>
+                            ` : ''}
                         </div>
                     `;
                 });
@@ -559,39 +824,6 @@ async function loadSchedule() {
             });
             
             html += '</div>';
-        }
-        
-        // K.O. Phase
-        if (koMatches.length > 0) {
-            html += '<div class="schedule-phase"><h3><i class="fas fa-trophy"></i> K.O.-Phase</h3>';
-            html += '<div class="matches-grid">';
-            
-            koMatches.forEach(match => {
-                html += `
-                    <div class="match-card ${match.completed ? 'completed' : ''}">
-                        <div class="match-teams">
-                            <span class="team-name">${match.team1 || 'TBD'}</span>
-                            <span class="vs">vs</span>
-                            <span class="team-name">${match.team2 || 'TBD'}</span>
-                        </div>
-                        <div class="match-result">
-                            ${formatScore(match.score1, match.score2)}
-                        </div>
-                    </div>
-                `;
-            });
-            
-            html += '</div></div>';
-        }
-        
-        if (html === '') {
-            html = `
-                <div class="empty-state">
-                    <i class="fas fa-calendar"></i>
-                    <h3>Spielplan wird vorbereitet</h3>
-                    <p>Der Spielplan wird bald verfügbar sein.</p>
-                </div>
-            `;
         }
         
         scheduleContent.innerHTML = html;
@@ -812,4 +1044,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Check for live matches on page load
     loadLiveMatch();
+    
+    // Start auto-refresh for schedule updates
+    startScheduleAutoRefresh();
 });

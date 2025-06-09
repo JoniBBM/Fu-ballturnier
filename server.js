@@ -26,6 +26,7 @@ let tournaments = [];
 let teams = [];
 let matches = [];
 let currentTournament = null;
+let tournamentRules = ""; // Neue Variable für Regeln
 
 // Daten für bestimmtes Jahr laden
 function loadDataForYear(year) {
@@ -37,6 +38,7 @@ function loadDataForYear(year) {
             teams = data.teams || [];
             matches = data.matches || [];
             currentTournament = data.currentTournament || null;
+            tournamentRules = data.tournamentRules || "";
             console.log(`Daten für ${year} geladen: ${teams.length} Teams, ${matches.length} Spiele`);
             return true;
         }
@@ -62,6 +64,7 @@ function saveData() {
             teams,
             matches,
             currentTournament,
+            tournamentRules,
             lastUpdated: new Date().toISOString()
         };
         fs.writeFileSync(filename, JSON.stringify(data, null, 2));
@@ -85,6 +88,7 @@ function loadCurrentYearData() {
         teams = [];
         matches = [];
         currentTournament = null;
+        tournamentRules = "";
     }
 }
 
@@ -126,26 +130,237 @@ function createGroups(teams, groupSize = 4) {
     return groups;
 }
 
-function generateGroupMatches(groups) {
+function generateGroupMatches(groups, maxGamesPerTeam = null) {
     const matches = [];
+    
     groups.forEach((group, groupIndex) => {
         const teams = group.teams;
-        for (let i = 0; i < teams.length; i++) {
-            for (let j = i + 1; j < teams.length; j++) {
-                matches.push({
-                    id: `group_${groupIndex}_${i}_${j}`,
-                    phase: 'group',
-                    group: group.name,
-                    team1: teams[i].name,
-                    team2: teams[j].name,
-                    score1: null,
-                    score2: null,
-                    completed: false
-                });
+        
+        if (maxGamesPerTeam && teams.length > maxGamesPerTeam + 1) {
+            // Limitierte Spiele pro Team: Optimierte Paarung
+            const teamGames = {};
+            teams.forEach(team => {
+                teamGames[team.name] = 0;
+            });
+            
+            // Erstelle alle möglichen Paarungen
+            const allPossibleMatches = [];
+            for (let i = 0; i < teams.length; i++) {
+                for (let j = i + 1; j < teams.length; j++) {
+                    allPossibleMatches.push({
+                        team1: teams[i].name,
+                        team2: teams[j].name,
+                        team1Index: i,
+                        team2Index: j
+                    });
+                }
+            }
+            
+            // Shuffle für Fairness
+            const shuffledMatches = shuffleArray(allPossibleMatches);
+            
+            // Wähle Spiele aus bis maxGamesPerTeam erreicht
+            shuffledMatches.forEach((match, index) => {
+                if (teamGames[match.team1] < maxGamesPerTeam && teamGames[match.team2] < maxGamesPerTeam) {
+                    matches.push({
+                        id: `group_${groupIndex}_${match.team1Index}_${match.team2Index}`,
+                        phase: 'group',
+                        group: group.name,
+                        team1: match.team1,
+                        team2: match.team2,
+                        score1: null,
+                        score2: null,
+                        completed: false
+                    });
+                    teamGames[match.team1]++;
+                    teamGames[match.team2]++;
+                }
+            });
+        } else {
+            // Standard: Jeder gegen Jeden
+            for (let i = 0; i < teams.length; i++) {
+                for (let j = i + 1; j < teams.length; j++) {
+                    matches.push({
+                        id: `group_${groupIndex}_${i}_${j}`,
+                        phase: 'group',
+                        group: group.name,
+                        team1: teams[i].name,
+                        team2: teams[j].name,
+                        score1: null,
+                        score2: null,
+                        completed: false
+                    });
+                }
             }
         }
     });
     return matches;
+}
+
+function assignReferees(matches, groups) {
+    // Erstelle Liste aller Teams pro Gruppe
+    const teamsByGroup = {};
+    groups.forEach(group => {
+        teamsByGroup[group.name] = group.teams.map(t => t.name);
+    });
+    
+    const groupNames = Object.keys(teamsByGroup);
+    const refereeAssignments = {};
+    
+    // Track wie oft jedes Team bereits Schiedsrichter war
+    const refereeCount = {};
+    Object.values(teamsByGroup).flat().forEach(team => {
+        refereeCount[team] = 0;
+    });
+    
+    matches.forEach(match => {
+        const matchGroup = match.group;
+        
+        // Finde andere Gruppen (nicht die Gruppe des aktuellen Spiels)
+        const otherGroups = groupNames.filter(g => g !== matchGroup);
+        
+        if (otherGroups.length > 0) {
+            // Sammle alle verfügbaren Schiedsrichter-Teams aus anderen Gruppen
+            const availableReferees = [];
+            otherGroups.forEach(groupName => {
+                teamsByGroup[groupName].forEach(team => {
+                    // Team kann nur Schiedsrichter sein wenn es nicht selbst spielt
+                    if (team !== match.team1 && team !== match.team2) {
+                        availableReferees.push({
+                            team: team,
+                            group: groupName,
+                            count: refereeCount[team]
+                        });
+                    }
+                });
+            });
+            
+            if (availableReferees.length > 0) {
+                // Sortiere nach wenigsten Schiedsrichter-Einsätzen für faire Verteilung
+                availableReferees.sort((a, b) => a.count - b.count);
+                
+                // Wähle Team mit wenigsten Einsätzen
+                const selectedReferee = availableReferees[0];
+                match.referee = {
+                    team: selectedReferee.team,
+                    group: selectedReferee.group
+                };
+                
+                // Aktualisiere Counter
+                refereeCount[selectedReferee.team]++;
+                
+                console.log(`Schiedsrichter für ${match.team1} vs ${match.team2}: ${selectedReferee.team} (${selectedReferee.group})`);
+            }
+        }
+    });
+    
+    return matches;
+}
+
+function intelligentScheduling(matches, groups, startTime, matchDuration, field) {
+    // Parse Startzeit
+    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
+    const today = new Date();
+    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+    
+    // Track wann jedes Team zuletzt gespielt hat
+    const lastPlayTime = {};
+    const allTeams = groups.flatMap(g => g.teams.map(t => t.name));
+    allTeams.forEach(team => {
+        lastPlayTime[team] = null;
+    });
+    
+    // Kopiere Matches für Manipulation
+    const unscheduledMatches = [...matches];
+    const scheduledMatches = [];
+    
+    // Minimum Pause zwischen Spielen eines Teams (in Minuten)
+    const minimumRestTime = matchDuration * 1.5; // 1.5x Spieldauer als Mindestpause
+    
+    while (unscheduledMatches.length > 0) {
+        let bestMatch = null;
+        let bestScore = -1;
+        
+        // Finde das beste nächste Spiel
+        unscheduledMatches.forEach((match, index) => {
+            const team1LastTime = lastPlayTime[match.team1];
+            const team2LastTime = lastPlayTime[match.team2];
+            
+            // Berechne wie lange die Teams schon pausiert haben
+            const team1RestTime = team1LastTime ? (currentTime - team1LastTime) / (1000 * 60) : Infinity;
+            const team2RestTime = team2LastTime ? (currentTime - team2LastTime) / (1000 * 60) : Infinity;
+            
+            // Beide Teams müssen genug Pause gehabt haben
+            if (team1RestTime >= minimumRestTime && team2RestTime >= minimumRestTime) {
+                // Score basiert auf der Pausenzeit (länger pausiert = höhere Priorität)
+                const score = Math.min(team1RestTime, team2RestTime);
+                
+                if (score > bestScore) {
+                    bestMatch = { match, index };
+                    bestScore = score;
+                }
+            }
+        });
+        
+        // Falls kein Spiel die Mindestpause erfüllt, nimm das mit der längsten Pause
+        if (!bestMatch) {
+            let longestRest = -1;
+            unscheduledMatches.forEach((match, index) => {
+                const team1LastTime = lastPlayTime[match.team1];
+                const team2LastTime = lastPlayTime[match.team2];
+                
+                const team1RestTime = team1LastTime ? (currentTime - team1LastTime) / (1000 * 60) : Infinity;
+                const team2RestTime = team2LastTime ? (currentTime - team2LastTime) / (1000 * 60) : Infinity;
+                
+                const minRest = Math.min(team1RestTime, team2RestTime);
+                
+                if (minRest > longestRest) {
+                    bestMatch = { match, index };
+                    longestRest = minRest;
+                }
+            });
+        }
+        
+        if (bestMatch) {
+            const match = bestMatch.match;
+            
+            // Schedule das Spiel
+            match.scheduled = {
+                datetime: new Date(currentTime),
+                field: field || 'Hauptplatz'
+            };
+            
+            // Update letzte Spielzeit für beide Teams
+            lastPlayTime[match.team1] = new Date(currentTime);
+            lastPlayTime[match.team2] = new Date(currentTime);
+            
+            console.log(`Scheduled: ${match.team1} vs ${match.team2} at ${currentTime.toLocaleTimeString('de-DE')} (Referee: ${match.referee?.team || 'TBD'})`);
+            
+            // Entferne von unscheduled und füge zu scheduled hinzu
+            unscheduledMatches.splice(bestMatch.index, 1);
+            scheduledMatches.push(match);
+            
+            // Nächster Zeitslot
+            currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
+        } else {
+            // Fallback: Nimm erstes verfügbares Spiel
+            console.warn('Fallback scheduling used');
+            const match = unscheduledMatches[0];
+            match.scheduled = {
+                datetime: new Date(currentTime),
+                field: field || 'Hauptplatz'
+            };
+            
+            lastPlayTime[match.team1] = new Date(currentTime);
+            lastPlayTime[match.team2] = new Date(currentTime);
+            
+            unscheduledMatches.splice(0, 1);
+            scheduledMatches.push(match);
+            currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
+        }
+    }
+    
+    return scheduledMatches;
 }
 
 function updateGroupTable(groupName, matches) {
@@ -269,6 +484,24 @@ app.get('/api/admin/teams', (req, res) => {
     res.json(teams);
 });
 
+// Regeln abrufen
+app.get('/api/rules', (req, res) => {
+    res.json({ rules: tournamentRules });
+});
+
+// Admin: Regeln speichern
+app.post('/api/admin/rules', (req, res) => {
+    const { password, rules } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    tournamentRules = rules || "";
+    autoSave();
+    res.json({ success: true, rules: tournamentRules });
+});
+
 // Admin: Turnier erstellen
 app.post('/api/admin/tournament', (req, res) => {
     const { password, year } = req.body;
@@ -315,7 +548,7 @@ app.post('/api/admin/tournament', (req, res) => {
 
 // Admin: Anmeldung schließen und Spielplan generieren
 app.post('/api/admin/close-registration', (req, res) => {
-    const { password, groupSize, enableThirdPlace, enableFifthPlace, enableSeventhPlace } = req.body;
+    const { password, groupSize, enableThirdPlace, enableFifthPlace, enableSeventhPlace, maxGamesPerTeam } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -332,13 +565,15 @@ app.post('/api/admin/close-registration', (req, res) => {
     // Anmeldung schließen
     currentTournament.status = 'closed';
     currentTournament.registrationClosedAt = new Date();
+    currentTournament.lastUpdated = new Date().toISOString();
     
     // Einstellungen speichern
     currentTournament.settings = {
         groupSize: groupSize || 4,
         enableThirdPlace: enableThirdPlace || false,
         enableFifthPlace: enableFifthPlace || false,
-        enableSeventhPlace: enableSeventhPlace || false
+        enableSeventhPlace: enableSeventhPlace || false,
+        maxGamesPerTeam: maxGamesPerTeam || null
     };
     
     // Knockout-Phase erweitern
@@ -355,9 +590,12 @@ app.post('/api/admin/close-registration', (req, res) => {
     const groups = createGroups(teams, currentTournament.settings.groupSize);
     currentTournament.groups = groups;
     
-    // Spielplan generieren
-    const groupMatches = generateGroupMatches(groups);
-    matches = [...groupMatches];
+    // Spielplan generieren mit maxGamesPerTeam Limit
+    const groupMatches = generateGroupMatches(groups, currentTournament.settings.maxGamesPerTeam);
+    
+    // Schiedsrichter zuweisen
+    const matchesWithReferees = assignReferees(groupMatches, groups);
+    matches = [...matchesWithReferees];
     
     // Status auf aktiv setzen
     currentTournament.status = 'active';
@@ -365,13 +603,13 @@ app.post('/api/admin/close-registration', (req, res) => {
     
     autoSave();
     
-    console.log(`Turnier aktiviert: ${teams.length} Teams, ${matches.length} Spiele generiert`);
+    console.log(`Turnier aktiviert: ${teams.length} Teams, ${matches.length} Spiele generiert mit Schiedsrichtern`);
     
     res.json({ 
         success: true, 
         tournament: currentTournament, 
         matchesGenerated: matches.length,
-        message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Gruppen à ${groupSize} Teams)`
+        message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Gruppen à ${groupSize} Teams, max. ${maxGamesPerTeam || 'alle'} Spiele pro Team, mit Schiedsrichter-Einteilung)`
     });
 });
 
@@ -397,7 +635,7 @@ app.post('/api/admin/schedule', (req, res) => {
     res.json({ success: true, match });
 });
 
-// Admin: Alle Spiele automatisch planen (abwechselnd zwischen Gruppen)
+// Admin: Alle Spiele automatisch planen (intelligenter Algorithmus)
 app.post('/api/admin/schedule-all', (req, res) => {
     const { password, startTime, matchDuration, field } = req.body;
     
@@ -410,57 +648,74 @@ app.post('/api/admin/schedule-all', (req, res) => {
         return res.status(400).json({ error: 'Keine ungeplanIten Spiele vorhanden' });
     }
     
-    // Gruppiere Spiele nach Gruppen
-    const groupedMatches = {};
-    unscheduledMatches.forEach(match => {
-        const groupName = match.group || 'Ko-Phase';
-        if (!groupedMatches[groupName]) {
-            groupedMatches[groupName] = [];
-        }
-        groupedMatches[groupName].push(match);
-    });
-    
-    // Erstelle abwechselnde Reihenfolge
-    const groupNames = Object.keys(groupedMatches);
-    const alternatingSchedule = [];
-    let maxGamesPerGroup = Math.max(...Object.values(groupedMatches).map(g => g.length));
-    
-    for (let i = 0; i < maxGamesPerGroup; i++) {
-        groupNames.forEach(groupName => {
-            if (groupedMatches[groupName][i]) {
-                alternatingSchedule.push(groupedMatches[groupName][i]);
-            }
-        });
-    }
-    
     // Parse Startzeit korrekt
     if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
         return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
     }
     
-    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
-    console.log(`Parsed time: ${hours}:${minutes.toString().padStart(2, '0')}`);
+    console.log(`Intelligent scheduling: Start at ${startTime}, duration ${matchDuration}min`);
     
-    // Heutiges Datum mit korrekter Uhrzeit
-    const today = new Date();
-    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
-    
-    console.log(`Starting at: ${currentTime.toLocaleString('de-DE')}`);
-    
-    // Plane alle Spiele
-    alternatingSchedule.forEach((match, index) => {
-        match.scheduled = {
-            datetime: new Date(currentTime),
-            field: field || 'Hauptplatz'
-        };
-        console.log(`Match ${index + 1}: ${match.team1} vs ${match.team2} at ${currentTime.toLocaleTimeString('de-DE')}`);
+    try {
+        // Verwende intelligenten Scheduling-Algorithmus
+        const scheduledMatches = intelligentScheduling(
+            unscheduledMatches, 
+            currentTournament.groups, 
+            startTime, 
+            parseInt(matchDuration), 
+            field
+        );
         
-        // Nächste Zeit berechnen (matchDuration Minuten später)
-        currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
-    });
+        // Update die Matches im globalen Array
+        scheduledMatches.forEach(scheduledMatch => {
+            const originalMatch = matches.find(m => m.id === scheduledMatch.id);
+            if (originalMatch) {
+                originalMatch.scheduled = scheduledMatch.scheduled;
+            }
+        });
+        
+        // Update tournament lastUpdated timestamp
+        if (currentTournament) {
+            currentTournament.lastUpdated = new Date().toISOString();
+        }
+        
+        autoSave();
+        res.json({ 
+            success: true, 
+            scheduledMatches: scheduledMatches.length,
+            message: `${scheduledMatches.length} Spiele intelligent geplant mit optimalen Pausen und Schiedsrichter-Verteilung`
+        });
+        
+    } catch (error) {
+        console.error('Error during intelligent scheduling:', error);
+        res.status(500).json({ error: 'Fehler beim intelligenten Planen der Spiele' });
+    }
+});
+
+// API: Nächstes geplantes Spiel abrufen
+app.get('/api/next-match', (req, res) => {
+    const now = new Date();
     
-    autoSave();
-    res.json({ success: true, scheduledMatches: alternatingSchedule.length });
+    // Finde das nächste geplante Spiel
+    const upcomingMatches = matches
+        .filter(m => m.scheduled && !m.completed && new Date(m.scheduled.datetime) > now)
+        .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime));
+    
+    if (upcomingMatches.length > 0) {
+        const nextMatch = upcomingMatches[0];
+        res.json({ 
+            nextMatch: {
+                id: nextMatch.id,
+                team1: nextMatch.team1,
+                team2: nextMatch.team2,
+                group: nextMatch.group,
+                datetime: nextMatch.scheduled.datetime,
+                field: nextMatch.scheduled.field,
+                referee: nextMatch.referee || null
+            }
+        });
+    } else {
+        res.json({ nextMatch: null });
+    }
 });
 
 // API: Aktuelles Live-Spiel abrufen (für Zuschauer)
@@ -487,7 +742,8 @@ app.get('/api/live-match', (req, res) => {
             firstHalfEndTime: liveMatch.liveScore.firstHalfEndTime,
             secondHalfStartTime: liveMatch.liveScore.secondHalfStartTime,
             minute: liveMatch.liveScore.minute || 0,
-            group: liveMatch.group
+            group: liveMatch.group,
+            pauseStartTime: liveMatch.liveScore.pauseStartTime
         }
     });
 });
@@ -521,26 +777,10 @@ app.post('/api/admin/live-score', (req, res) => {
         return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
     }
     
-    // Update nur die Scores, Zeit wird automatisch berechnet
+    // Update nur die Scores
     match.liveScore.score1 = parseInt(score1) || 0;
     match.liveScore.score2 = parseInt(score2) || 0;
-    
-    // Berechne aktuelle Minute für Speicherung
-    const now = new Date();
-    const startTime = new Date(match.liveScore.startTime);
-    const halfTimeMinutes = match.liveScore.halfTimeMinutes || 45;
-    
-    let currentMinute = 0;
-    if (match.liveScore.currentHalf === 1) {
-        const elapsedTime = now - startTime - (match.liveScore.pausedTime || 0);
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
-    } else if (match.liveScore.currentHalf === 2 && match.liveScore.secondHalfStartTime) {
-        const secondHalfStart = new Date(match.liveScore.secondHalfStartTime);
-        const elapsedTime = now - secondHalfStart - (match.liveScore.pausedTime || 0);
-        currentMinute = Math.floor(elapsedTime / (1000 * 60));
-    }
-    
-    match.liveScore.minute = Math.max(0, currentMinute);
+    match.liveScore.lastScoreUpdate = new Date();
     
     autoSave();
     res.json({ success: true, match });
@@ -565,19 +805,21 @@ app.post('/api/admin/start-match', (req, res) => {
     }
     
     // Start match with timer
+    const startTime = new Date();
     match.liveScore = {
         score1: 0,
         score2: 0,
         minute: 0,
         isLive: true,
         isPaused: false,
-        startTime: new Date(),
+        startTime: startTime,
         pausedTime: 0, // Gesamte Pausenzeit in Millisekunden
         halfTimeMinutes: parseInt(halfTimeMinutes) || 45,
         currentHalf: 1,
         halfTimeBreak: false,
         firstHalfEndTime: null,
-        secondHalfStartTime: null
+        secondHalfStartTime: null,
+        lastScoreUpdate: startTime
     };
     
     autoSave();
@@ -597,14 +839,14 @@ app.post('/api/admin/pause-match', (req, res) => {
         return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
     }
     
-    if (!match.liveScore.isPaused) {
+    if (!match.liveScore.isPaused && !match.liveScore.halfTimeBreak) {
         match.liveScore.isPaused = true;
         match.liveScore.pauseStartTime = new Date();
         
         autoSave();
         res.json({ success: true, message: 'Spiel pausiert' });
     } else {
-        res.status(400).json({ error: 'Spiel ist bereits pausiert' });
+        res.status(400).json({ error: 'Spiel ist bereits pausiert oder in Halbzeitpause' });
     }
 });
 
@@ -621,7 +863,7 @@ app.post('/api/admin/resume-match', (req, res) => {
         return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
     }
     
-    if (match.liveScore.isPaused) {
+    if (match.liveScore.isPaused && match.liveScore.pauseStartTime) {
         // Addiere Pausenzeit zur Gesamtpausenzeit
         const pauseDuration = new Date() - new Date(match.liveScore.pauseStartTime);
         match.liveScore.pausedTime += pauseDuration;
@@ -651,7 +893,7 @@ app.post('/api/admin/halftime-break', (req, res) => {
     if (match.liveScore.currentHalf === 1) {
         match.liveScore.halfTimeBreak = true;
         match.liveScore.firstHalfEndTime = new Date();
-        match.liveScore.isPaused = true;
+        match.liveScore.isPaused = false; // Halbzeitpause ist kein normaler Pause-Zustand
         
         autoSave();
         res.json({ success: true, message: 'Halbzeitpause gestartet' });
@@ -703,6 +945,7 @@ app.post('/api/admin/finish-match', (req, res) => {
     match.score2 = match.liveScore.score2;
     match.completed = true;
     match.liveScore.isLive = false;
+    match.liveScore.finishedAt = new Date();
     
     if (match.phase === 'group') {
         updateGroupTable(match.group, matches);
