@@ -46,13 +46,18 @@
             </ul>
             
             <div class="sidebar-footer">
-                <a href="/" class="btn btn-outline">
-                    <i class="fas fa-arrow-left"></i> Zur Website
+                <a href="/" class="btn btn-outline btn-back-to-site">
+                    <i class="fas fa-arrow-left"></i> 
+                    <span class="btn-text">Zur Website</span>
                 </a>
-                <div style="margin-top: 1rem; padding: 1rem; background: rgba(255,255,255,0.1); border-radius: 0.5rem; font-size: 0.8rem; color: rgba(255,255,255,0.8);">
+                <button class="btn btn-danger btn-logout" onclick="logout()" style="margin-top: 0.5rem; width: 100%;">
+                    <i class="fas fa-sign-out-alt"></i>
+                    <span class="btn-text">Abmelden</span>
+                </button>
+                <div class="version-info">
                     <strong>Version 2.0</strong><br>
-                    Intelligente Algorithmen<br>
-                    Auto-Refresh System
+                    <small>Intelligente Algorithmen</small><br>
+                    <small>Auto-Refresh System</small>
                 </div>
             </div>
         </nav>
@@ -61,11 +66,19 @@
         <main class="admin-main">
             <!-- Header -->
             <header class="admin-header">
-                <h1 id="page-title">Dashboard</h1>
-                <div class="header-actions">
+                <div class="header-left">
+                    <button class="mobile-menu-toggle" onclick="toggleMobileMenu()">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h1 id="page-title">Dashboard</h1>
+                </div>
+                <div class="header-right">
                     <div class="current-tournament" id="current-tournament-info">
                         Kein aktives Turnier
                     </div>
+                    <button class="refresh-btn" onclick="manualRefresh()" title="Manuell aktualisieren">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
                 </div>
             </header>
 
@@ -81,17 +94,25 @@
                             </label>
                             <input type="password" id="admin-password" required placeholder="Passwort eingeben">
                         </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="remember-login">
+                                <span class="checkmark"></span>
+                                Angemeldet bleiben
+                            </label>
+                        </div>
                         <button type="submit" class="btn btn-primary">
                             <i class="fas fa-sign-in-alt"></i> Anmelden
                         </button>
                     </form>
-                    <div style="margin-top: 2rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #3b82f6;">
+                    <div class="feature-info">
                         <h4 style="color: #3b82f6; margin-bottom: 0.5rem;">✨ Neu in Version 2.0:</h4>
                         <ul style="margin: 0; color: #1e40af; list-style-position: inside;">
                             <li>Swiss System (Champions League Format)</li>
                             <li>Intelligente Konfigurationsanalyse</li>
                             <li>Auto-Refresh Dashboard</li>
                             <li>Erweiterte K.O.-Systeme</li>
+                            <li>Session-Management</li>
                         </ul>
                     </div>
                 </div>
@@ -161,17 +182,17 @@
                         
                         <div class="dashboard-card">
                             <h3><i class="fas fa-tools"></i> Schnellaktionen</h3>
-                            <div class="quick-actions" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                                <button class="btn btn-outline" onclick="loadTabContent('teams')">
+                            <div class="quick-actions">
+                                <button class="btn btn-outline quick-action-btn" onclick="switchToTab('teams')">
                                     <i class="fas fa-users"></i> Teams verwalten
                                 </button>
-                                <button class="btn btn-outline" onclick="loadTabContent('matches')">
+                                <button class="btn btn-outline quick-action-btn" onclick="switchToTab('matches')">
                                     <i class="fas fa-calendar"></i> Spielplan bearbeiten
                                 </button>
-                                <button class="btn btn-outline" onclick="loadTabContent('live')">
+                                <button class="btn btn-outline quick-action-btn" onclick="switchToTab('live')">
                                     <i class="fas fa-broadcast-tower"></i> Live-Verwaltung
                                 </button>
-                                <button class="btn btn-outline" onclick="exportTournamentData()">
+                                <button class="btn btn-outline quick-action-btn" onclick="exportTournamentData()">
                                     <i class="fas fa-download"></i> Daten exportieren
                                 </button>
                             </div>
@@ -179,18 +200,18 @@
                         
                         <div class="dashboard-card">
                             <h3><i class="fas fa-lightbulb"></i> Neue Features</h3>
-                            <div style="font-size: 0.9rem; line-height: 1.5;">
-                                <div style="margin-bottom: 0.75rem;">
+                            <div class="features-list">
+                                <div class="feature-item">
                                     <strong style="color: #3b82f6;">🏆 Swiss System</strong><br>
-                                    Champions League Format für faire Paarungen
+                                    <small>Champions League Format für faire Paarungen</small>
                                 </div>
-                                <div style="margin-bottom: 0.75rem;">
+                                <div class="feature-item">
                                     <strong style="color: #16a34a;">⚡ Auto-Refresh</strong><br>
-                                    Automatische Updates ohne Neuladen
+                                    <small>Automatische Updates ohne Neuladen</small>
                                 </div>
-                                <div style="margin-bottom: 0.75rem;">
+                                <div class="feature-item">
                                     <strong style="color: #dc2626;">🧠 Intelligente Analyse</strong><br>
-                                    Konfigurationsempfehlungen in Echtzeit
+                                    <small>Konfigurationsempfehlungen in Echtzeit</small>
                                 </div>
                             </div>
                         </div>
@@ -208,7 +229,7 @@
                         
                         <div id="tournament-creation" style="display: none;">
                             <h4>Neues Turnier erstellen</h4>
-                            <div style="margin-bottom: 2rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem; border-left: 4px solid #f59e0b;">
+                            <div class="info-banner">
                                 <h5 style="color: #f59e0b; margin-bottom: 0.5rem;">🆕 Erweiterte Features verfügbar!</h5>
                                 <p style="margin: 0; color: #92400e;">Nach der Erstellung kannst du zwischen verschiedenen Formaten wählen: Gruppensystem, Champions League Format oder Liga-Modus.</p>
                             </div>
@@ -235,17 +256,18 @@
                     <div class="card">
                         <h3><i class="fas fa-users"></i> Teams verwalten</h3>
                         
-                        <div class="team-management-header" style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                        <div class="team-management-header">
                             <div class="team-stats">
                                 <span id="team-count-display">0 Teams registriert</span>
-                                <div style="margin-top: 0.5rem; font-size: 0.9rem; color: #666;">
+                                <div class="auto-refresh-info">
                                     <i class="fas fa-sync-alt" style="color: #3b82f6;"></i>
-                                    Aktualisiert sich automatisch
+                                    <small>Aktualisiert sich automatisch</small>
                                 </div>
                             </div>
                             <div class="team-actions">
                                 <button class="btn btn-outline" onclick="refreshTeams()">
-                                    <i class="fas fa-refresh"></i> Manuell aktualisieren
+                                    <i class="fas fa-refresh"></i> 
+                                    <span class="btn-text">Manuell aktualisieren</span>
                                 </button>
                             </div>
                         </div>
@@ -261,16 +283,16 @@
                     <div class="card">
                         <h3><i class="fas fa-calendar"></i> Spielplan verwalten</h3>
                         
-                        <div class="matches-management-info" style="margin-bottom: 2rem;">
-                            <div class="info-box" style="background: #f0f9ff; border: 1px solid #3b82f6; padding: 1rem; border-radius: 0.5rem;">
+                        <div class="matches-management-info">
+                            <div class="info-banner">
                                 <i class="fas fa-info-circle" style="color: #3b82f6;"></i>
                                 <strong>Intelligente Spielplan-Verwaltung:</strong>
                                 <p>Nutze die erweiterten Funktionen für optimale Zeitplanung und faire Schiedsrichter-Verteilung. Das System berücksichtigt automatisch Pausen zwischen Spielen für jedes Team.</p>
-                                <div style="margin-top: 1rem;">
-                                    <span style="background: #3b82f6; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-right: 0.5rem;">
+                                <div class="feature-badges">
+                                    <span class="feature-badge ai">
                                         <i class="fas fa-brain"></i> KI-Unterstützt
                                     </span>
-                                    <span style="background: #16a34a; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                    <span class="feature-badge auto">
                                         <i class="fas fa-sync"></i> Auto-Update
                                     </span>
                                 </div>
@@ -288,16 +310,16 @@
                     <div class="card">
                         <h3><i class="fas fa-broadcast-tower"></i> Live-Verwaltung</h3>
                         
-                        <div class="live-management-info" style="margin-bottom: 2rem;">
-                            <div class="info-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem;">
+                        <div class="live-management-info">
+                            <div class="info-banner">
                                 <i class="fas fa-broadcast-tower" style="color: #f59e0b;"></i>
                                 <strong>Echtzeit Live-Spiel Verwaltung:</strong>
                                 <p>Starte Spiele mit präzisem Timer, verwalte Live-Scores, Pausen und Halbzeiten. Alle Änderungen werden automatisch an die öffentliche Website übertragen und synchronisiert.</p>
-                                <div style="margin-top: 1rem;">
-                                    <span style="background: #f59e0b; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-right: 0.5rem;">
+                                <div class="feature-badges">
+                                    <span class="feature-badge timer">
                                         <i class="fas fa-stopwatch"></i> Präzisions-Timer
                                     </span>
-                                    <span style="background: #dc2626; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                    <span class="feature-badge live">
                                         <i class="fas fa-satellite-dish"></i> Live-Sync
                                     </span>
                                 </div>
@@ -315,27 +337,27 @@
                     <div class="card">
                         <h3><i class="fas fa-chart-bar"></i> Ergebnisse verwalten</h3>
                         
-                        <div class="results-management-info" style="margin-bottom: 2rem;">
-                            <div class="info-box" style="background: #f0fdf4; border: 1px solid #16a34a; padding: 1rem; border-radius: 0.5rem;">
+                        <div class="results-management-info">
+                            <div class="info-banner">
                                 <i class="fas fa-chart-bar" style="color: #16a34a;"></i>
                                 <strong>Intelligente Ergebnis-Verwaltung:</strong>
                                 <p>Trage Spielergebnisse ein oder bearbeite bereits eingetragene Ergebnisse. Die Tabellen werden automatisch berechnet und aktualisiert. Das System unterstützt alle Turnier-Formate.</p>
-                                <div style="margin-top: 1rem;">
-                                    <span style="background: #16a34a; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-right: 0.5rem;">
+                                <div class="feature-badges">
+                                    <span class="feature-badge calc">
                                         <i class="fas fa-calculator"></i> Auto-Berechnung
                                     </span>
-                                    <span style="background: #3b82f6; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                    <span class="feature-badge format">
                                         <i class="fas fa-table"></i> Multi-Format
                                     </span>
                                 </div>
                             </div>
                         </div>
                         
-                        <div class="results-actions" style="margin-bottom: 2rem;">
-                            <button class="btn btn-warning" onclick="resetAllResults()" style="margin-right: 1rem;">
+                        <div class="results-actions">
+                            <button class="btn btn-warning" onclick="resetAllResults()">
                                 <i class="fas fa-undo"></i> Alle Ergebnisse zurücksetzen
                             </button>
-                            <small style="color: #666;">Setzt alle Spielergebnisse zurück und leert die Tabellen</small>
+                            <small>Setzt alle Spielergebnisse zurück und leert die Tabellen</small>
                         </div>
                         
                         <div id="results-input">
@@ -349,16 +371,16 @@
                     <div class="card">
                         <h3><i class="fas fa-book"></i> Turnierregeln verwalten</h3>
                         
-                        <div class="rules-management-info" style="margin-bottom: 2rem;">
-                            <div class="info-box" style="background: #fef2f2; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem;">
+                        <div class="rules-management-info">
+                            <div class="info-banner">
                                 <i class="fas fa-book" style="color: #dc2626;"></i>
                                 <strong>Regeln bearbeiten:</strong>
                                 <p>Diese Regeln werden auf der öffentlichen Website im Regeln-Tab angezeigt. Verwende einfache Textformatierung. Änderungen werden automatisch auf der Website aktualisiert.</p>
-                                <div style="margin-top: 1rem;">
-                                    <span style="background: #dc2626; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-right: 0.5rem;">
+                                <div class="feature-badges">
+                                    <span class="feature-badge publish">
                                         <i class="fas fa-globe"></i> Live-Publikation
                                     </span>
-                                    <span style="background: #6b7280; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                    <span class="feature-badge text">
                                         <i class="fas fa-edit"></i> Rich-Text
                                     </span>
                                 </div>
@@ -390,16 +412,16 @@
                     <div class="card">
                         <h3><i class="fas fa-cog"></i> Turniereinstellungen & Verwaltung</h3>
                         
-                        <div class="settings-management-info" style="margin-bottom: 2rem;">
-                            <div class="info-box" style="background: #f8fafc; border: 1px solid #64748b; padding: 1rem; border-radius: 0.5rem;">
+                        <div class="settings-management-info">
+                            <div class="info-banner">
                                 <i class="fas fa-cog" style="color: #64748b;"></i>
                                 <strong>Erweiterte Einstellungen & Management:</strong>
                                 <p>Hier finden Sie alle wichtigen Verwaltungsoptionen, Einstellungen und Notfall-Funktionen für das Turnier. Alle Aktionen werden protokolliert und gesichert.</p>
-                                <div style="margin-top: 1rem;">
-                                    <span style="background: #64748b; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-right: 0.5rem;">
+                                <div class="feature-badges">
+                                    <span class="feature-badge secure">
                                         <i class="fas fa-shield-alt"></i> Sicher
                                     </span>
-                                    <span style="background: #dc2626; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                    <span class="feature-badge logged">
                                         <i class="fas fa-history"></i> Protokolliert
                                     </span>
                                 </div>
@@ -411,51 +433,51 @@
                         </div>
                         
                         <!-- Management Actions -->
-                        <div class="management-section" style="margin-top: 3rem;">
+                        <div class="management-section">
                             <h4><i class="fas fa-tools"></i> Erweiterte Verwaltung</h4>
                             
-                            <div class="management-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-top: 2rem;">
+                            <div class="management-grid">
                                 
                                 <!-- Data Management -->
-                                <div class="management-card" style="background: #f0f9ff; border: 1px solid #3b82f6; padding: 2rem; border-radius: 1rem;">
-                                    <h5 style="color: #3b82f6; margin-bottom: 1rem;">
+                                <div class="management-card data">
+                                    <h5>
                                         <i class="fas fa-database"></i> Daten-Management
                                     </h5>
-                                    <p style="margin-bottom: 1.5rem;">Export und Backup von Turnierdaten mit vollständiger Historie</p>
-                                    <button class="btn btn-outline" onclick="exportTournamentData()" style="width: 100%;">
+                                    <p>Export und Backup von Turnierdaten mit vollständiger Historie</p>
+                                    <button class="btn btn-outline" onclick="exportTournamentData()">
                                         <i class="fas fa-download"></i> Turnierdaten exportieren
                                     </button>
                                 </div>
                                 
                                 <!-- Schedule Management -->
-                                <div class="management-card" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 2rem; border-radius: 1rem;">
-                                    <h5 style="color: #f59e0b; margin-bottom: 1rem;">
+                                <div class="management-card schedule">
+                                    <h5>
                                         <i class="fas fa-calendar-times"></i> Zeitplan-Management
                                     </h5>
-                                    <p style="margin-bottom: 1.5rem;">Intelligente Zurücksetzung aller Zeitplanungen</p>
-                                    <button class="btn btn-warning" onclick="resetAllSchedules()" style="width: 100%;">
+                                    <p>Intelligente Zurücksetzung aller Zeitplanungen</p>
+                                    <button class="btn btn-warning" onclick="resetAllSchedules()">
                                         <i class="fas fa-undo"></i> Zeitpläne zurücksetzen
                                     </button>
                                 </div>
                                 
                                 <!-- Group Management -->
-                                <div class="management-card" style="background: #ecfdf5; border: 1px solid #16a34a; padding: 2rem; border-radius: 1rem;">
-                                    <h5 style="color: #16a34a; margin-bottom: 1rem;">
+                                <div class="management-card groups">
+                                    <h5>
                                         <i class="fas fa-users-cog"></i> Gruppen-Management
                                     </h5>
-                                    <p style="margin-bottom: 1.5rem;">Teams mit verbessertem Algorithmus neu aufteilen</p>
-                                    <button class="btn btn-success" onclick="reorganizeGroups()" style="width: 100%;">
+                                    <p>Teams mit verbessertem Algorithmus neu aufteilen</p>
+                                    <button class="btn btn-success" onclick="reorganizeGroups()">
                                         <i class="fas fa-refresh"></i> Gruppen neu organisieren
                                     </button>
                                 </div>
                                 
                                 <!-- Tournament Status -->
-                                <div class="management-card" style="background: #fdf4ff; border: 1px solid #a855f7; padding: 2rem; border-radius: 1rem;">
-                                    <h5 style="color: #a855f7; margin-bottom: 1rem;">
+                                <div class="management-card status">
+                                    <h5>
                                         <i class="fas fa-edit"></i> Status-Management
                                     </h5>
-                                    <p style="margin-bottom: 1.5rem;">Turnier-Status mit Validierung ändern</p>
-                                    <button class="btn" onclick="changeTournamentStatus()" style="width: 100%; background: #a855f7; color: white;">
+                                    <p>Turnier-Status mit Validierung ändern</p>
+                                    <button class="btn btn-purple" onclick="changeTournamentStatus()">
                                         <i class="fas fa-exchange-alt"></i> Status ändern
                                     </button>
                                 </div>
@@ -463,14 +485,14 @@
                         </div>
                         
                         <!-- Danger Zone -->
-                        <div class="danger-zone" style="margin-top: 3rem;">
-                            <h4 style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h4>
-                            <p style="color: #666; margin-bottom: 2rem;">
+                        <div class="danger-zone">
+                            <h4><i class="fas fa-exclamation-triangle"></i> Danger Zone</h4>
+                            <p>
                                 Gefährliche Aktionen, die nicht rückgängig gemacht werden können. Seien Sie vorsichtig!
                             </p>
                             
-                            <div class="danger-actions" style="display: flex; flex-direction: column; gap: 1rem; max-width: 400px;">
-                                <button class="btn" onclick="resetAllResults()" style="background: #f59e0b; color: white;">
+                            <div class="danger-actions">
+                                <button class="btn btn-warning" onclick="resetAllResults()">
                                     <i class="fas fa-undo"></i> Alle Ergebnisse zurücksetzen
                                 </button>
                                 
@@ -479,8 +501,8 @@
                                 </button>
                             </div>
                             
-                            <div style="margin-top: 1rem; padding: 1rem; background: #fef2f2; border-radius: 0.5rem; border-left: 4px solid #dc2626;">
-                                <small style="color: #dc2626; font-weight: 600;">
+                            <div class="danger-warning">
+                                <small>
                                     ⚠️ Das komplette Zurücksetzen löscht ALLES: Teams, Spiele, Ergebnisse, Einstellungen und Regeln!
                                 </small>
                             </div>
@@ -495,8 +517,16 @@
     <div id="notification" class="notification"></div>
 
     <!-- Auto-refresh indicator -->
-    <div style="position: fixed; bottom: 1rem; right: 1rem; background: rgba(59, 130, 246, 0.9); color: white; padding: 0.5rem 1rem; border-radius: 0.5rem; font-size: 0.8rem; z-index: 1000; display: none;" id="refresh-indicator">
+    <div id="refresh-indicator" class="refresh-indicator">
         <i class="fas fa-sync-alt fa-spin"></i> Auto-Update...
+    </div>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Wird geladen...</p>
+        </div>
     </div>
 
     <script src="admin.js"></script>
