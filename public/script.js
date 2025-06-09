@@ -117,8 +117,8 @@ function startScheduleAutoRefresh() {
             if (data.tournament && data.tournament.lastUpdated) {
                 if (lastScheduleUpdate && new Date(data.tournament.lastUpdated) > new Date(lastScheduleUpdate)) {
                     console.log('Schedule updated, refreshing content...');
-                    // Refresh current tab content if it's schedule, teams, tables, or home
-                    if (['schedule', 'teams', 'tables', 'home'].includes(currentActiveTab)) {
+                    // Refresh current tab content if it's schedule, teams, tables, home, or live
+                    if (['schedule', 'teams', 'tables', 'home', 'live'].includes(currentActiveTab)) {
                         loadTabContent(currentActiveTab);
                     }
                 }
@@ -449,48 +449,94 @@ async function loadLiveMatch() {
             // Start live updates
             startLiveUpdates(liveMatch);
         }
-        
-        // Nächstes geplantes Spiel
-        if (nextData.nextMatch) {
+        // VERBESSERUNG: Auch wenn kein Live-Spiel läuft, zeige das nächste Spiel
+        else if (nextData.nextMatch) {
             const nextMatch = nextData.nextMatch;
             const nextTime = new Date(nextMatch.datetime);
             const timeUntilMatch = nextTime - new Date();
             const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
             
             html += `
-                <div class="next-match-section">
-                    <h3><i class="fas fa-forward"></i> Nächstes Spiel</h3>
-                    <div class="next-match-card">
-                        <div class="next-match-time">
+                <div class="next-match-display">
+                    <div class="next-match-header">
+                        <h3><i class="fas fa-clock"></i> Nächstes Spiel</h3>
+                        <div class="countdown-big">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
+                    </div>
+                    
+                    <div class="next-match-teams">
+                        <div class="team-name">${nextMatch.team1}</div>
+                        <div class="vs-large">VS</div>
+                        <div class="team-name">${nextMatch.team2}</div>
+                    </div>
+                    
+                    <div class="next-match-details">
+                        <div class="match-time">
                             <i class="fas fa-clock"></i>
-                            <span class="time">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
-                            <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
+                            <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
                         </div>
-                        
-                        <div class="next-match-teams">
-                            <span class="team-name">${nextMatch.team1}</span>
-                            <span class="vs">vs</span>
-                            <span class="team-name">${nextMatch.team2}</span>
+                        <div class="match-group">
+                            <i class="fas fa-layer-group"></i>
+                            <span>${nextMatch.group}</span>
                         </div>
-                        
-                        <div class="next-match-details">
-                            <div class="match-group">
-                                <i class="fas fa-layer-group"></i> ${nextMatch.group}
-                            </div>
-                            <div class="match-field">
-                                <i class="fas fa-map-marker-alt"></i> ${nextMatch.field}
-                            </div>
-                            ${nextMatch.referee ? `
-                                <div class="match-referee">
-                                    <i class="fas fa-whistle"></i>
-                                    <span>Schiedsrichter: <strong>${nextMatch.referee.team}</strong></span>
-                                    <small>(${nextMatch.referee.group})</small>
-                                </div>
-                            ` : ''}
+                        <div class="match-field">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span>${nextMatch.field}</span>
                         </div>
                     </div>
+                    
+                    ${nextMatch.referee ? `
+                        <div class="referee-display">
+                            <div class="referee-header">
+                                <i class="fas fa-whistle"></i>
+                                <span>Schiedsrichter</span>
+                            </div>
+                            <div class="referee-name">${nextMatch.referee.team}</div>
+                            <div class="referee-group">${nextMatch.referee.group}</div>
+                        </div>
+                    ` : ''}
                 </div>
             `;
+        }
+        
+        // Weitere kommende Spiele (falls vorhanden)
+        if (!liveData.liveMatch && nextData.nextMatch) {
+            // Lade weitere Spiele
+            try {
+                const matchesResponse = await fetch('/api/matches');
+                const allMatches = await matchesResponse.json();
+                
+                const now = new Date();
+                const upcomingMatches = allMatches
+                    .filter(m => m.scheduled && !m.completed && new Date(m.scheduled.datetime) > now)
+                    .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime))
+                    .slice(1, 4); // Nächste 3 Spiele (ohne das erste, das schon angezeigt wird)
+                
+                if (upcomingMatches.length > 0) {
+                    html += `
+                        <div class="upcoming-matches-section">
+                            <h4><i class="fas fa-forward"></i> Weitere kommende Spiele</h4>
+                            <div class="upcoming-matches-list">
+                    `;
+                    
+                    upcomingMatches.forEach(match => {
+                        const matchTime = new Date(match.scheduled.datetime);
+                        html += `
+                            <div class="upcoming-match-item">
+                                <div class="match-time">${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</div>
+                                <div class="match-teams">${match.team1} vs ${match.team2}</div>
+                                <div class="match-info">${match.group} • ${match.scheduled.field}</div>
+                            </div>
+                        `;
+                    });
+                    
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading upcoming matches:', error);
+            }
         }
         
         // Falls weder Live-Spiel noch nächstes Spiel

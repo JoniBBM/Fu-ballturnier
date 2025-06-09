@@ -94,15 +94,16 @@ function loadCurrentYearData() {
 // Admin-Authentifizierung
 const ADMIN_PASSWORD = '1234qwer!';
 
-// ========================= NEUE VALIDIERUNGS-ALGORITHMEN =========================
+// ========================= VERBESSERTE VALIDIERUNGS-ALGORITHMEN =========================
 
-// Neue Validierungsfunktion für Spielverteilung
+// Erweiterte Validierungsfunktion für Spielverteilung
 function validateGameDistribution(teams, format, options) {
     const validation = {
         isValid: true,
         warnings: [],
         impossibleConstraints: [],
-        suggestions: []
+        suggestions: [],
+        recommendations: []
     };
     
     if (format === 'groups') {
@@ -165,6 +166,8 @@ function validateGameDistribution(teams, format, options) {
         const { rounds } = options;
         const totalGameSlots = teams.length * rounds;
         
+        console.log(`Swiss System Validierung: ${teams.length} Teams × ${rounds} Runden = ${totalGameSlots} Spiel-Slots`);
+        
         if (totalGameSlots % 2 !== 0) {
             validation.isValid = false;
             validation.impossibleConstraints.push(
@@ -173,13 +176,29 @@ function validateGameDistribution(teams, format, options) {
             
             // Gerade Rundenzahlen vorschlagen
             const evenRounds = [];
-            for (let r = 2; r <= teams.length - 1; r++) {
+            for (let r = 1; r <= teams.length - 1; r++) {
                 if ((teams.length * r) % 2 === 0) {
                     evenRounds.push(r);
                 }
             }
             validation.suggestions.push(
-                `Mögliche Rundenzahlen: ${evenRounds.slice(0, 5).join(', ')}`
+                `Mögliche Rundenzahlen für ${teams.length} Teams: ${evenRounds.slice(0, 8).join(', ')}`
+            );
+        }
+        
+        // Prüfe ob genügend verschiedene Gegner verfügbar sind
+        const maxPossibleOpponents = teams.length - 1;
+        if (rounds > maxPossibleOpponents) {
+            validation.isValid = false;
+            validation.impossibleConstraints.push(
+                `Unmöglich: ${rounds} Runden für ${teams.length} Teams - maximal ${maxPossibleOpponents} verschiedene Gegner möglich`
+            );
+        }
+        
+        // Warnung bei sehr vielen Runden
+        if (rounds > maxPossibleOpponents * 0.8) {
+            validation.warnings.push(
+                `Hohe Rundenzahl: ${rounds} von maximal ${maxPossibleOpponents} - könnte schwierig zu planen werden`
             );
         }
     }
@@ -337,106 +356,224 @@ function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}
     return analysis;
 }
 
-// NEUER Swiss System Algorithmus (Champions League Style)
-function generateSwissSystemMatches(teams, rounds) {
-    console.log(`Generiere Swiss System: ${teams.length} Teams, ${rounds} Runden`);
+// ========================= INTELLIGENTER SWISS SYSTEM ALGORITHMUS =========================
+
+/**
+ * Intelligenter Swiss System Generator mit Backtracking
+ * Garantiert, dass alle Teams exakt die gewünschte Anzahl von Spielen bekommen
+ */
+function generateIntelligentSwissSystem(teams, targetGamesPerTeam) {
+    console.log(`Starte intelligenten Swiss System: ${teams.length} Teams, ${targetGamesPerTeam} Spiele pro Team`);
     
-    const matches = [];
-    const teamStats = teams.map(team => ({
+    const teamCount = teams.length;
+    const totalGameSlots = teamCount * targetGamesPerTeam;
+    const expectedMatches = totalGameSlots / 2;
+    
+    // Validierung
+    if (totalGameSlots % 2 !== 0) {
+        throw new Error(`Unmögliche Konfiguration: ${teamCount} Teams × ${targetGamesPerTeam} Spiele = ${totalGameSlots} Spiel-Slots (ungerade Zahl)`);
+    }
+    
+    if (targetGamesPerTeam >= teamCount) {
+        throw new Error(`Unmögliche Konfiguration: ${targetGamesPerTeam} Spiele pro Team, aber nur ${teamCount - 1} verschiedene Gegner verfügbar`);
+    }
+    
+    console.log(`Ziel: ${expectedMatches} Spiele für perfekte Verteilung`);
+    
+    // Initialisiere Team-Zustand
+    const teamStates = teams.map(team => ({
         name: team.name,
+        gamesPlayed: 0,
         opponents: new Set(),
-        gamesPlayed: 0
+        targetGames: targetGamesPerTeam
     }));
     
-    for (let round = 1; round <= rounds; round++) {
-        console.log(`Generiere Runde ${round}...`);
+    const matches = [];
+    const maxAttempts = 10; // Mehrere Versuche bei verschiedenen Reihenfolgen
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`Versuch ${attempt}/${maxAttempts}...`);
         
-        // Sortiere Teams nach gespielten Spielen und dann zufällig für diese Runde
-        const availableTeams = shuffleArray([...teamStats]);
-        const roundMatches = [];
-        const usedThisRound = new Set();
+        // Reset für neuen Versuch
+        matches.length = 0;
+        teamStates.forEach(team => {
+            team.gamesPlayed = 0;
+            team.opponents.clear();
+        });
         
-        // Greedy-Algorithmus für optimale Paarungen
-        while (availableTeams.length >= 2) {
-            let bestMatch = null;
-            let bestScore = -1;
+        const shuffledTeams = shuffleArray([...teamStates]);
+        
+        if (backtrackSwissMatches(shuffledTeams, matches, 0, expectedMatches)) {
+            console.log(`✅ Erfolg in Versuch ${attempt}! ${matches.length} Spiele generiert.`);
             
-            for (let i = 0; i < availableTeams.length; i++) {
-                for (let j = i + 1; j < availableTeams.length; j++) {
-                    const team1 = availableTeams[i];
-                    const team2 = availableTeams[j];
-                    
-                    // Skip if already used this round or if they played before
-                    if (usedThisRound.has(team1.name) || usedThisRound.has(team2.name)) {
-                        continue;
-                    }
-                    
-                    if (team1.opponents.has(team2.name)) {
-                        continue;
-                    }
-                    
-                    // Bewerte diese Paarung (bevorzuge Teams mit weniger Spielen)
-                    const score = 1000 - Math.abs(team1.gamesPlayed - team2.gamesPlayed) * 10;
-                    
-                    if (score > bestScore) {
-                        bestMatch = { team1, team2, i, j };
-                        bestScore = score;
-                    }
-                }
-            }
-            
-            if (bestMatch) {
-                // Erstelle Match
-                const match = {
-                    id: `swiss_r${round}_${roundMatches.length}`,
-                    phase: 'swiss',
-                    group: 'Champions League Format',
-                    team1: bestMatch.team1.name,
-                    team2: bestMatch.team2.name,
-                    round: round,
-                    score1: null,
-                    score2: null,
-                    completed: false
-                };
-                
-                roundMatches.push(match);
-                
-                // Update Stats
-                bestMatch.team1.opponents.add(bestMatch.team2.name);
-                bestMatch.team2.opponents.add(bestMatch.team1.name);
-                bestMatch.team1.gamesPlayed++;
-                bestMatch.team2.gamesPlayed++;
-                
-                usedThisRound.add(bestMatch.team1.name);
-                usedThisRound.add(bestMatch.team2.name);
-                
-                // Entferne Teams aus availableTeams
-                availableTeams.splice(Math.max(bestMatch.i, bestMatch.j), 1);
-                availableTeams.splice(Math.min(bestMatch.i, bestMatch.j), 1);
-                
-                console.log(`Runde ${round}: ${bestMatch.team1.name} vs ${bestMatch.team2.name}`);
+            // Validiere Endergebnis
+            const finalValidation = validateSwissResult(teamStates, matches, targetGamesPerTeam);
+            if (finalValidation.isValid) {
+                console.log(`✅ Finale Validierung erfolgreich: Alle Teams haben exakt ${targetGamesPerTeam} Spiele`);
+                return convertToMatchFormat(matches);
             } else {
-                // Keine weiteren gültigen Paarungen möglich
-                console.log(`Runde ${round}: Keine weiteren Paarungen möglich, ${availableTeams.length} Teams übrig`);
-                break;
+                console.log(`❌ Finale Validierung fehlgeschlagen:`, finalValidation.errors);
+                continue; // Nächster Versuch
             }
         }
         
-        matches.push(...roundMatches);
-        console.log(`Runde ${round} abgeschlossen: ${roundMatches.length} Spiele`);
+        console.log(`❌ Versuch ${attempt} fehlgeschlagen`);
     }
     
-    // Validierung
-    const teamGameCounts = {};
-    teams.forEach(team => teamGameCounts[team.name] = 0);
-    matches.forEach(match => {
-        teamGameCounts[match.team1]++;
-        teamGameCounts[match.team2]++;
+    throw new Error(`Konnte nach ${maxAttempts} Versuchen keine gültige Swiss System Verteilung finden. Möglicherweise ist die Konfiguration zu restriktiv.`);
+}
+
+/**
+ * Backtracking-Algorithmus für Swiss System
+ */
+function backtrackSwissMatches(teamStates, matches, matchIndex, targetMatches) {
+    // Erfolgsbedingung: Alle Matches erstellt und alle Teams haben die richtige Anzahl Spiele
+    if (matches.length >= targetMatches) {
+        return teamStates.every(team => team.gamesPlayed === team.targetGames);
+    }
+    
+    // Finde Teams, die noch Spiele brauchen
+    const availableTeams = teamStates.filter(team => team.gamesPlayed < team.targetGames);
+    
+    if (availableTeams.length < 2) {
+        return false; // Nicht genug Teams für weitere Matches
+    }
+    
+    // Sortiere nach Priorität: Teams mit weniger Spielen zuerst
+    availableTeams.sort((a, b) => {
+        const gamesDiff = a.gamesPlayed - b.gamesPlayed;
+        if (gamesDiff !== 0) return gamesDiff;
+        
+        // Bei gleicher Spielanzahl: Teams mit weniger Gegnern zuerst
+        return a.opponents.size - b.opponents.size;
     });
     
-    console.log('Swiss System Spielverteilung:', teamGameCounts);
+    // Probiere alle möglichen Paarungen aus
+    for (let i = 0; i < availableTeams.length; i++) {
+        const team1 = availableTeams[i];
+        
+        for (let j = i + 1; j < availableTeams.length; j++) {
+            const team2 = availableTeams[j];
+            
+            // Prüfe, ob diese Paarung gültig ist
+            if (canTeamsPlay(team1, team2)) {
+                
+                // Führe Match aus
+                const match = {
+                    team1: team1.name,
+                    team2: team2.name,
+                    matchIndex: matches.length
+                };
+                
+                executeMatch(team1, team2, match);
+                matches.push(match);
+                
+                // Rekursiver Aufruf
+                if (backtrackSwissMatches(teamStates, matches, matchIndex + 1, targetMatches)) {
+                    return true; // Lösung gefunden
+                }
+                
+                // Backtrack: Match rückgängig machen
+                undoMatch(team1, team2, match);
+                matches.pop();
+            }
+        }
+    }
     
-    return matches;
+    return false; // Keine Lösung auf diesem Pfad
+}
+
+/**
+ * Prüft, ob zwei Teams gegeneinander spielen können
+ */
+function canTeamsPlay(team1, team2) {
+    // Teams dürfen nicht bereits gegeneinander gespielt haben
+    if (team1.opponents.has(team2.name) || team2.opponents.has(team1.name)) {
+        return false;
+    }
+    
+    // Beide Teams müssen noch Spiele brauchen
+    if (team1.gamesPlayed >= team1.targetGames || team2.gamesPlayed >= team2.targetGames) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Führt ein Match zwischen zwei Teams aus
+ */
+function executeMatch(team1, team2, match) {
+    team1.gamesPlayed++;
+    team2.gamesPlayed++;
+    team1.opponents.add(team2.name);
+    team2.opponents.add(team1.name);
+}
+
+/**
+ * Macht ein Match zwischen zwei Teams rückgängig (für Backtracking)
+ */
+function undoMatch(team1, team2, match) {
+    team1.gamesPlayed--;
+    team2.gamesPlayed--;
+    team1.opponents.delete(team2.name);
+    team2.opponents.delete(team1.name);
+}
+
+/**
+ * Validiert das finale Ergebnis des Swiss Systems
+ */
+function validateSwissResult(teamStates, matches, expectedGamesPerTeam) {
+    const validation = {
+        isValid: true,
+        errors: [],
+        teamStats: {}
+    };
+    
+    // Prüfe jedes Team
+    teamStates.forEach(team => {
+        validation.teamStats[team.name] = {
+            gamesPlayed: team.gamesPlayed,
+            opponents: Array.from(team.opponents)
+        };
+        
+        if (team.gamesPlayed !== expectedGamesPerTeam) {
+            validation.isValid = false;
+            validation.errors.push(`${team.name}: ${team.gamesPlayed} Spiele statt ${expectedGamesPerTeam}`);
+        }
+    });
+    
+    // Prüfe auf doppelte Spiele
+    const seenMatches = new Set();
+    matches.forEach(match => {
+        const key1 = `${match.team1}-${match.team2}`;
+        const key2 = `${match.team2}-${match.team1}`;
+        
+        if (seenMatches.has(key1) || seenMatches.has(key2)) {
+            validation.isValid = false;
+            validation.errors.push(`Doppeltes Spiel: ${match.team1} vs ${match.team2}`);
+        }
+        
+        seenMatches.add(key1);
+    });
+    
+    return validation;
+}
+
+/**
+ * Konvertiert interne Match-Darstellung zu API-Format
+ */
+function convertToMatchFormat(matches) {
+    return matches.map((match, index) => ({
+        id: `swiss_${index}`,
+        phase: 'swiss',
+        group: 'Champions League Format',
+        team1: match.team1,
+        team2: match.team2,
+        score1: null,
+        score2: null,
+        completed: false
+    }));
 }
 
 // VERBESSERTES Gruppensystem
@@ -1096,13 +1233,18 @@ app.post('/api/admin/analyze-tournament-config', (req, res) => {
         return res.status(400).json({ error: 'Keine Teams zum Analysieren' });
     }
     
-    const analysis = analyzeTournamentConfiguration(teams.length, format, options);
-    
-    res.json({ 
-        success: true, 
-        analysis: analysis,
-        teamCount: teams.length
-    });
+    try {
+        const analysis = analyzeTournamentConfiguration(teams.length, format, options);
+        
+        res.json({ 
+            success: true, 
+            analysis: analysis,
+            teamCount: teams.length
+        });
+    } catch (error) {
+        console.error('Error during tournament analysis:', error);
+        res.status(500).json({ error: 'Fehler bei der Turnier-Analyse: ' + error.message });
+    }
 });
 
 // ========= VERBESSERTE ROUTE: Anmeldung schließen (nur Gruppen + Swiss System) ==========
@@ -1164,7 +1306,7 @@ app.post('/api/admin/close-registration', (req, res) => {
     
     try {
         if (format === 'swiss') {
-            // Swiss System (Champions League Style)
+            // Intelligenter Swiss System (Champions League Style)
             currentTournament.format = 'swiss';
             currentTournament.groups = [{
                 name: 'Champions League Format',
@@ -1182,7 +1324,10 @@ app.post('/api/admin/close-registration', (req, res) => {
                 }))
             }];
             
-            generatedMatches = generateSwissSystemMatches(teams, rounds || Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1));
+            const targetGamesPerTeam = rounds || Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1);
+            console.log(`Generiere Swiss System mit ${targetGamesPerTeam} Spielen pro Team...`);
+            
+            generatedMatches = generateIntelligentSwissSystem(teams, targetGamesPerTeam);
             
         } else {
             // Standard Gruppensystem (verbessert)
@@ -1203,7 +1348,27 @@ app.post('/api/admin/close-registration', (req, res) => {
         
         autoSave();
         
-        console.log(`Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
+        console.log(`✅ Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
+        
+        // Finale Validierung für Swiss System
+        if (format === 'swiss') {
+            const teamGameCounts = {};
+            teams.forEach(team => teamGameCounts[team.name] = 0);
+            matches.forEach(match => {
+                teamGameCounts[match.team1]++;
+                teamGameCounts[match.team2]++;
+            });
+            
+            console.log('Finale Swiss System Verteilung:', teamGameCounts);
+            
+            // Prüfe, ob alle Teams gleich viele Spiele haben
+            const gameCounts = Object.values(teamGameCounts);
+            const allEqual = gameCounts.every(count => count === gameCounts[0]);
+            
+            if (!allEqual) {
+                console.warn('⚠️ Warnung: Nicht alle Teams haben gleich viele Spiele!', teamGameCounts);
+            }
+        }
         
         res.json({ 
             success: true, 
@@ -1215,7 +1380,15 @@ app.post('/api/admin/close-registration', (req, res) => {
         
     } catch (error) {
         console.error('Fehler beim Generieren des Spielplans:', error);
-        res.status(500).json({ error: 'Fehler beim Erstellen des Spielplans: ' + error.message });
+        
+        // Rollback bei Fehler
+        currentTournament.status = 'registration';
+        delete currentTournament.registrationClosedAt;
+        
+        res.status(500).json({ 
+            error: 'Fehler beim Erstellen des Spielplans: ' + error.message,
+            suggestion: 'Versuche es mit anderen Einstellungen oder einem anderen Format.'
+        });
     }
 });
 
