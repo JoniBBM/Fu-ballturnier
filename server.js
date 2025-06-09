@@ -27,6 +27,22 @@ let matches = [];
 let currentTournament = null;
 let tournamentRules = "";
 
+// Verfügbare Trikotfarben
+const AVAILABLE_COLORS = [
+    { name: 'Rot', value: 'red', hex: '#dc2626' },
+    { name: 'Blau', value: 'blue', hex: '#2563eb' },
+    { name: 'Grün', value: 'green', hex: '#16a34a' },
+    { name: 'Gelb', value: 'yellow', hex: '#eab308' },
+    { name: 'Orange', value: 'orange', hex: '#ea580c' },
+    { name: 'Lila', value: 'purple', hex: '#9333ea' },
+    { name: 'Weiß', value: 'white', hex: '#ffffff' },
+    { name: 'Schwarz', value: 'black', hex: '#000000' },
+    { name: 'Pink', value: 'pink', hex: '#ec4899' },
+    { name: 'Türkis', value: 'teal', hex: '#0891b2' },
+    { name: 'Grau', value: 'gray', hex: '#6b7280' },
+    { name: 'Braun', value: 'brown', hex: '#92400e' }
+];
+
 // Daten für bestimmtes Jahr laden
 function loadDataForYear(year) {
     const filename = path.join(SAVES_DIR, `${year}.json`);
@@ -93,6 +109,194 @@ function loadCurrentYearData() {
 
 // Admin-Authentifizierung
 const ADMIN_PASSWORD = '1234qwer!';
+
+// ========================= ELFMETER-FUNKTIONEN =========================
+
+/**
+ * Generiert Elfmeterschießen zwischen Teams mit gleichem Tabellenplatz
+ */
+function generatePenaltyShootouts(groups) {
+    const penaltyMatches = [];
+    
+    groups.forEach(group => {
+        const groupedByPosition = {};
+        
+        // Gruppiere Teams nach Position (ohne finale Sortierung)
+        group.table.forEach((team, index) => {
+            const position = index + 1;
+            if (!groupedByPosition[position]) {
+                groupedByPosition[position] = [];
+            }
+            groupedByPosition[position].push(team);
+        });
+        
+        // Für jede Position mit mehr als einem Team, erstelle Elfmeterschießen
+        Object.entries(groupedByPosition).forEach(([position, teamsAtPosition]) => {
+            if (teamsAtPosition.length > 1) {
+                console.log(`Gruppe ${group.name}, Position ${position}: ${teamsAtPosition.length} Teams gleichauf - Elfmeterschießen erforderlich`);
+                
+                // Prüfe ob sie wirklich exakt gleich sind (Punkte, Tordifferenz, Tore)
+                const referenceTeam = teamsAtPosition[0];
+                const areEqual = teamsAtPosition.every(team => 
+                    team.points === referenceTeam.points &&
+                    team.goalDiff === referenceTeam.goalDiff &&
+                    team.goalsFor === referenceTeam.goalsFor &&
+                    team.goalsAgainst === referenceTeam.goalsAgainst
+                );
+                
+                if (areEqual) {
+                    // Erstelle Elfmeterschießen zwischen allen beteiligten Teams
+                    for (let i = 0; i < teamsAtPosition.length; i++) {
+                        for (let j = i + 1; j < teamsAtPosition.length; j++) {
+                            const team1 = teamsAtPosition[i];
+                            const team2 = teamsAtPosition[j];
+                            
+                            // Prüfe Direktvergleich
+                            const directMatches = matches.filter(m => 
+                                m.completed && m.group === group.name &&
+                                ((m.team1 === team1.team && m.team2 === team2.team) ||
+                                 (m.team1 === team2.team && m.team2 === team1.team))
+                            );
+                            
+                            let needsPenalty = true;
+                            if (directMatches.length > 0) {
+                                // Berechne Direktvergleich
+                                let team1DirectPoints = 0;
+                                let team2DirectPoints = 0;
+                                let team1DirectGoals = 0;
+                                let team2DirectGoals = 0;
+                                
+                                directMatches.forEach(match => {
+                                    if (match.team1 === team1.team) {
+                                        team1DirectGoals += match.score1;
+                                        team2DirectGoals += match.score2;
+                                        if (match.score1 > match.score2) team1DirectPoints += 3;
+                                        else if (match.score2 > match.score1) team2DirectPoints += 3;
+                                        else { team1DirectPoints += 1; team2DirectPoints += 1; }
+                                    } else {
+                                        team1DirectGoals += match.score2;
+                                        team2DirectGoals += match.score1;
+                                        if (match.score2 > match.score1) team1DirectPoints += 3;
+                                        else if (match.score1 > match.score2) team2DirectPoints += 3;
+                                        else { team1DirectPoints += 1; team2DirectPoints += 1; }
+                                    }
+                                });
+                                
+                                // Wenn Direktvergleich entscheidet, kein Elfmeterschießen
+                                if (team1DirectPoints !== team2DirectPoints || 
+                                    (team1DirectGoals - team2DirectGoals) !== 0) {
+                                    needsPenalty = false;
+                                }
+                            }
+                            
+                            if (needsPenalty) {
+                                const penaltyMatch = {
+                                    id: `penalty_${group.name.toLowerCase()}_${Date.now()}_${i}_${j}`,
+                                    phase: 'penalty',
+                                    group: group.name,
+                                    team1: team1.team,
+                                    team2: team2.team,
+                                    score1: null,
+                                    score2: null,
+                                    completed: false,
+                                    isPenaltyShootout: true,
+                                    penaltyInfo: {
+                                        reason: `Gleichstand um Position ${position}`,
+                                        team1Stats: team1,
+                                        team2Stats: team2,
+                                        group: group.name
+                                    }
+                                };
+                                
+                                penaltyMatches.push(penaltyMatch);
+                                console.log(`Elfmeterschießen erstellt: ${team1.team} vs ${team2.team} (Position ${position})`);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+    
+    return penaltyMatches;
+}
+
+/**
+ * Aktualisiert Gruppentabelle und behandelt Elfmeterschießen
+ */
+function updateGroupTableWithPenalties(groupName, matches) {
+    if (!currentTournament) return;
+    
+    const group = currentTournament.groups.find(g => g.name === groupName);
+    if (!group) return;
+    
+    // Reset table
+    group.table.forEach(entry => {
+        entry.games = 0;
+        entry.wins = 0;
+        entry.draws = 0;
+        entry.losses = 0;
+        entry.goalsFor = 0;
+        entry.goalsAgainst = 0;
+        entry.goalDiff = 0;
+        entry.points = 0;
+        entry.penaltyWins = 0; // Neue Eigenschaft für Elfmeter-Siege
+    });
+    
+    // Calculate stats from matches (ohne Elfmeterschießen)
+    const groupMatches = matches.filter(m => m.group === groupName && m.completed && !m.isPenaltyShootout);
+    groupMatches.forEach(match => {
+        const team1Entry = group.table.find(t => t.team === match.team1);
+        const team2Entry = group.table.find(t => t.team === match.team2);
+        
+        team1Entry.games++;
+        team2Entry.games++;
+        team1Entry.goalsFor += match.score1;
+        team1Entry.goalsAgainst += match.score2;
+        team2Entry.goalsFor += match.score2;
+        team2Entry.goalsAgainst += match.score1;
+        
+        if (match.score1 > match.score2) {
+            team1Entry.wins++;
+            team1Entry.points += 3;
+            team2Entry.losses++;
+        } else if (match.score2 > match.score1) {
+            team2Entry.wins++;
+            team2Entry.points += 3;
+            team1Entry.losses++;
+        } else {
+            team1Entry.draws++;
+            team2Entry.draws++;
+            team1Entry.points++;
+            team2Entry.points++;
+        }
+        
+        team1Entry.goalDiff = team1Entry.goalsFor - team1Entry.goalsAgainst;
+        team2Entry.goalDiff = team2Entry.goalsFor - team2Entry.goalsAgainst;
+    });
+    
+    // Behandle Elfmeterschießen
+    const penaltyMatches = matches.filter(m => m.group === groupName && m.completed && m.isPenaltyShootout);
+    penaltyMatches.forEach(match => {
+        const team1Entry = group.table.find(t => t.team === match.team1);
+        const team2Entry = group.table.find(t => t.team === match.team2);
+        
+        if (match.score1 > match.score2) {
+            team1Entry.penaltyWins++;
+        } else if (match.score2 > match.score1) {
+            team2Entry.penaltyWins++;
+        }
+    });
+    
+    // Sort table (erweitert mit Elfmeterschießen)
+    group.table.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+        if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+        // Elfmeterschießen als letztes Kriterium
+        return (b.penaltyWins || 0) - (a.penaltyWins || 0);
+    });
+}
 
 // ========================= VERBESSERTE VALIDIERUNGS-ALGORITHMEN =========================
 
@@ -606,7 +810,8 @@ function createImprovedGroups(teams, groupSize = 4) {
                 goalsFor: 0,
                 goalsAgainst: 0,
                 goalDiff: 0,
-                points: 0
+                points: 0,
+                penaltyWins: 0
             }))
         };
         
@@ -1102,61 +1307,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
 }
 
 function updateGroupTable(groupName, matches) {
-    if (!currentTournament) return;
-    
-    const group = currentTournament.groups.find(g => g.name === groupName);
-    if (!group) return;
-    
-    // Reset table
-    group.table.forEach(entry => {
-        entry.games = 0;
-        entry.wins = 0;
-        entry.draws = 0;
-        entry.losses = 0;
-        entry.goalsFor = 0;
-        entry.goalsAgainst = 0;
-        entry.goalDiff = 0;
-        entry.points = 0;
-    });
-    
-    // Calculate stats from matches
-    const groupMatches = matches.filter(m => m.group === groupName && m.completed);
-    groupMatches.forEach(match => {
-        const team1Entry = group.table.find(t => t.team === match.team1);
-        const team2Entry = group.table.find(t => t.team === match.team2);
-        
-        team1Entry.games++;
-        team2Entry.games++;
-        team1Entry.goalsFor += match.score1;
-        team1Entry.goalsAgainst += match.score2;
-        team2Entry.goalsFor += match.score2;
-        team2Entry.goalsAgainst += match.score1;
-        
-        if (match.score1 > match.score2) {
-            team1Entry.wins++;
-            team1Entry.points += 3;
-            team2Entry.losses++;
-        } else if (match.score2 > match.score1) {
-            team2Entry.wins++;
-            team2Entry.points += 3;
-            team1Entry.losses++;
-        } else {
-            team1Entry.draws++;
-            team2Entry.draws++;
-            team1Entry.points++;
-            team2Entry.points++;
-        }
-        
-        team1Entry.goalDiff = team1Entry.goalsFor - team1Entry.goalsAgainst;
-        team2Entry.goalDiff = team2Entry.goalsFor - team2Entry.goalsAgainst;
-    });
-    
-    // Sort table
-    group.table.sort((a, b) => {
-        if (b.points !== a.points) return b.points - a.points;
-        if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
-        return b.goalsFor - a.goalsFor;
-    });
+    updateGroupTableWithPenalties(groupName, matches);
 }
 
 // ========================= ROUTES =========================
@@ -1171,11 +1322,28 @@ app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Teams registrieren
-app.post('/api/teams', (req, res) => {
-    const { teamName, contactName, contactInfo } = req.body;
+// Verfügbare Trikotfarben abrufen
+app.get('/api/jersey-colors', (req, res) => {
+    const colorUsage = {};
     
-    if (!teamName || !contactName || !contactInfo) {
+    // Zähle wie oft jede Farbe verwendet wird
+    AVAILABLE_COLORS.forEach(color => {
+        colorUsage[color.value] = teams.filter(team => team.jerseyColor === color.value).length;
+    });
+    
+    const colorsWithUsage = AVAILABLE_COLORS.map(color => ({
+        ...color,
+        usage: colorUsage[color.value] || 0
+    }));
+    
+    res.json(colorsWithUsage);
+});
+
+// Teams registrieren (erweitert mit Trikotfarbe)
+app.post('/api/teams', (req, res) => {
+    const { teamName, contactName, contactInfo, jerseyColor } = req.body;
+    
+    if (!teamName || !contactName || !contactInfo || !jerseyColor) {
         return res.status(400).json({ error: 'Alle Felder sind erforderlich' });
     }
     
@@ -1192,6 +1360,12 @@ app.post('/api/teams', (req, res) => {
         return res.status(400).json({ error: 'Teamname bereits vergeben' });
     }
     
+    // Prüfe ob die Farbe gültig ist
+    const validColor = AVAILABLE_COLORS.find(color => color.value === jerseyColor);
+    if (!validColor) {
+        return res.status(400).json({ error: 'Ungültige Trikotfarbe' });
+    }
+    
     const team = {
         id: Date.now(),
         name: teamName,
@@ -1199,6 +1373,7 @@ app.post('/api/teams', (req, res) => {
             name: contactName,
             info: contactInfo
         },
+        jerseyColor: jerseyColor,
         registeredAt: new Date()
     };
     
@@ -1211,7 +1386,8 @@ app.post('/api/teams', (req, res) => {
 app.get('/api/teams', (req, res) => {
     const publicTeams = teams.map(team => ({
         id: team.id,
-        name: team.name
+        name: team.name,
+        jerseyColor: team.jerseyColor
     }));
     res.json(publicTeams);
 });
@@ -1320,7 +1496,8 @@ app.post('/api/admin/close-registration', (req, res) => {
                     goalsFor: 0,
                     goalsAgainst: 0,
                     goalDiff: 0,
-                    points: 0
+                    points: 0,
+                    penaltyWins: 0
                 }))
             }];
             
@@ -1392,6 +1569,47 @@ app.post('/api/admin/close-registration', (req, res) => {
     }
 });
 
+// Elfmeterschießen generieren
+app.post('/api/admin/generate-penalties', (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament || !currentTournament.groups) {
+        return res.status(400).json({ error: 'Kein aktives Turnier mit Gruppen' });
+    }
+    
+    try {
+        const penaltyMatches = generatePenaltyShootouts(currentTournament.groups);
+        
+        if (penaltyMatches.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: 'Keine Elfmeterschießen erforderlich - alle Plätze sind eindeutig entschieden',
+                penaltyMatches: 0
+            });
+        }
+        
+        // Füge Elfmeterschießen zu den Matches hinzu
+        matches.push(...penaltyMatches);
+        
+        autoSave();
+        
+        res.json({
+            success: true,
+            message: `${penaltyMatches.length} Elfmeterschießen generiert für Gleichstände`,
+            penaltyMatches: penaltyMatches.length,
+            matches: penaltyMatches
+        });
+        
+    } catch (error) {
+        console.error('Error generating penalty shootouts:', error);
+        res.status(500).json({ error: 'Fehler beim Generieren der Elfmeterschießen: ' + error.message });
+    }
+});
+
 // Admin: Team löschen
 app.delete('/api/admin/teams/:teamId', (req, res) => {
     const { password } = req.body;
@@ -1432,7 +1650,7 @@ app.delete('/api/admin/teams/:teamId', (req, res) => {
 
 // Admin: Team bearbeiten
 app.put('/api/admin/teams/:teamId', (req, res) => {
-    const { password, teamName, contactName, contactInfo } = req.body;
+    const { password, teamName, contactName, contactInfo, jerseyColor } = req.body;
     const teamId = parseInt(req.params.teamId);
     
     if (password !== ADMIN_PASSWORD) {
@@ -1453,6 +1671,13 @@ app.put('/api/admin/teams/:teamId', (req, res) => {
     team.name = teamName;
     team.contact.name = contactName;
     team.contact.info = contactInfo;
+    
+    if (jerseyColor) {
+        const validColor = AVAILABLE_COLORS.find(color => color.value === jerseyColor);
+        if (validColor) {
+            team.jerseyColor = jerseyColor;
+        }
+    }
     
     if (teamName !== oldName) {
         matches.forEach(match => {
@@ -1748,6 +1973,7 @@ app.post('/api/admin/matches/reset-results', (req, res) => {
                 entry.goalsAgainst = 0;
                 entry.goalDiff = 0;
                 entry.points = 0;
+                entry.penaltyWins = 0;
             });
         });
     }

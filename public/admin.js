@@ -157,7 +157,7 @@ async function autoRefreshCurrentTab() {
                 loadMatches();
                 break;
             case 'live':
-                loadLiveControl();
+                await loadLiveControl(); // WICHTIG: await hier für sofortige Aktualisierung
                 break;
             case 'results':
                 loadResults();
@@ -524,7 +524,7 @@ async function loadTabContent(tab) {
             loadMatches();
             break;
         case 'live':
-            loadLiveControl();
+            await loadLiveControl(); // WICHTIG: await für sofortige Aktualisierung
             break;
         case 'results':
             loadResults();
@@ -585,6 +585,9 @@ function loadTournamentManagement() {
                     <button class="btn btn-outline" onclick="reorganizeGroups()">
                         <i class="fas fa-refresh"></i> <span class="btn-text">Gruppen neu organisieren</span>
                     </button>
+                    <button class="btn btn-outline" onclick="generatePenaltyShootouts()">
+                        <i class="fas fa-dot-circle"></i> <span class="btn-text">Elfmeterschießen generieren</span>
+                    </button>
                     <button class="btn btn-outline" onclick="resetAllResults()">
                         <i class="fas fa-undo"></i> <span class="btn-text">Alle Ergebnisse zurücksetzen</span>
                     </button>
@@ -618,6 +621,42 @@ function loadTournamentManagement() {
         }
         
         tournamentCreation.style.display = 'none';
+    }
+}
+
+// Elfmeterschießen generieren
+async function generatePenaltyShootouts() {
+    if (!currentTournament) {
+        showNotification('Kein aktives Turnier', 'error');
+        return;
+    }
+    
+    if (!confirm('Elfmeterschießen für alle Gleichstände generieren?\n\nDies erstellt Spiele zwischen Teams mit exakt gleichen Tabellenpositionen.')) {
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/generate-penalties', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification(data.message);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Generieren der Elfmeterschießen', 'error');
+        console.error('Generate penalties error:', error);
+    } finally {
+        showLoading(false);
     }
 }
 
@@ -1414,7 +1453,7 @@ function loadTeams() {
     teamsList.innerHTML = teams.map(team => `
         <div class="team-admin-card">
             <div class="team-info">
-                <h4>${team.name}</h4>
+                <h4>${team.name} ${team.jerseyColor ? `<span class="jersey-color-badge" style="background: ${getJerseyColorHex(team.jerseyColor)}; color: ${team.jerseyColor === 'white' ? '#000' : '#fff'};">${getJerseyColorName(team.jerseyColor)}</span>` : ''}</h4>
                 <div class="team-contact">
                     <strong>Kontakt:</strong> ${team.contact.name}<br>
                     <strong>Info:</strong> ${team.contact.info}<br>
@@ -1435,36 +1474,94 @@ function loadTeams() {
     updateTeamCountDisplay();
 }
 
-// Edit Team
+function getJerseyColorName(colorValue) {
+    const colors = {
+        'red': 'Rot',
+        'blue': 'Blau',
+        'green': 'Grün',
+        'yellow': 'Gelb',
+        'orange': 'Orange',
+        'purple': 'Lila',
+        'white': 'Weiß',
+        'black': 'Schwarz',
+        'pink': 'Pink',
+        'teal': 'Türkis',
+        'gray': 'Grau',
+        'brown': 'Braun'
+    };
+    return colors[colorValue] || colorValue;
+}
+
+function getJerseyColorHex(colorValue) {
+    const colors = {
+        'red': '#dc2626',
+        'blue': '#2563eb',
+        'green': '#16a34a',
+        'yellow': '#eab308',
+        'orange': '#ea580c',
+        'purple': '#9333ea',
+        'white': '#ffffff',
+        'black': '#000000',
+        'pink': '#ec4899',
+        'teal': '#0891b2',
+        'gray': '#6b7280',
+        'brown': '#92400e'
+    };
+    return colors[colorValue] || '#6b7280';
+}
+
+// Edit Team (erweitert mit Trikotfarbe)
 async function editTeam(teamId) {
     const team = teams.find(t => t.id === teamId);
     if (!team) return;
     
-    createModal('Team bearbeiten', `
-        <div class="form-group">
-            <label for="edit-team-name">Teamname:</label>
-            <input type="text" id="edit-team-name" value="${team.name}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-        <div class="form-group">
-            <label for="edit-contact-name">Ansprechpartner:</label>
-            <input type="text" id="edit-contact-name" value="${team.contact.name}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-        <div class="form-group">
-            <label for="edit-contact-info">Kontakt (E-Mail/Telefon):</label>
-            <input type="text" id="edit-contact-info" value="${team.contact.info}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-    `, [
-        { text: 'Team speichern', handler: (modalId) => saveTeamEdit(teamId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
+    // Lade verfügbare Farben
+    try {
+        const colorResponse = await fetch('/api/jersey-colors');
+        const availableColors = await colorResponse.json();
+        
+        const colorOptions = availableColors.map(color => `
+            <option value="${color.value}" ${team.jerseyColor === color.value ? 'selected' : ''}>
+                ${color.name} ${color.usage > 0 ? `(${color.usage}x verwendet)` : ''}
+            </option>
+        `).join('');
+        
+        createModal('Team bearbeiten', `
+            <div class="form-group">
+                <label for="edit-team-name">Teamname:</label>
+                <input type="text" id="edit-team-name" value="${team.name}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            </div>
+            <div class="form-group">
+                <label for="edit-contact-name">Ansprechpartner:</label>
+                <input type="text" id="edit-contact-name" value="${team.contact.name}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            </div>
+            <div class="form-group">
+                <label for="edit-contact-info">Kontakt (E-Mail/Telefon):</label>
+                <input type="text" id="edit-contact-info" value="${team.contact.info}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            </div>
+            <div class="form-group">
+                <label for="edit-jersey-color">Trikotfarbe:</label>
+                <select id="edit-jersey-color" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    ${colorOptions}
+                </select>
+            </div>
+        `, [
+            { text: 'Team speichern', handler: (modalId) => saveTeamEdit(teamId, modalId) },
+            { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+        ]);
+    } catch (error) {
+        console.error('Error loading jersey colors:', error);
+        showNotification('Fehler beim Laden der Trikotfarben', 'error');
+    }
 }
 
 async function saveTeamEdit(teamId, modalId) {
     const teamName = document.getElementById('edit-team-name').value;
     const contactName = document.getElementById('edit-contact-name').value;
     const contactInfo = document.getElementById('edit-contact-info').value;
+    const jerseyColor = document.getElementById('edit-jersey-color').value;
     
-    if (!teamName || !contactName || !contactInfo) {
+    if (!teamName || !contactName || !contactInfo || !jerseyColor) {
         showNotification('Alle Felder sind erforderlich', 'error');
         return;
     }
@@ -1479,7 +1576,8 @@ async function saveTeamEdit(teamId, modalId) {
                 password: adminPassword,
                 teamName,
                 contactName,
-                contactInfo
+                contactInfo,
+                jerseyColor
             })
         });
         
@@ -1625,7 +1723,7 @@ function loadMatches() {
                         </div>
                         
                         <div class="match-details-admin">
-                            <span class="match-group">${match.group}</span>
+                            <span class="match-group">${match.group} ${match.isPenaltyShootout ? '(Elfmeterschießen)' : ''}</span>
                             ${match.referee ? `
                                 <span class="match-referee">
                                     <i class="fas fa-whistle"></i>
@@ -1637,7 +1735,7 @@ function loadMatches() {
                     
                     <div class="match-status-admin">
                         ${match.completed ? 
-                            `<strong class="final-score">${match.score1}:${match.score2}</strong>` : 
+                            `<strong class="final-score">${match.score1}:${match.score2}${match.isPenaltyShootout ? ' (E)' : ''}</strong>` : 
                             match.liveScore?.isLive ? 
                                 `<strong class="live-indicator">LIVE ${match.liveScore.score1}:${match.liveScore.score2}</strong>` :
                                 '<span class="pending">Ausstehend</span>'
@@ -1648,6 +1746,11 @@ function loadMatches() {
                         <button class="btn btn-small" onclick="editMatch('${match.id}')">
                             <i class="fas fa-edit"></i> <span class="btn-text">Bearbeiten</span>
                         </button>
+                        ${match.completed ? `
+                            <button class="btn btn-small btn-warning" onclick="editResult('${match.id}')">
+                                <i class="fas fa-edit"></i> <span class="btn-text">Ergebnis korrigieren</span>
+                            </button>
+                        ` : ''}
                         <button class="btn btn-small" onclick="scheduleMatch('${match.id}')">
                             <i class="fas fa-calendar"></i> <span class="btn-text">Zeit ändern</span>
                         </button>
@@ -1697,7 +1800,7 @@ function loadMatches() {
                             
                             <div class="match-status">
                                 ${match.completed ? 
-                                    `<strong>${match.score1}:${match.score2}</strong>` : 
+                                    `<strong>${match.score1}:${match.score2}${match.isPenaltyShootout ? ' (E)' : ''}</strong>` : 
                                     'Noch nicht geplant'
                                 }
                             </div>
@@ -1706,6 +1809,11 @@ function loadMatches() {
                             <button class="btn btn-small" onclick="editMatch('${match.id}')">
                                 <i class="fas fa-edit"></i> <span class="btn-text">Bearbeiten</span>
                             </button>
+                            ${match.completed ? `
+                                <button class="btn btn-small btn-warning" onclick="editResult('${match.id}')">
+                                    <i class="fas fa-edit"></i> <span class="btn-text">Ergebnis korrigieren</span>
+                                </button>
+                            ` : ''}
                             <button class="btn btn-small" onclick="scheduleMatch('${match.id}')">
                                 <i class="fas fa-calendar"></i> <span class="btn-text">Zeit planen</span>
                             </button>
@@ -1727,7 +1835,68 @@ function loadMatches() {
     matchesAdmin.innerHTML = html;
 }
 
-// Add New Match
+// Ergebnis korrigieren/bearbeiten 
+async function editResult(matchId) {
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    createModal('Ergebnis korrigieren', `
+        <div class="form-group">
+            <h4>${match.team1} vs ${match.team2}</h4>
+            <p><small>${match.group || 'Kein Gruppe'} ${match.isPenaltyShootout ? '(Elfmeterschießen)' : ''}</small></p>
+        </div>
+        <div class="score-inputs" style="justify-content: center; margin: 2rem 0; display: flex; align-items: center; gap: 1rem;">
+            <span class="team-name">${match.team1}</span>
+            <input type="number" min="0" id="edit-result-score1" value="${match.score1}" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.25rem;">
+            <span class="score-vs">:</span>
+            <input type="number" min="0" id="edit-result-score2" value="${match.score2}" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.25rem;">
+            <span class="team-name">${match.team2}</span>
+        </div>
+    `, [
+        { text: 'Ergebnis speichern', handler: (modalId) => saveResultEdit(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function saveResultEdit(matchId, modalId) {
+    const score1 = parseInt(document.getElementById('edit-result-score1').value);
+    const score2 = parseInt(document.getElementById('edit-result-score2').value);
+    
+    if (isNaN(score1) || isNaN(score2) || score1 < 0 || score2 < 0) {
+        showNotification('Bitte gültige Ergebnisse eingeben', 'error');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch(`/api/admin/results/${matchId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                score1,
+                score2
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Ergebnis erfolgreich korrigiert');
+            closeModal(modalId);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Bearbeiten des Ergebnisses', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Add New Match (erweitert)
 async function addNewMatch() {
     const teamOptions = teams.map(team => `<option value="${team.name}">${team.name}</option>`).join('');
     
@@ -1762,7 +1931,13 @@ async function addNewMatch() {
                 <option value="group">Gruppenphase</option>
                 <option value="knockout">K.O.-Phase</option>
                 <option value="placement">Platzierungsspiel</option>
+                <option value="penalty">Elfmeterschießen</option>
             </select>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="new-match-penalty"> Elfmeterschießen
+            </label>
         </div>
         <div class="form-group">
             <label for="new-match-datetime">Datum/Zeit (optional):</label>
@@ -1783,6 +1958,7 @@ async function saveNewMatch(modalId) {
     const team2 = document.getElementById('new-match-team2').value;
     const group = document.getElementById('new-match-group').value;
     const phase = document.getElementById('new-match-phase').value;
+    const isPenalty = document.getElementById('new-match-penalty').checked;
     const datetime = document.getElementById('new-match-datetime').value;
     const field = document.getElementById('new-match-field').value;
     
@@ -1799,18 +1975,20 @@ async function saveNewMatch(modalId) {
     showLoading(true);
     
     try {
+        const requestData = {
+            password: adminPassword,
+            team1,
+            team2,
+            group,
+            phase: isPenalty ? 'penalty' : phase,
+            datetime: datetime || null,
+            field: field || null
+        };
+        
         const response = await fetch('/api/admin/matches', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                team1,
-                team2,
-                group,
-                phase,
-                datetime: datetime || null,
-                field: field || null
-            })
+            body: JSON.stringify(requestData)
         });
         
         const data = await response.json();
@@ -2000,98 +2178,180 @@ async function deleteMatch(matchId) {
     }
 }
 
-// Live-Verwaltung
-function loadLiveControl() {
+// Live-Verwaltung (VERBESSERT mit sofortiger Aktualisierung nach Spielstart)
+async function loadLiveControl() {
     const liveControl = document.getElementById('live-match-control');
     
-    const liveMatches = matches.filter(m => m.liveScore?.isLive);
-    const pendingMatches = matches.filter(m => !m.completed && !m.liveScore?.isLive);
-    
-    let html = '';
-    
-    if (liveMatches.length > 0) {
-        html += '<h4>Laufende Spiele</h4>';
-        liveMatches.forEach(match => {
-            const timeInfo = calculateMatchTime(match.liveScore);
+    try {
+        // Lade aktuelle Live-Matches
+        const [liveResponse, nextResponse] = await Promise.all([
+            fetch('/api/live-match'),
+            fetch('/api/next-match')
+        ]);
+        
+        const liveData = await liveResponse.json();
+        const nextData = await nextResponse.json();
+        
+        const liveMatches = matches.filter(m => m.liveScore?.isLive);
+        const pendingMatches = matches.filter(m => !m.completed && !m.liveScore?.isLive);
+        
+        let html = '';
+        
+        if (liveMatches.length > 0) {
+            html += '<h4>Laufende Spiele</h4>';
+            liveMatches.forEach(match => {
+                const timeInfo = calculateMatchTime(match.liveScore);
+                html += `
+                    <div class="live-score-control" data-match-id="${match.id}">
+                        <h5>${match.team1} vs ${match.team2}</h5>
+                        <div class="match-timer">
+                            <div class="timer-display">
+                                <span class="current-time">${timeInfo.displayTime}</span>
+                                <span class="half-info">${timeInfo.halfInfo}</span>
+                            </div>
+                            <div class="timer-controls">
+                                <button class="btn btn-small pause-btn" onclick="pauseMatch('${match.id}')" 
+                                        style="display: ${(!match.liveScore.isPaused && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
+                                    <i class="fas fa-pause"></i> Pause
+                                </button>
+                                <button class="btn btn-small resume-btn" onclick="resumeMatch('${match.id}')"
+                                        style="display: ${(match.liveScore.isPaused && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
+                                    <i class="fas fa-play"></i> Weiter
+                                </button>
+                                <button class="btn btn-small btn-warning halftime-btn" onclick="halftimeBreak('${match.id}')"
+                                        style="display: ${(match.liveScore.currentHalf === 1 && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
+                                    <i class="fas fa-clock"></i> Halbzeit
+                                </button>
+                                <button class="btn btn-small btn-success second-half-btn" onclick="startSecondHalf('${match.id}')"
+                                        style="display: ${match.liveScore.halfTimeBreak ? 'inline-flex' : 'none'}">
+                                    <i class="fas fa-play-circle"></i> 2. Halbzeit
+                                </button>
+                            </div>
+                        </div>
+                        <div class="score-input-grid">
+                            <input type="number" class="score-input" id="live-score1-${match.id}" 
+                                   value="${match.liveScore.score1}" min="0">
+                            <span class="vs">:</span>
+                            <input type="number" class="score-input" id="live-score2-${match.id}" 
+                                   value="${match.liveScore.score2}" min="0">
+                        </div>
+                        <div class="live-actions">
+                            <button class="btn btn-primary" onclick="updateLiveScore('${match.id}')">
+                                <i class="fas fa-sync"></i> Score aktualisieren
+                            </button>
+                            <button class="btn btn-success" onclick="finishMatch('${match.id}')">
+                                <i class="fas fa-flag"></i> Spiel beenden
+                            </button>
+                        </div>
+                        
+                        <!-- NÄCHSTER SCHIEDSRICHTER ANZEIGEN -->
+                        ${nextData.nextMatch && nextData.nextMatch.referee ? `
+                            <div class="next-referee-info" style="margin-top: 1rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem; border-left: 4px solid #f59e0b;">
+                                <div style="display: flex; align-items: center; gap: 0.5rem; color: #92400e; font-weight: 600;">
+                                    <i class="fas fa-whistle"></i>
+                                    <span>Nächster Schiedsrichter:</span>
+                                </div>
+                                <div style="font-size: 1.1rem; font-weight: 700; color: #78350f; margin-top: 0.25rem;">
+                                    ${nextData.nextMatch.referee.team}
+                                </div>
+                                <div style="font-size: 0.9rem; color: #92400e;">
+                                    ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+        }
+        
+        // AUTOMATISCH NÄCHSTES SPIEL ANZEIGEN WENN KEIN LIVE-SPIEL
+        if (liveMatches.length === 0 && nextData.nextMatch) {
+            const nextMatch = nextData.nextMatch;
+            const nextTime = new Date(nextMatch.datetime);
+            const timeUntilMatch = nextTime - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            
             html += `
-                <div class="live-score-control" data-match-id="${match.id}">
-                    <h5>${match.team1} vs ${match.team2}</h5>
-                    <div class="match-timer">
-                        <div class="timer-display">
-                            <span class="current-time">${timeInfo.displayTime}</span>
-                            <span class="half-info">${timeInfo.halfInfo}</span>
+                <div class="next-match-ready" style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 2px solid #3b82f6; border-radius: 1rem; padding: 2rem; text-align: center; margin-bottom: 2rem;">
+                    <h4 style="color: #1e40af; margin-bottom: 1rem;">
+                        <i class="fas fa-clock"></i> Nächstes Spiel bereit
+                    </h4>
+                    
+                    <div style="margin-bottom: 1.5rem;">
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #1e3a8a; margin-bottom: 0.5rem;">
+                            ${nextMatch.team1} vs ${nextMatch.team2}
                         </div>
-                        <div class="timer-controls">
-                            <button class="btn btn-small pause-btn" onclick="pauseMatch('${match.id}')" 
-                                    style="display: ${(!match.liveScore.isPaused && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
-                                <i class="fas fa-pause"></i> Pause
-                            </button>
-                            <button class="btn btn-small resume-btn" onclick="resumeMatch('${match.id}')"
-                                    style="display: ${(match.liveScore.isPaused && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
-                                <i class="fas fa-play"></i> Weiter
-                            </button>
-                            <button class="btn btn-small btn-warning halftime-btn" onclick="halftimeBreak('${match.id}')"
-                                    style="display: ${(match.liveScore.currentHalf === 1 && !match.liveScore.halfTimeBreak) ? 'inline-flex' : 'none'}">
-                                <i class="fas fa-clock"></i> Halbzeit
-                            </button>
-                            <button class="btn btn-small btn-success second-half-btn" onclick="startSecondHalf('${match.id}')"
-                                    style="display: ${match.liveScore.halfTimeBreak ? 'inline-flex' : 'none'}">
-                                <i class="fas fa-play-circle"></i> 2. Halbzeit
-                            </button>
+                        <div style="color: #3730a3; margin-bottom: 0.5rem;">
+                            ${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})} • ${nextMatch.field}
+                        </div>
+                        <div style="color: #6366f1; font-size: 0.9rem;">
+                            ${minutesUntil > 0 ? `Startet in ${minutesUntil} Minuten` : 'Kann jetzt gestartet werden'}
                         </div>
                     </div>
-                    <div class="score-input-grid">
-                        <input type="number" class="score-input" id="live-score1-${match.id}" 
-                               value="${match.liveScore.score1}" min="0">
-                        <span class="vs">:</span>
-                        <input type="number" class="score-input" id="live-score2-${match.id}" 
-                               value="${match.liveScore.score2}" min="0">
-                    </div>
-                    <div class="live-actions">
-                        <button class="btn btn-primary" onclick="updateLiveScore('${match.id}')">
-                            <i class="fas fa-sync"></i> Score aktualisieren
-                        </button>
-                        <button class="btn btn-success" onclick="finishMatch('${match.id}')">
-                            <i class="fas fa-flag"></i> Spiel beenden
-                        </button>
-                    </div>
+                    
+                    ${nextMatch.referee ? `
+                        <div style="background: #fef3c7; border: 2px solid #f59e0b; border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 1.5rem;">
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                                <i class="fas fa-whistle" style="color: #d97706; font-size: 1.5rem;"></i>
+                                <span style="color: #92400e; font-weight: 600; font-size: 1.1rem;">SCHIEDSRICHTER</span>
+                            </div>
+                            <div style="font-size: 1.25rem; font-weight: 700; color: #78350f;">
+                                ${nextMatch.referee.team}
+                            </div>
+                            <div style="font-size: 0.9rem; color: #92400e;">
+                                (${nextMatch.referee.group})
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <button class="btn btn-success" onclick="startMatchDialog('${nextMatch.id}')" style="font-size: 1.1rem; padding: 1rem 2rem;">
+                        <i class="fas fa-play"></i> Spiel jetzt starten
+                    </button>
                 </div>
             `;
-        });
-    }
-    
-    if (pendingMatches.length > 0) {
-        html += '<h4>Bereit zum Start</h4>';
-        pendingMatches.forEach(match => {
-            html += `
-                <div class="match-admin-card">
-                    <div class="match-header">
-                        <div class="match-teams-admin">
-                            <span class="team-name">${match.team1}</span>
-                            <span class="vs">vs</span>
-                            <span class="team-name">${match.team2}</span>
+        }
+        
+        if (pendingMatches.length > 0) {
+            html += '<h4>Weitere Spiele bereit zum Start</h4>';
+            pendingMatches.forEach(match => {
+                html += `
+                    <div class="match-admin-card">
+                        <div class="match-header">
+                            <div class="match-teams-admin">
+                                <span class="team-name">${match.team1}</span>
+                                <span class="vs">vs</span>
+                                <span class="team-name">${match.team2}</span>
+                            </div>
+                            ${match.scheduled ? `
+                                <div style="color: #6b7280; font-size: 0.9rem;">
+                                    ${new Date(match.scheduled.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
+                                </div>
+                            ` : ''}
+                            <button class="btn btn-success" onclick="startMatchDialog('${match.id}')">
+                                <i class="fas fa-play"></i> Spiel starten
+                            </button>
                         </div>
-                        <button class="btn btn-success" onclick="startMatchDialog('${match.id}')">
-                            <i class="fas fa-play"></i> Spiel starten
-                        </button>
                     </div>
-                </div>
-            `;
-        });
-    }
-    
-    if (html === '') {
-        html = '<p>Keine Spiele für Live-Verwaltung verfügbar</p>';
-    }
-    
-    liveControl.innerHTML = html;
-    
-    // Start timer updates for live matches
-    if (liveMatches.length > 0) {
-        console.log(`Found ${liveMatches.length} live matches, starting updates`);
-        startLiveUpdates();
-    } else {
-        console.log('No live matches found');
+                `;
+            });
+        }
+        
+        if (html === '') {
+            html = '<p>Keine Spiele für Live-Verwaltung verfügbar</p>';
+        }
+        
+        liveControl.innerHTML = html;
+        
+        // Start timer updates for live matches
+        if (liveMatches.length > 0) {
+            console.log(`Found ${liveMatches.length} live matches, starting updates`);
+            startLiveUpdates();
+        } else {
+            console.log('No live matches found');
+        }
+    } catch (error) {
+        console.error('Error loading live control:', error);
+        liveControl.innerHTML = '<p>Fehler beim Laden der Live-Verwaltung</p>';
     }
 }
 
@@ -2109,7 +2369,7 @@ function loadResults() {
             html += `
                 <div class="result-form">
                     <h5>${match.team1} vs ${match.team2}</h5>
-                    ${match.group ? `<p><small>${match.group}</small></p>` : ''}
+                    ${match.group ? `<p><small>${match.group}${match.isPenaltyShootout ? ' (Elfmeterschießen)' : ''}</small></p>` : ''}
                     <div class="score-inputs">
                         <span class="team-name">${match.team1}</span>
                         <input type="number" min="0" id="result-score1-${match.id}" placeholder="0">
@@ -2133,7 +2393,7 @@ function loadResults() {
                     <div class="match-header">
                         <div class="match-teams-admin">
                             <span class="team-name">${match.team1}</span>
-                            <span class="match-score">${match.score1} : ${match.score2}</span>
+                            <span class="match-score">${match.score1} : ${match.score2}${match.isPenaltyShootout ? ' (E)' : ''}</span>
                             <span class="team-name">${match.team2}</span>
                         </div>
                         <div class="match-actions">
@@ -2142,7 +2402,7 @@ function loadResults() {
                             </button>
                         </div>
                     </div>
-                    ${match.group ? `<small>Gruppe: ${match.group}</small>` : ''}
+                    ${match.group ? `<small>Gruppe: ${match.group}${match.isPenaltyShootout ? ' (Elfmeterschießen)' : ''}</small>` : ''}
                 </div>
             `;
         });
@@ -2153,67 +2413,6 @@ function loadResults() {
     }
     
     resultsInput.innerHTML = html;
-}
-
-// Edit Result
-async function editResult(matchId) {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-    
-    createModal('Ergebnis bearbeiten', `
-        <div class="form-group">
-            <h4>${match.team1} vs ${match.team2}</h4>
-            <p><small>${match.group || 'Kein Gruppe'}</small></p>
-        </div>
-        <div class="score-inputs" style="justify-content: center; margin: 2rem 0;">
-            <span class="team-name">${match.team1}</span>
-            <input type="number" min="0" id="edit-result-score1" value="${match.score1}" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.25rem;">
-            <span class="score-vs">:</span>
-            <input type="number" min="0" id="edit-result-score2" value="${match.score2}" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.25rem;">
-            <span class="team-name">${match.team2}</span>
-        </div>
-    `, [
-        { text: 'Ergebnis speichern', handler: (modalId) => saveResultEdit(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function saveResultEdit(matchId, modalId) {
-    const score1 = parseInt(document.getElementById('edit-result-score1').value);
-    const score2 = parseInt(document.getElementById('edit-result-score2').value);
-    
-    if (isNaN(score1) || isNaN(score2) || score1 < 0 || score2 < 0) {
-        showNotification('Bitte gültige Ergebnisse eingeben', 'error');
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch(`/api/admin/results/${matchId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                score1,
-                score2
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Ergebnis erfolgreich bearbeitet');
-            closeModal(modalId);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Bearbeiten des Ergebnisses', 'error');
-    } finally {
-        showLoading(false);
-    }
 }
 
 // Einstellungen
@@ -2370,9 +2569,11 @@ function startLiveUpdates() {
             const liveMatches = latestMatches.filter(m => m.liveScore?.isLive);
             
             if (liveMatches.length === 0) {
-                console.log('No live matches found, stopping updates');
+                console.log('Match ended, reloading live match display');
                 clearInterval(liveUpdateInterval);
                 liveUpdateInterval = null;
+                // AUTOMATISCH NÄCHSTES SPIEL LADEN
+                await loadLiveControl();
                 return;
             }
             
@@ -2427,7 +2628,7 @@ function updateMatchControls(matchElement, liveScore, status) {
     if (secondHalfBtn) secondHalfBtn.style.display = liveScore.halfTimeBreak ? 'inline-flex' : 'none';
 }
 
-// Action Functions (Verbessert mit Auto-Refresh)
+// Action Functions (Verbessert mit Auto-Refresh und sofortiger Live-Aktualisierung)
 async function startMatchDialog(matchId) {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
@@ -2452,7 +2653,16 @@ async function startMatchDialog(matchId) {
         
         if (data.success) {
             showNotification(`Spiel gestartet! Halbzeitlänge: ${halfTimeMinutes} Minuten`);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
+            
+            // SOFORTIGE AKTUALISIERUNG: Live-Tab laden
+            await loadInitialData(); // Lade neue Daten
+            if (currentActiveTab === 'live') {
+                await loadLiveControl(); // Lade Live-Control sofort neu
+            }
+            // Falls auf anderem Tab, wechsle automatisch zu Live
+            else {
+                switchToTab('live');
+            }
         } else {
             showNotification(data.error, 'error');
         }
@@ -2510,7 +2720,8 @@ async function finishMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel beendet!');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
+            await loadInitialData(); // Lade neue Daten
+            await loadLiveControl(); // Live-Control sofort neu laden um nächstes Spiel zu zeigen
         } else {
             showNotification(data.error, 'error');
         }
