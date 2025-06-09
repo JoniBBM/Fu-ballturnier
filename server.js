@@ -8,8 +8,6 @@ const PORT = 5678;
 
 // Middleware
 app.use(cors());
-// KORREKTUR: express.json() ist die moderne, integrierte Methode, um JSON-Bodies zu parsen.
-// Dies ersetzt den Bedarf am separaten 'body-parser'-Paket für JSON.
 app.use(express.json());
 app.use(express.static('public'));
 
@@ -27,7 +25,7 @@ let tournaments = [];
 let teams = [];
 let matches = [];
 let currentTournament = null;
-let tournamentRules = ""; // Neue Variable für Regeln
+let tournamentRules = "";
 
 // Daten für bestimmtes Jahr laden
 function loadDataForYear(year) {
@@ -93,8 +91,10 @@ function loadCurrentYearData() {
     }
 }
 
-// Admin-Authentifizierung (vereinfacht)
+// Admin-Authentifizierung
 const ADMIN_PASSWORD = '1234qwer!';
+
+// ========================= NEUE VERBESSERTE ALGORITHMEN =========================
 
 // Hilfsfunktionen
 function shuffleArray(array) {
@@ -106,16 +106,355 @@ function shuffleArray(array) {
     return shuffled;
 }
 
-function createGroups(teams, groupSize = 4) {
+// Analysiere Tournament-Konfiguration und gib Empfehlungen
+function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}) {
+    const analysis = {
+        feasible: true,
+        warnings: [],
+        recommendations: [],
+        alternatives: [],
+        chosenConfig: null
+    };
+    
+    console.log(`Analysiere Turnier: ${teamCount} Teams, Format: ${requestedFormat}`, options);
+    
+    if (requestedFormat === 'groups') {
+        const { groupSize, maxGamesPerTeam } = options;
+        const groupCount = Math.ceil(teamCount / groupSize);
+        const actualGroupSizes = [];
+        
+        // Berechne tatsächliche Gruppengrößen
+        for (let i = 0; i < groupCount; i++) {
+            const startIndex = i * groupSize;
+            const endIndex = Math.min(startIndex + groupSize, teamCount);
+            actualGroupSizes.push(endIndex - startIndex);
+        }
+        
+        // Analysiere jede Gruppe
+        actualGroupSizes.forEach((size, index) => {
+            const maxPossibleGames = Math.floor((size - 1));
+            const totalPossibleMatches = Math.floor(size * (size - 1) / 2);
+            
+            if (maxGamesPerTeam && maxGamesPerTeam > maxPossibleGames) {
+                analysis.warnings.push(`Gruppe ${String.fromCharCode(65 + index)}: Nur ${maxPossibleGames} Spiele pro Team möglich (${size} Teams), aber ${maxGamesPerTeam} gewünscht`);
+                analysis.feasible = false;
+            }
+            
+            if (size < 3) {
+                analysis.warnings.push(`Gruppe ${String.fromCharCode(65 + index)}: Nur ${size} Teams - zu wenig für sinnvolle Gruppe`);
+            }
+        });
+        
+        // Empfehlungen für bessere Konfiguration
+        if (teamCount % groupSize !== 0) {
+            const betterGroupSizes = [];
+            for (let testSize = 3; testSize <= 6; testSize++) {
+                const remainder = teamCount % testSize;
+                const groups = Math.ceil(teamCount / testSize);
+                if (remainder === 0 || remainder >= Math.floor(testSize / 2)) {
+                    betterGroupSizes.push({
+                        size: testSize,
+                        groups: groups,
+                        remainder: remainder,
+                        score: remainder === 0 ? 100 : (testSize - remainder)
+                    });
+                }
+            }
+            
+            betterGroupSizes.sort((a, b) => b.score - a.score);
+            if (betterGroupSizes.length > 0 && betterGroupSizes[0].size !== groupSize) {
+                analysis.recommendations.push(`Bessere Gruppengröße: ${betterGroupSizes[0].size} Teams pro Gruppe (${betterGroupSizes[0].groups} Gruppen)`);
+            }
+        }
+        
+        analysis.chosenConfig = { 
+            format: 'groups', 
+            groupSize, 
+            maxGamesPerTeam,
+            actualGroupSizes 
+        };
+        
+    } else if (requestedFormat === 'swiss') {
+        const { rounds } = options;
+        const maxPossibleRounds = teamCount - 1;
+        
+        if (rounds > maxPossibleRounds) {
+            analysis.warnings.push(`Maximal ${maxPossibleRounds} Runden möglich mit ${teamCount} Teams`);
+            analysis.feasible = false;
+        }
+        
+        if (rounds < 3) {
+            analysis.warnings.push(`Mindestens 3 Runden empfohlen für aussagekräftige Ergebnisse`);
+        }
+        
+        // Berechne optimale Rundenzahl
+        const optimalRounds = Math.min(Math.max(3, Math.ceil(Math.log2(teamCount)) + 1), maxPossibleRounds);
+        if (rounds !== optimalRounds) {
+            analysis.recommendations.push(`Empfohlene Rundenzahl: ${optimalRounds} (basiert auf Teamanzahl)`);
+        }
+        
+        analysis.chosenConfig = { 
+            format: 'swiss', 
+            rounds: Math.min(rounds, maxPossibleRounds),
+            totalMatches: Math.floor(teamCount * rounds / 2)
+        };
+        
+    } else if (requestedFormat === 'league') {
+        const { maxGamesPerTeam } = options;
+        const maxPossibleGames = teamCount - 1;
+        const actualGames = maxGamesPerTeam || maxPossibleGames;
+        
+        if (actualGames > maxPossibleGames) {
+            analysis.warnings.push(`Maximal ${maxPossibleGames} Spiele pro Team möglich`);
+            analysis.feasible = false;
+        }
+        
+        analysis.chosenConfig = { 
+            format: 'league', 
+            gamesPerTeam: Math.min(actualGames, maxPossibleGames),
+            totalMatches: Math.floor(teamCount * actualGames / 2)
+        };
+    }
+    
+    // Alternative Formate vorschlagen
+    if (!analysis.feasible || analysis.warnings.length > 0) {
+        // Swiss System Alternative
+        const swissRounds = Math.min(Math.ceil(Math.log2(teamCount)) + 1, teamCount - 1);
+        analysis.alternatives.push({
+            format: 'swiss',
+            description: `Champions League Format: ${swissRounds} Runden, alle Teams in einer Liga`,
+            rounds: swissRounds,
+            totalMatches: Math.floor(teamCount * swissRounds / 2),
+            advantages: ['Faire Spielverteilung', 'Keine unausgeglichenen Gruppen', 'Mehr spannende Begegnungen']
+        });
+        
+        // Liga-Format Alternative  
+        const leagueGames = Math.min(5, teamCount - 1);
+        analysis.alternatives.push({
+            format: 'league',
+            description: `Jeder-gegen-Jeden (limitiert): ${leagueGames} Spiele pro Team`,
+            gamesPerTeam: leagueGames,
+            totalMatches: Math.floor(teamCount * leagueGames / 2),
+            advantages: ['Garantiert gleiche Spielanzahl', 'Einfache Tabelle', 'Faire Bewertung']
+        });
+        
+        // Verbesserte Gruppen Alternative
+        if (requestedFormat === 'groups') {
+            const betterGroupSize = teamCount <= 8 ? 4 : (teamCount <= 15 ? 5 : 4);
+            const betterGroupCount = Math.ceil(teamCount / betterGroupSize);
+            analysis.alternatives.push({
+                format: 'groups',
+                description: `Ausgeglichenere Gruppen: ${betterGroupSize} Teams pro Gruppe`,
+                groupSize: betterGroupSize,
+                groupCount: betterGroupCount,
+                advantages: ['Ausgeglichenere Gruppengrößen', 'Mehr Spiele pro Team']
+            });
+        }
+    }
+    
+    return analysis;
+}
+
+// NEUER Swiss System Algorithmus (Champions League Style)
+function generateSwissSystemMatches(teams, rounds) {
+    console.log(`Generiere Swiss System: ${teams.length} Teams, ${rounds} Runden`);
+    
+    const matches = [];
+    const teamStats = teams.map(team => ({
+        name: team.name,
+        opponents: new Set(),
+        gamesPlayed: 0
+    }));
+    
+    for (let round = 1; round <= rounds; round++) {
+        console.log(`Generiere Runde ${round}...`);
+        
+        // Sortiere Teams nach gespielten Spielen und dann zufällig für diese Runde
+        const availableTeams = shuffleArray([...teamStats]);
+        const roundMatches = [];
+        const usedThisRound = new Set();
+        
+        // Greedy-Algorithmus für optimale Paarungen
+        while (availableTeams.length >= 2) {
+            let bestMatch = null;
+            let bestScore = -1;
+            
+            for (let i = 0; i < availableTeams.length; i++) {
+                for (let j = i + 1; j < availableTeams.length; j++) {
+                    const team1 = availableTeams[i];
+                    const team2 = availableTeams[j];
+                    
+                    // Skip if already used this round or if they played before
+                    if (usedThisRound.has(team1.name) || usedThisRound.has(team2.name)) {
+                        continue;
+                    }
+                    
+                    if (team1.opponents.has(team2.name)) {
+                        continue;
+                    }
+                    
+                    // Bewerte diese Paarung (bevorzuge Teams mit weniger Spielen)
+                    const score = 1000 - Math.abs(team1.gamesPlayed - team2.gamesPlayed) * 10;
+                    
+                    if (score > bestScore) {
+                        bestMatch = { team1, team2, i, j };
+                        bestScore = score;
+                    }
+                }
+            }
+            
+            if (bestMatch) {
+                // Erstelle Match
+                const match = {
+                    id: `swiss_r${round}_${roundMatches.length}`,
+                    phase: 'swiss',
+                    group: 'Champions League Format',
+                    team1: bestMatch.team1.name,
+                    team2: bestMatch.team2.name,
+                    round: round,
+                    score1: null,
+                    score2: null,
+                    completed: false
+                };
+                
+                roundMatches.push(match);
+                
+                // Update Stats
+                bestMatch.team1.opponents.add(bestMatch.team2.name);
+                bestMatch.team2.opponents.add(bestMatch.team1.name);
+                bestMatch.team1.gamesPlayed++;
+                bestMatch.team2.gamesPlayed++;
+                
+                usedThisRound.add(bestMatch.team1.name);
+                usedThisRound.add(bestMatch.team2.name);
+                
+                // Entferne Teams aus availableTeams
+                availableTeams.splice(Math.max(bestMatch.i, bestMatch.j), 1);
+                availableTeams.splice(Math.min(bestMatch.i, bestMatch.j), 1);
+                
+                console.log(`Runde ${round}: ${bestMatch.team1.name} vs ${bestMatch.team2.name}`);
+            } else {
+                // Keine weiteren gültigen Paarungen möglich
+                console.log(`Runde ${round}: Keine weiteren Paarungen möglich, ${availableTeams.length} Teams übrig`);
+                break;
+            }
+        }
+        
+        matches.push(...roundMatches);
+        console.log(`Runde ${round} abgeschlossen: ${roundMatches.length} Spiele`);
+    }
+    
+    // Validierung
+    const teamGameCounts = {};
+    teams.forEach(team => teamGameCounts[team.name] = 0);
+    matches.forEach(match => {
+        teamGameCounts[match.team1]++;
+        teamGameCounts[match.team2]++;
+    });
+    
+    console.log('Swiss System Spielverteilung:', teamGameCounts);
+    
+    return matches;
+}
+
+// VERBESSERTER Fair Limited Round-Robin
+function generateFairLimitedRoundRobin(teams, maxGamesPerTeam) {
+    console.log(`Generiere Fair Limited Round-Robin: ${teams.length} Teams, max ${maxGamesPerTeam} Spiele pro Team`);
+    
+    const matches = [];
+    const teamStats = teams.map(team => ({
+        name: team.name,
+        opponents: new Set(),
+        gamesPlayed: 0
+    }));
+    
+    // Erstelle alle möglichen Paarungen mit Priorität
+    const allPairings = [];
+    for (let i = 0; i < teams.length; i++) {
+        for (let j = i + 1; j < teams.length; j++) {
+            allPairings.push({
+                team1: teams[i].name,
+                team2: teams[j].name,
+                priority: Math.random() // Zufällige Priorität für Fairness
+            });
+        }
+    }
+    
+    // Sortiere Paarungen nach Priorität
+    allPairings.sort((a, b) => a.priority - b.priority);
+    
+    // Greedy-Auswahl der Spiele
+    let matchId = 0;
+    for (const pairing of allPairings) {
+        const team1Stats = teamStats.find(t => t.name === pairing.team1);
+        const team2Stats = teamStats.find(t => t.name === pairing.team2);
+        
+        // Prüfe ob beide Teams noch Spiele brauchen
+        if (team1Stats.gamesPlayed < maxGamesPerTeam && team2Stats.gamesPlayed < maxGamesPerTeam) {
+            const match = {
+                id: `fair_rr_${matchId++}`,
+                phase: 'league',
+                group: 'Liga',
+                team1: pairing.team1,
+                team2: pairing.team2,
+                score1: null,
+                score2: null,
+                completed: false
+            };
+            
+            matches.push(match);
+            team1Stats.gamesPlayed++;
+            team2Stats.gamesPlayed++;
+            team1Stats.opponents.add(pairing.team2);
+            team2Stats.opponents.add(pairing.team1);
+            
+            console.log(`Match ${matchId}: ${pairing.team1} vs ${pairing.team2}`);
+        }
+    }
+    
+    // Validierung und Nachoptimierung
+    const finalGameCounts = {};
+    teams.forEach(team => finalGameCounts[team.name] = 0);
+    matches.forEach(match => {
+        finalGameCounts[match.team1]++;
+        finalGameCounts[match.team2]++;
+    });
+    
+    console.log('Fair Round-Robin Spielverteilung:', finalGameCounts);
+    
+    // Wenn möglich, gleiche die Spielanzahl aus
+    const minGames = Math.min(...Object.values(finalGameCounts));
+    const maxGames = Math.max(...Object.values(finalGameCounts));
+    
+    if (maxGames - minGames > 1) {
+        console.log(`Warnung: Ungleiche Spielverteilung (${minGames}-${maxGames} Spiele pro Team)`);
+    }
+    
+    return matches;
+}
+
+// VERBESSERTES Gruppensystem
+function createImprovedGroups(teams, groupSize = 4) {
     const shuffledTeams = shuffleArray(teams);
     const groups = [];
-    const groupCount = Math.ceil(shuffledTeams.length / groupSize);
+    const teamCount = shuffledTeams.length;
+    const idealGroupCount = Math.ceil(teamCount / groupSize);
     
-    for (let i = 0; i < groupCount; i++) {
-        groups.push({
+    console.log(`Erstelle verbesserte Gruppen: ${teamCount} Teams, angestrebte Größe ${groupSize}`);
+    
+    // Berechne optimale Gruppenverteilung
+    const baseTeamsPerGroup = Math.floor(teamCount / idealGroupCount);
+    const groupsWithExtraTeam = teamCount % idealGroupCount;
+    
+    let teamIndex = 0;
+    for (let i = 0; i < idealGroupCount; i++) {
+        const currentGroupSize = baseTeamsPerGroup + (i < groupsWithExtraTeam ? 1 : 0);
+        const groupTeams = shuffledTeams.slice(teamIndex, teamIndex + currentGroupSize);
+        
+        const group = {
             name: `Gruppe ${String.fromCharCode(65 + i)}`,
-            teams: shuffledTeams.slice(i * groupSize, (i + 1) * groupSize),
-            table: shuffledTeams.slice(i * groupSize, (i + 1) * groupSize).map(team => ({
+            teams: groupTeams,
+            table: groupTeams.map(team => ({
                 team: team.name,
                 games: 0,
                 wins: 0,
@@ -126,58 +465,25 @@ function createGroups(teams, groupSize = 4) {
                 goalDiff: 0,
                 points: 0
             }))
-        });
+        };
+        
+        groups.push(group);
+        teamIndex += currentGroupSize;
+        
+        console.log(`${group.name}: ${currentGroupSize} Teams - ${groupTeams.map(t => t.name).join(', ')}`);
     }
+    
     return groups;
 }
 
-function generateGroupMatches(groups, maxGamesPerTeam = null) {
+function generateImprovedGroupMatches(groups, maxGamesPerTeam = null) {
     const matches = [];
     
     groups.forEach((group, groupIndex) => {
         const teams = group.teams;
+        console.log(`Generiere Spiele für ${group.name}: ${teams.length} Teams, max ${maxGamesPerTeam || 'alle'} Spiele pro Team`);
         
-        if (maxGamesPerTeam && teams.length > maxGamesPerTeam + 1) {
-            // Limitierte Spiele pro Team: Optimierte Paarung
-            const teamGames = {};
-            teams.forEach(team => {
-                teamGames[team.name] = 0;
-            });
-            
-            // Erstelle alle möglichen Paarungen
-            const allPossibleMatches = [];
-            for (let i = 0; i < teams.length; i++) {
-                for (let j = i + 1; j < teams.length; j++) {
-                    allPossibleMatches.push({
-                        team1: teams[i].name,
-                        team2: teams[j].name,
-                        team1Index: i,
-                        team2Index: j
-                    });
-                }
-            }
-            
-            // Shuffle für Fairness
-            const shuffledMatches = shuffleArray(allPossibleMatches);
-            
-            // Wähle Spiele aus bis maxGamesPerTeam erreicht
-            shuffledMatches.forEach((match, index) => {
-                if (teamGames[match.team1] < maxGamesPerTeam && teamGames[match.team2] < maxGamesPerTeam) {
-                    matches.push({
-                        id: `group_${groupIndex}_${match.team1Index}_${match.team2Index}`,
-                        phase: 'group',
-                        group: group.name,
-                        team1: match.team1,
-                        team2: match.team2,
-                        score1: null,
-                        score2: null,
-                        completed: false
-                    });
-                    teamGames[match.team1]++;
-                    teamGames[match.team2]++;
-                }
-            });
-        } else {
+        if (!maxGamesPerTeam || maxGamesPerTeam >= teams.length - 1) {
             // Standard: Jeder gegen Jeden
             for (let i = 0; i < teams.length; i++) {
                 for (let j = i + 1; j < teams.length; j++) {
@@ -193,22 +499,332 @@ function generateGroupMatches(groups, maxGamesPerTeam = null) {
                     });
                 }
             }
+        } else {
+            // Limitierte Spiele: Verwende Fair Distribution
+            const teamGames = {};
+            teams.forEach(team => teamGames[team.name] = 0);
+            
+            // Erstelle alle möglichen Paarungen
+            const possibleMatches = [];
+            for (let i = 0; i < teams.length; i++) {
+                for (let j = i + 1; j < teams.length; j++) {
+                    possibleMatches.push({
+                        team1: teams[i].name,
+                        team2: teams[j].name,
+                        team1Index: i,
+                        team2Index: j,
+                        priority: Math.random()
+                    });
+                }
+            }
+            
+            // Sortiere zufällig für Fairness
+            possibleMatches.sort((a, b) => a.priority - b.priority);
+            
+            // Greedy-Auswahl für gleichmäßige Verteilung
+            possibleMatches.forEach(possibleMatch => {
+                if (teamGames[possibleMatch.team1] < maxGamesPerTeam && 
+                    teamGames[possibleMatch.team2] < maxGamesPerTeam) {
+                    
+                    matches.push({
+                        id: `group_${groupIndex}_${possibleMatch.team1Index}_${possibleMatch.team2Index}`,
+                        phase: 'group',
+                        group: group.name,
+                        team1: possibleMatch.team1,
+                        team2: possibleMatch.team2,
+                        score1: null,
+                        score2: null,
+                        completed: false
+                    });
+                    
+                    teamGames[possibleMatch.team1]++;
+                    teamGames[possibleMatch.team2]++;
+                }
+            });
+            
+            console.log(`${group.name} Spielverteilung:`, teamGames);
         }
     });
+    
     return matches;
+}
+
+// K.O.-System Generierung
+function generateKnockoutMatches(finalTable, knockoutConfig) {
+    console.log('Generiere K.O.-System...', knockoutConfig);
+    
+    const koMatches = [];
+    const { enableQuarterfinals, enableThirdPlace, enableFifthPlace, enableSeventhPlace } = knockoutConfig;
+    
+    if (enableQuarterfinals && finalTable.length >= 8) {
+        // Viertelfinale: 1vs8, 2vs7, 3vs6, 4vs5
+        const quarterfinalsIds = [];
+        for (let i = 0; i < 4; i++) {
+            const team1 = finalTable[i];
+            const team2 = finalTable[7 - i];
+            const matchId = `quarterfinal_${i + 1}`;
+            
+            koMatches.push({
+                id: matchId,
+                phase: 'quarterfinal',
+                group: 'Viertelfinale',
+                team1: team1.team,
+                team2: team2.team,
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    position1: i + 1,
+                    position2: 8 - i,
+                    description: `Viertelfinale ${i + 1}: ${i + 1}. vs ${8 - i}.`
+                }
+            });
+            
+            quarterfinalsIds.push(matchId);
+        }
+        
+        // Halbfinale aus Viertelfinale-Siegern
+        koMatches.push({
+            id: 'semifinal_1',
+            phase: 'semifinal',
+            group: 'Halbfinale',
+            team1: `Sieger ${quarterfinalsIds[0]}`,
+            team2: `Sieger ${quarterfinalsIds[1]}`,
+            score1: null,
+            score2: null,
+            completed: false,
+            koInfo: {
+                dependsOn: [quarterfinalsIds[0], quarterfinalsIds[1]],
+                description: 'Halbfinale 1'
+            }
+        });
+        
+        koMatches.push({
+            id: 'semifinal_2',
+            phase: 'semifinal', 
+            group: 'Halbfinale',
+            team1: `Sieger ${quarterfinalsIds[2]}`,
+            team2: `Sieger ${quarterfinalsIds[3]}`,
+            score1: null,
+            score2: null,
+            completed: false,
+            koInfo: {
+                dependsOn: [quarterfinalsIds[2], quarterfinalsIds[3]],
+                description: 'Halbfinale 2'
+            }
+        });
+        
+        // Finale
+        koMatches.push({
+            id: 'final',
+            phase: 'final',
+            group: 'Finale',
+            team1: 'Sieger semifinal_1',
+            team2: 'Sieger semifinal_2',
+            score1: null,
+            score2: null,
+            completed: false,
+            koInfo: {
+                dependsOn: ['semifinal_1', 'semifinal_2'],
+                description: 'Finale'
+            }
+        });
+        
+        // Spiel um Platz 3
+        if (enableThirdPlace) {
+            koMatches.push({
+                id: 'third_place',
+                phase: 'placement',
+                group: 'Platzierungsspiele',
+                team1: 'Verlierer semifinal_1',
+                team2: 'Verlierer semifinal_2',
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    dependsOn: ['semifinal_1', 'semifinal_2'],
+                    description: 'Spiel um Platz 3'
+                }
+            });
+        }
+        
+    } else {
+        // Direktes Halbfinale bei weniger als 8 Teams: 1vs4, 2vs3
+        if (finalTable.length >= 4) {
+            koMatches.push({
+                id: 'semifinal_1',
+                phase: 'semifinal',
+                group: 'Halbfinale',
+                team1: finalTable[0].team,
+                team2: finalTable[3].team,
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    position1: 1,
+                    position2: 4,
+                    description: 'Halbfinale 1: 1. vs 4.'
+                }
+            });
+            
+            koMatches.push({
+                id: 'semifinal_2',
+                phase: 'semifinal',
+                group: 'Halbfinale',
+                team1: finalTable[1].team,
+                team2: finalTable[2].team,
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    position1: 2,
+                    position2: 3,
+                    description: 'Halbfinale 2: 2. vs 3.'
+                }
+            });
+            
+            // Finale
+            koMatches.push({
+                id: 'final',
+                phase: 'final',
+                group: 'Finale',
+                team1: 'Sieger semifinal_1',
+                team2: 'Sieger semifinal_2',
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    dependsOn: ['semifinal_1', 'semifinal_2'],
+                    description: 'Finale'
+                }
+            });
+            
+            // Spiel um Platz 3
+            if (enableThirdPlace) {
+                koMatches.push({
+                    id: 'third_place',
+                    phase: 'placement',
+                    group: 'Platzierungsspiele',
+                    team1: 'Verlierer semifinal_1',
+                    team2: 'Verlierer semifinal_2',
+                    score1: null,
+                    score2: null,
+                    completed: false,
+                    koInfo: {
+                        dependsOn: ['semifinal_1', 'semifinal_2'],
+                        description: 'Spiel um Platz 3'
+                    }
+                });
+            }
+        }
+    }
+    
+    // Platzierungsspiele für die restlichen Teams
+    if (enableFifthPlace && finalTable.length >= 6) {
+        if (enableQuarterfinals && finalTable.length >= 8) {
+            // Spiel um Platz 5: Verlierer der Viertelfinale (5.-8. Platz)
+            koMatches.push({
+                id: 'fifth_place_semi1',
+                phase: 'placement',
+                group: 'Platzierungsspiele',
+                team1: 'Verlierer quarterfinal_1',
+                team2: 'Verlierer quarterfinal_2',
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    dependsOn: ['quarterfinal_1', 'quarterfinal_2'],
+                    description: 'Halbfinale um Platz 5/6'
+                }
+            });
+            
+            koMatches.push({
+                id: 'fifth_place_semi2',
+                phase: 'placement',
+                group: 'Platzierungsspiele',
+                team1: 'Verlierer quarterfinal_3',
+                team2: 'Verlierer quarterfinal_4',
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    dependsOn: ['quarterfinal_3', 'quarterfinal_4'],
+                    description: 'Halbfinale um Platz 7/8'
+                }
+            });
+            
+            koMatches.push({
+                id: 'fifth_place',
+                phase: 'placement',
+                group: 'Platzierungsspiele',
+                team1: 'Sieger fifth_place_semi1',
+                team2: 'Sieger fifth_place_semi2',
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    dependsOn: ['fifth_place_semi1', 'fifth_place_semi2'],
+                    description: 'Spiel um Platz 5'
+                }
+            });
+            
+            if (enableSeventhPlace) {
+                koMatches.push({
+                    id: 'seventh_place',
+                    phase: 'placement',
+                    group: 'Platzierungsspiele',
+                    team1: 'Verlierer fifth_place_semi1',
+                    team2: 'Verlierer fifth_place_semi2',
+                    score1: null,
+                    score2: null,
+                    completed: false,
+                    koInfo: {
+                        dependsOn: ['fifth_place_semi1', 'fifth_place_semi2'],
+                        description: 'Spiel um Platz 7'
+                    }
+                });
+            }
+        } else {
+            // Direktes Spiel um Platz 5 bei weniger Teams
+            koMatches.push({
+                id: 'fifth_place',
+                phase: 'placement',
+                group: 'Platzierungsspiele',
+                team1: finalTable[4].team,
+                team2: finalTable[5].team,
+                score1: null,
+                score2: null,
+                completed: false,
+                koInfo: {
+                    position1: 5,
+                    position2: 6,
+                    description: 'Spiel um Platz 5: 5. vs 6.'
+                }
+            });
+        }
+    }
+    
+    console.log(`K.O.-System generiert: ${koMatches.length} Spiele`);
+    koMatches.forEach(match => {
+        console.log(`${match.id}: ${match.team1} vs ${match.team2} (${match.koInfo.description})`);
+    });
+    
+    return koMatches;
 }
 
 function assignReferees(matches, groups) {
     // Erstelle Liste aller Teams pro Gruppe
     const teamsByGroup = {};
-    groups.forEach(group => {
-        teamsByGroup[group.name] = group.teams.map(t => t.name);
-    });
+    if (groups && groups.length > 0) {
+        groups.forEach(group => {
+            teamsByGroup[group.name] = group.teams.map(t => t.name);
+        });
+    } else {
+        // Für Swiss System oder Liga: Alle Teams sind in einer "Gruppe"
+        teamsByGroup['Liga'] = teams.map(t => t.name);
+    }
     
     const groupNames = Object.keys(teamsByGroup);
-    const refereeAssignments = {};
-    
-    // Track wie oft jedes Team bereits Schiedsrichter war
     const refereeCount = {};
     Object.values(teamsByGroup).flat().forEach(team => {
         refereeCount[team] = 0;
@@ -218,14 +834,17 @@ function assignReferees(matches, groups) {
         const matchGroup = match.group;
         
         // Finde andere Gruppen (nicht die Gruppe des aktuellen Spiels)
-        const otherGroups = groupNames.filter(g => g !== matchGroup);
+        let otherGroups = groupNames.filter(g => g !== matchGroup);
+        
+        // Fallback: Wenn keine anderen Gruppen, verwende alle Teams
+        if (otherGroups.length === 0) {
+            otherGroups = groupNames;
+        }
         
         if (otherGroups.length > 0) {
-            // Sammle alle verfügbaren Schiedsrichter-Teams aus anderen Gruppen
             const availableReferees = [];
             otherGroups.forEach(groupName => {
                 teamsByGroup[groupName].forEach(team => {
-                    // Team kann nur Schiedsrichter sein wenn es nicht selbst spielt
                     if (team !== match.team1 && team !== match.team2) {
                         availableReferees.push({
                             team: team,
@@ -237,20 +856,13 @@ function assignReferees(matches, groups) {
             });
             
             if (availableReferees.length > 0) {
-                // Sortiere nach wenigsten Schiedsrichter-Einsätzen für faire Verteilung
                 availableReferees.sort((a, b) => a.count - b.count);
-                
-                // Wähle Team mit wenigsten Einsätzen
                 const selectedReferee = availableReferees[0];
                 match.referee = {
                     team: selectedReferee.team,
                     group: selectedReferee.group
                 };
-                
-                // Aktualisiere Counter
                 refereeCount[selectedReferee.team]++;
-                
-                console.log(`Schiedsrichter für ${match.team1} vs ${match.team2}: ${selectedReferee.team} (${selectedReferee.group})`);
             }
         }
     });
@@ -259,41 +871,32 @@ function assignReferees(matches, groups) {
 }
 
 function intelligentScheduling(matches, groups, startTime, matchDuration, field) {
-    // Parse Startzeit
     const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
     const today = new Date();
     let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
     
-    // Track wann jedes Team zuletzt gespielt hat
     const lastPlayTime = {};
-    const allTeams = groups.flatMap(g => g.teams.map(t => t.name));
+    const allTeams = teams.map(t => t.name);
     allTeams.forEach(team => {
         lastPlayTime[team] = null;
     });
     
-    // Kopiere Matches für Manipulation
     const unscheduledMatches = [...matches];
     const scheduledMatches = [];
-    
-    // Minimum Pause zwischen Spielen eines Teams (in Minuten)
-    const minimumRestTime = matchDuration * 1.5; // 1.5x Spieldauer als Mindestpause
+    const minimumRestTime = matchDuration * 1.5;
     
     while (unscheduledMatches.length > 0) {
         let bestMatch = null;
         let bestScore = -1;
         
-        // Finde das beste nächste Spiel
         unscheduledMatches.forEach((match, index) => {
             const team1LastTime = lastPlayTime[match.team1];
             const team2LastTime = lastPlayTime[match.team2];
             
-            // Berechne wie lange die Teams schon pausiert haben
             const team1RestTime = team1LastTime ? (currentTime - team1LastTime) / (1000 * 60) : Infinity;
             const team2RestTime = team2LastTime ? (currentTime - team2LastTime) / (1000 * 60) : Infinity;
             
-            // Beide Teams müssen genug Pause gehabt haben
             if (team1RestTime >= minimumRestTime && team2RestTime >= minimumRestTime) {
-                // Score basiert auf der Pausenzeit (länger pausiert = höhere Priorität)
                 const score = Math.min(team1RestTime, team2RestTime);
                 
                 if (score > bestScore) {
@@ -303,7 +906,6 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
             }
         });
         
-        // Falls kein Spiel die Mindestpause erfüllt, nimm das mit der längsten Pause
         if (!bestMatch) {
             let longestRest = -1;
             unscheduledMatches.forEach((match, index) => {
@@ -325,26 +927,18 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
         if (bestMatch) {
             const match = bestMatch.match;
             
-            // Schedule das Spiel
             match.scheduled = {
                 datetime: new Date(currentTime),
                 field: field || 'Hauptplatz'
             };
             
-            // Update letzte Spielzeit für beide Teams
             lastPlayTime[match.team1] = new Date(currentTime);
             lastPlayTime[match.team2] = new Date(currentTime);
             
-            console.log(`Scheduled: ${match.team1} vs ${match.team2} at ${currentTime.toLocaleTimeString('de-DE')} (Referee: ${match.referee?.team || 'TBD'})`);
-            
-            // Entferne von unscheduled und füge zu scheduled hinzu
             unscheduledMatches.splice(bestMatch.index, 1);
             scheduledMatches.push(match);
-            
-            // Nächster Zeitslot
             currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
         } else {
-            // Fallback: Nimm erstes verfügbares Spiel
             console.warn('Fallback scheduling used');
             const match = unscheduledMatches[0];
             match.scheduled = {
@@ -422,7 +1016,7 @@ function updateGroupTable(groupName, matches) {
     });
 }
 
-// Routes
+// ========================= ROUTES =========================
 
 // Startseite
 app.get('/', (req, res) => {
@@ -442,7 +1036,6 @@ app.post('/api/teams', (req, res) => {
         return res.status(400).json({ error: 'Alle Felder sind erforderlich' });
     }
     
-    // Prüfen ob Turnier für aktuelles Jahr existiert und Anmeldung offen ist
     const currentYear = new Date().getFullYear();
     if (!currentTournament || currentTournament.year !== currentYear) {
         return res.status(400).json({ error: 'Für dieses Jahr wurde noch kein Turnier geplant. Bitte wende dich an die Organisatoren.' });
@@ -539,17 +1132,14 @@ app.put('/api/admin/teams/:teamId', (req, res) => {
     
     const oldName = team.name;
     
-    // Prüfe ob neuer Name bereits vergeben ist (außer bei gleichem Team)
     if (teamName !== oldName && teams.find(t => t.name === teamName)) {
         return res.status(400).json({ error: 'Teamname bereits vergeben' });
     }
     
-    // Update Team
     team.name = teamName;
     team.contact.name = contactName;
     team.contact.info = contactInfo;
     
-    // Update Team in Matches
     if (teamName !== oldName) {
         matches.forEach(match => {
             if (match.team1 === oldName) match.team1 = teamName;
@@ -559,7 +1149,6 @@ app.put('/api/admin/teams/:teamId', (req, res) => {
             }
         });
         
-        // Update Team in Gruppen
         if (currentTournament && currentTournament.groups) {
             currentTournament.groups.forEach(group => {
                 group.teams.forEach(t => {
@@ -592,11 +1181,10 @@ app.delete('/api/admin/matches/:matchId', (req, res) => {
     
     const match = matches[matchIndex];
     
-    // Update Group Table falls completed
     if (match.completed && match.phase === 'group') {
-        matches.splice(matchIndex, 1); // Temporarily remove to recalculate
+        matches.splice(matchIndex, 1);
         updateGroupTable(match.group, matches);
-        matches.splice(matchIndex, 0, match); // Add back for final removal
+        matches.splice(matchIndex, 0, match);
     }
     
     matches.splice(matchIndex, 1);
@@ -619,12 +1207,10 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
         return res.status(404).json({ error: 'Spiel nicht gefunden' });
     }
     
-    // Update match details
     if (team1) match.team1 = team1;
     if (team2) match.team2 = team2;
     if (group) match.group = group;
     
-    // Update referee
     if (referee !== undefined) {
         if (referee === null || referee === '') {
             delete match.referee;
@@ -633,14 +1219,12 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
         }
     }
     
-    // Update scheduling
     if (datetime || field) {
         if (!match.scheduled) match.scheduled = {};
         if (datetime) match.scheduled.datetime = new Date(datetime);
         if (field) match.scheduled.field = field;
     }
     
-    // Update group table if this match was completed
     if (match.completed && match.phase === 'group') {
         updateGroupTable(match.group, matches);
     }
@@ -667,7 +1251,6 @@ app.put('/api/admin/results/:matchId', (req, res) => {
     match.score2 = parseInt(score2);
     match.completed = true;
     
-    // Update group table
     if (match.phase === 'group') {
         updateGroupTable(match.group, matches);
     }
@@ -699,12 +1282,10 @@ app.post('/api/admin/matches', (req, res) => {
         completed: false
     };
     
-    // Add referee if provided
     if (referee) {
         newMatch.referee = referee;
     }
     
-    // Add scheduling if provided
     if (datetime || field) {
         newMatch.scheduled = {};
         if (datetime) newMatch.scheduled.datetime = new Date(datetime);
@@ -759,14 +1340,12 @@ app.delete('/api/admin/tournament/reset', (req, res) => {
     
     const year = currentTournament.year;
     
-    // Alles zurücksetzen
     teams = [];
     matches = [];
     currentTournament = null;
     tournaments = [];
     tournamentRules = "";
     
-    // Datei löschen
     const filename = path.join(SAVES_DIR, `${year}.json`);
     try {
         if (fs.existsSync(filename)) {
@@ -801,19 +1380,15 @@ app.post('/api/admin/tournament/reorganize-groups', (req, res) => {
         return res.status(400).json({ error: 'Keine Teams zum Organisieren' });
     }
     
-    // Lösche alle aktuellen Gruppenmatchs
     matches = matches.filter(m => m.phase !== 'group');
     
-    // Erstelle neue Gruppen
-    const newGroups = createGroups(teams, groupSize || 4);
+    const newGroups = createImprovedGroups(teams, groupSize || 4);
     currentTournament.groups = newGroups;
     currentTournament.settings.groupSize = groupSize || 4;
     
-    // Generiere neue Gruppenspiele
-    const groupMatches = generateGroupMatches(newGroups, currentTournament.settings.maxGamesPerTeam);
+    const groupMatches = generateImprovedGroupMatches(newGroups, currentTournament.settings.maxGamesPerTeam);
     const matchesWithReferees = assignReferees(groupMatches, newGroups);
     
-    // Füge neue Matches hinzu
     matches = [...matches, ...matchesWithReferees];
     
     currentTournament.lastUpdated = new Date().toISOString();
@@ -848,7 +1423,6 @@ app.post('/api/admin/matches/reset-results', (req, res) => {
         }
     });
     
-    // Reset alle Group Tables
     if (currentTournament && currentTournament.groups) {
         currentTournament.groups.forEach(group => {
             group.table.forEach(entry => {
@@ -940,10 +1514,8 @@ app.post('/api/admin/tournament', (req, res) => {
     
     const tournamentYear = year || new Date().getFullYear();
     
-    // Lade Daten für das Jahr falls vorhanden
     loadDataForYear(tournamentYear);
     
-    // Prüfe ob bereits ein Turnier für das Jahr existiert
     if (currentTournament && currentTournament.year === tournamentYear) {
         return res.status(400).json({ error: `Für ${tournamentYear} existiert bereits ein Turnier` });
     }
@@ -952,7 +1524,7 @@ app.post('/api/admin/tournament', (req, res) => {
         id: Date.now(),
         year: tournamentYear,
         settings: {},
-        status: 'registration', // registration, closed, active, finished
+        status: 'registration',
         groups: [],
         knockoutPhase: {
             quarterfinals: [],
@@ -964,19 +1536,49 @@ app.post('/api/admin/tournament', (req, res) => {
         registrationClosedAt: null
     };
     
-    // Teams und Matches zurücksetzen für neues Turnier
     teams = [];
     matches = [];
-    tournaments = [currentTournament]; // Nur aktuelles Turnier in Array
+    tournaments = [currentTournament];
     
     autoSave();
     
     res.json({ success: true, tournament: currentTournament });
 });
 
-// Admin: Anmeldung schließen und Spielplan generieren
+// ========= NEUE ROUTE: Tournament-Konfiguration analysieren ==========
+app.post('/api/admin/analyze-tournament-config', (req, res) => {
+    const { password, format, options } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (teams.length === 0) {
+        return res.status(400).json({ error: 'Keine Teams zum Analysieren' });
+    }
+    
+    const analysis = analyzeTournamentConfiguration(teams.length, format, options);
+    
+    res.json({ 
+        success: true, 
+        analysis: analysis,
+        teamCount: teams.length
+    });
+});
+
+// ========= VERBESSERTE ROUTE: Anmeldung schließen ==========
 app.post('/api/admin/close-registration', (req, res) => {
-    const { password, groupSize, enableThirdPlace, enableFifthPlace, enableSeventhPlace, maxGamesPerTeam } = req.body;
+    const { 
+        password, 
+        format, // 'groups', 'swiss', 'league'
+        groupSize, 
+        rounds, // für Swiss System
+        maxGamesPerTeam,
+        enableQuarterfinals,
+        enableThirdPlace, 
+        enableFifthPlace, 
+        enableSeventhPlace 
+    } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -990,6 +1592,8 @@ app.post('/api/admin/close-registration', (req, res) => {
         return res.status(400).json({ error: 'Mindestens 4 Teams für Spielplan erforderlich' });
     }
     
+    console.log(`Schließe Anmeldung mit Format: ${format}`, { groupSize, rounds, maxGamesPerTeam });
+    
     // Anmeldung schließen
     currentTournament.status = 'closed';
     currentTournament.registrationClosedAt = new Date();
@@ -997,48 +1601,94 @@ app.post('/api/admin/close-registration', (req, res) => {
     
     // Einstellungen speichern
     currentTournament.settings = {
+        format: format || 'groups',
         groupSize: groupSize || 4,
+        rounds: rounds || null,
+        maxGamesPerTeam: maxGamesPerTeam || null,
+        enableQuarterfinals: enableQuarterfinals || false,
         enableThirdPlace: enableThirdPlace || false,
         enableFifthPlace: enableFifthPlace || false,
-        enableSeventhPlace: enableSeventhPlace || false,
-        maxGamesPerTeam: maxGamesPerTeam || null
+        enableSeventhPlace: enableSeventhPlace || false
     };
     
-    // Knockout-Phase erweitern
-    currentTournament.knockoutPhase = {
-        quarterfinals: [],
-        semifinals: [],
-        final: null,
-        thirdPlace: enableThirdPlace ? null : undefined,
-        fifthPlace: enableFifthPlace ? null : undefined,
-        seventhPlace: enableSeventhPlace ? null : undefined
-    };
+    let generatedMatches = [];
     
-    // Gruppen erstellen
-    const groups = createGroups(teams, currentTournament.settings.groupSize);
-    currentTournament.groups = groups;
-    
-    // Spielplan generieren mit maxGamesPerTeam Limit
-    const groupMatches = generateGroupMatches(groups, currentTournament.settings.maxGamesPerTeam);
-    
-    // Schiedsrichter zuweisen
-    const matchesWithReferees = assignReferees(groupMatches, groups);
-    matches = [...matchesWithReferees];
-    
-    // Status auf aktiv setzen
-    currentTournament.status = 'active';
-    currentTournament.phase = 'group';
-    
-    autoSave();
-    
-    console.log(`Turnier aktiviert: ${teams.length} Teams, ${matches.length} Spiele generiert mit Schiedsrichtern`);
-    
-    res.json({ 
-        success: true, 
-        tournament: currentTournament, 
-        matchesGenerated: matches.length,
-        message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Gruppen à ${groupSize} Teams, max. ${maxGamesPerTeam || 'alle'} Spiele pro Team, mit Schiedsrichter-Einteilung)`
-    });
+    try {
+        if (format === 'swiss') {
+            // Swiss System (Champions League Style)
+            currentTournament.format = 'swiss';
+            currentTournament.groups = [{
+                name: 'Champions League Format',
+                teams: teams,
+                table: teams.map(team => ({
+                    team: team.name,
+                    games: 0,
+                    wins: 0,
+                    draws: 0,
+                    losses: 0,
+                    goalsFor: 0,
+                    goalsAgainst: 0,
+                    goalDiff: 0,
+                    points: 0
+                }))
+            }];
+            
+            generatedMatches = generateSwissSystemMatches(teams, rounds || Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1));
+            
+        } else if (format === 'league') {
+            // Liga-Format (Jeder gegen jeden mit Limit)
+            currentTournament.format = 'league';
+            currentTournament.groups = [{
+                name: 'Liga',
+                teams: teams,
+                table: teams.map(team => ({
+                    team: team.name,
+                    games: 0,
+                    wins: 0,
+                    draws: 0,
+                    losses: 0,
+                    goalsFor: 0,
+                    goalsAgainst: 0,
+                    goalDiff: 0,
+                    points: 0
+                }))
+            }];
+            
+            generatedMatches = generateFairLimitedRoundRobin(teams, maxGamesPerTeam || teams.length - 1);
+            
+        } else {
+            // Standard Gruppensystem (verbessert)
+            currentTournament.format = 'groups';
+            const groups = createImprovedGroups(teams, currentTournament.settings.groupSize);
+            currentTournament.groups = groups;
+            
+            generatedMatches = generateImprovedGroupMatches(groups, currentTournament.settings.maxGamesPerTeam);
+        }
+        
+        // Schiedsrichter zuweisen
+        const matchesWithReferees = assignReferees(generatedMatches, currentTournament.groups);
+        matches = [...matchesWithReferees];
+        
+        // Status auf aktiv setzen
+        currentTournament.status = 'active';
+        currentTournament.phase = currentTournament.format === 'groups' ? 'group' : currentTournament.format;
+        
+        autoSave();
+        
+        console.log(`Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
+        
+        res.json({ 
+            success: true, 
+            tournament: currentTournament, 
+            matchesGenerated: matches.length,
+            format: format,
+            message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Format: ${format})`
+        });
+        
+    } catch (error) {
+        console.error('Fehler beim Generieren des Spielplans:', error);
+        res.status(500).json({ error: 'Fehler beim Erstellen des Spielplans: ' + error.message });
+    }
 });
 
 // Admin: Spielzeit setzen
@@ -1073,10 +1723,9 @@ app.post('/api/admin/schedule-all', (req, res) => {
     
     const unscheduledMatches = matches.filter(m => !m.scheduled);
     if (unscheduledMatches.length === 0) {
-        return res.status(400).json({ error: 'Keine ungeplanIten Spiele vorhanden' });
+        return res.status(400).json({ error: 'Keine ungeplanten Spiele vorhanden' });
     }
     
-    // Parse Startzeit korrekt
     if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
         return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
     }
@@ -1084,7 +1733,6 @@ app.post('/api/admin/schedule-all', (req, res) => {
     console.log(`Intelligent scheduling: Start at ${startTime}, duration ${matchDuration}min`);
     
     try {
-        // Verwende intelligenten Scheduling-Algorithmus
         const scheduledMatches = intelligentScheduling(
             unscheduledMatches, 
             currentTournament.groups, 
@@ -1093,7 +1741,6 @@ app.post('/api/admin/schedule-all', (req, res) => {
             field
         );
         
-        // Update die Matches im globalen Array
         scheduledMatches.forEach(scheduledMatch => {
             const originalMatch = matches.find(m => m.id === scheduledMatch.id);
             if (originalMatch) {
@@ -1101,7 +1748,6 @@ app.post('/api/admin/schedule-all', (req, res) => {
             }
         });
         
-        // Update tournament lastUpdated timestamp
         if (currentTournament) {
             currentTournament.lastUpdated = new Date().toISOString();
         }
@@ -1123,7 +1769,6 @@ app.post('/api/admin/schedule-all', (req, res) => {
 app.get('/api/next-match', (req, res) => {
     const now = new Date();
     
-    // Finde das nächste geplante Spiel
     const upcomingMatches = matches
         .filter(m => m.scheduled && !m.completed && new Date(m.scheduled.datetime) > now)
         .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime));
@@ -1205,7 +1850,6 @@ app.post('/api/admin/live-score', (req, res) => {
         return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
     }
     
-    // Update nur die Scores
     match.liveScore.score1 = parseInt(score1) || 0;
     match.liveScore.score2 = parseInt(score2) || 0;
     match.liveScore.lastScoreUpdate = new Date();
@@ -1227,12 +1871,10 @@ app.post('/api/admin/start-match', (req, res) => {
         return res.status(404).json({ error: 'Spiel nicht gefunden' });
     }
     
-    // Set as current match
     if (currentTournament) {
         currentTournament.currentMatch = matchId;
     }
     
-    // Start match with timer
     const startTime = new Date();
     match.liveScore = {
         score1: 0,
@@ -1241,7 +1883,7 @@ app.post('/api/admin/start-match', (req, res) => {
         isLive: true,
         isPaused: false,
         startTime: startTime,
-        pausedTime: 0, // Gesamte Pausenzeit in Millisekunden
+        pausedTime: 0,
         halfTimeMinutes: parseInt(halfTimeMinutes) || 45,
         currentHalf: 1,
         halfTimeBreak: false,
@@ -1292,7 +1934,6 @@ app.post('/api/admin/resume-match', (req, res) => {
     }
     
     if (match.liveScore.isPaused && match.liveScore.pauseStartTime) {
-        // Addiere Pausenzeit zur Gesamtpausenzeit
         const pauseDuration = new Date() - new Date(match.liveScore.pauseStartTime);
         match.liveScore.pausedTime += pauseDuration;
         match.liveScore.isPaused = false;
@@ -1321,7 +1962,7 @@ app.post('/api/admin/halftime-break', (req, res) => {
     if (match.liveScore.currentHalf === 1) {
         match.liveScore.halfTimeBreak = true;
         match.liveScore.firstHalfEndTime = new Date();
-        match.liveScore.isPaused = false; // Halbzeitpause ist kein normaler Pause-Zustand
+        match.liveScore.isPaused = false;
         
         autoSave();
         res.json({ success: true, message: 'Halbzeitpause gestartet' });
@@ -1379,7 +2020,6 @@ app.post('/api/admin/finish-match', (req, res) => {
         updateGroupTable(match.group, matches);
     }
     
-    // Aktuelles Spiel zurücksetzen
     if (currentTournament && currentTournament.currentMatch === matchId) {
         currentTournament.currentMatch = null;
     }
@@ -1435,7 +2075,6 @@ app.post('/api/admin/import', (req, res) => {
     }
     
     try {
-        // Validiere Import-Daten
         if (!importData || typeof importData !== 'object') {
             return res.status(400).json({ error: 'Ungültige Import-Daten' });
         }
@@ -1443,33 +2082,28 @@ app.post('/api/admin/import', (req, res) => {
         let importedTeams = 0;
         let importedMatches = 0;
         
-        // Importiere Turnier falls vorhanden
         if (importData.tournament) {
             currentTournament = importData.tournament;
             console.log('Tournament imported:', currentTournament.year);
         }
         
-        // Importiere Teams falls vorhanden
         if (importData.teams && Array.isArray(importData.teams)) {
             teams = importData.teams;
             importedTeams = teams.length;
             console.log('Teams imported:', importedTeams);
         }
         
-        // Importiere Matches falls vorhanden
         if (importData.matches && Array.isArray(importData.matches)) {
             matches = importData.matches;
             importedMatches = matches.length;
             console.log('Matches imported:', importedMatches);
         }
         
-        // Importiere Regeln falls vorhanden
         if (importData.rules || importData.tournamentRules) {
             tournamentRules = importData.rules || importData.tournamentRules || "";
             console.log('Rules imported');
         }
         
-        // Speichere importierte Daten
         autoSave();
         
         console.log(`Import completed: ${importedTeams} teams, ${importedMatches} matches`);

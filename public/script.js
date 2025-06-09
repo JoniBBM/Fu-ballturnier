@@ -14,6 +14,11 @@ const teamForm = document.getElementById('team-form');
 const tournamentForm = document.getElementById('tournament-form');
 const notification = document.getElementById('notification');
 
+// Auto-refresh state
+let lastScheduleUpdate = null;
+let scheduleRefreshInterval = null;
+let currentActiveTab = 'home';
+
 // Utility Functions
 function showNotification(message, type = 'success') {
     notification.textContent = message;
@@ -52,6 +57,9 @@ navBtns.forEach(btn => {
     btn.addEventListener('click', () => {
         const targetTab = btn.dataset.tab;
         
+        // Update current active tab
+        currentActiveTab = targetTab;
+        
         // Update active nav button
         navBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
@@ -63,65 +71,12 @@ navBtns.forEach(btn => {
         document.getElementById(targetTab).classList.add('active');
         
         // Load content based on tab
-        switch (targetTab) {
-            case 'home':
-                updateStats();
-                break;
-            case 'live':
-                loadLiveMatch();
-                break;
-            case 'register':
-                checkRegistrationStatus();
-                break;
-            case 'teams':
-                loadTeams();
-                break;
-            case 'schedule':
-                loadSchedule();
-                break;
-            case 'tables':
-                loadTables();
-                break;
-            case 'rules':
-                loadRules();
-                break;
-        }
+        loadTabContent(targetTab);
     });
 });
 
-// Auto-refresh mechanism for schedule updates
-let lastScheduleUpdate = null;
-let scheduleRefreshInterval = null;
-
-function startScheduleAutoRefresh() {
-    if (scheduleRefreshInterval) {
-        clearInterval(scheduleRefreshInterval);
-    }
-    
-    scheduleRefreshInterval = setInterval(async () => {
-        try {
-            // Check if schedule was updated
-            const response = await fetch('/api/tournament');
-            const data = await response.json();
-            
-            if (data.tournament && data.tournament.lastUpdated) {
-                if (lastScheduleUpdate && new Date(data.tournament.lastUpdated) > new Date(lastScheduleUpdate)) {
-                    console.log('Schedule updated, refreshing content...');
-                    // Refresh current tab content if it's schedule, teams, or tables
-                    const activeTab = document.querySelector('.nav-btn.active').dataset.tab;
-                    if (['schedule', 'teams', 'tables', 'home'].includes(activeTab)) {
-                        loadTabContent(activeTab);
-                    }
-                }
-                lastScheduleUpdate = data.tournament.lastUpdated;
-            }
-        } catch (error) {
-            console.error('Error checking for schedule updates:', error);
-        }
-    }, 5000); // Check every 5 seconds
-}
-
 function loadTabContent(tab) {
+    currentActiveTab = tab; // Update current tab
     switch (tab) {
         case 'home':
             updateStats();
@@ -145,6 +100,34 @@ function loadTabContent(tab) {
             loadRules();
             break;
     }
+}
+
+// Auto-refresh mechanism for schedule updates
+function startScheduleAutoRefresh() {
+    if (scheduleRefreshInterval) {
+        clearInterval(scheduleRefreshInterval);
+    }
+    
+    scheduleRefreshInterval = setInterval(async () => {
+        try {
+            // Check if schedule was updated
+            const response = await fetch('/api/tournament');
+            const data = await response.json();
+            
+            if (data.tournament && data.tournament.lastUpdated) {
+                if (lastScheduleUpdate && new Date(data.tournament.lastUpdated) > new Date(lastScheduleUpdate)) {
+                    console.log('Schedule updated, refreshing content...');
+                    // Refresh current tab content if it's schedule, teams, tables, or home
+                    if (['schedule', 'teams', 'tables', 'home'].includes(currentActiveTab)) {
+                        loadTabContent(currentActiveTab);
+                    }
+                }
+                lastScheduleUpdate = data.tournament.lastUpdated;
+            }
+        } catch (error) {
+            console.error('Error checking for schedule updates:', error);
+        }
+    }, 5000); // Check every 5 seconds
 }
 
 // Modal Management
@@ -212,6 +195,10 @@ teamForm.addEventListener('submit', async (e) => {
             showNotification('Team erfolgreich angemeldet!');
             teamForm.reset();
             updateStats();
+            // Auto-refresh teams list if on teams tab
+            if (currentActiveTab === 'teams') {
+                loadTeams();
+            }
         } else {
             showNotification(data.error, 'error');
         }
@@ -735,6 +722,20 @@ async function loadSchedule() {
         
         let html = '';
         
+        // Tournament format info
+        if (currentTournament.settings?.format) {
+            const formatNames = {
+                'groups': 'Gruppensystem',
+                'swiss': 'Champions League Format',
+                'league': 'Liga-Modus'
+            };
+            html += `
+                <div style="margin-bottom: 2rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #3b82f6;">
+                    <strong>Turnier-Format:</strong> ${formatNames[currentTournament.settings.format] || currentTournament.settings.format}
+                </div>
+            `;
+        }
+        
         // Geplante Spiele chronologisch
         if (scheduledMatches.length > 0) {
             html += '<div class="schedule-section"><h3><i class="fas fa-clock"></i> Geplante Spiele</h3>';
@@ -873,6 +874,20 @@ async function loadTables() {
         }
         
         let html = '';
+        
+        // Show tournament format info
+        if (data.tournament.settings?.format) {
+            const formatNames = {
+                'groups': 'Gruppentabellen',
+                'swiss': 'Champions League Tabelle',
+                'league': 'Liga-Tabelle'
+            };
+            html += `
+                <div style="margin-bottom: 2rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #3b82f6;">
+                    <strong>Format:</strong> ${formatNames[data.tournament.settings.format] || data.tournament.settings.format}
+                </div>
+            `;
+        }
         
         data.tournament.groups.forEach(group => {
             html += `
@@ -1028,6 +1043,10 @@ async function submitResult(matchId) {
             showNotification('Ergebnis erfolgreich gespeichert!');
             loadAdminContent();
             updateStats();
+            // Auto-refresh current tab if relevant
+            if (['schedule', 'tables'].includes(currentActiveTab)) {
+                loadTabContent(currentActiveTab);
+            }
         } else {
             showNotification(data.error, 'error');
         }

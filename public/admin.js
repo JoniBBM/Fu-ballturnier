@@ -14,6 +14,9 @@ const menuItems = document.querySelectorAll('.menu-item');
 const adminTabs = document.querySelectorAll('.admin-tab');
 const pageTitle = document.getElementById('page-title');
 
+// Auto-Refresh State
+let currentActiveTab = 'dashboard';
+
 // Utility Functions
 function showNotification(message, type = 'success') {
     notification.textContent = message;
@@ -29,11 +32,48 @@ function formatDateTime(date) {
     return new Date(date).toLocaleString('de-DE');
 }
 
-/**
- * KORREKTUR: Die createModal Funktion wurde überarbeitet, um Event Listener
- * programmatisch hinzuzufügen, anstatt unsichere inline 'onclick' Attribute zu verwenden.
- * Dies behebt die "Cannot access '...' before initialization" Fehler.
- */
+// AUTO-REFRESH SYSTEM
+async function autoRefreshCurrentTab() {
+    try {
+        // Lade immer neue Basis-Daten
+        await loadInitialData();
+        
+        // Refresh nur den aktuellen Tab-Inhalt
+        switch(currentActiveTab) {
+            case 'dashboard':
+                loadDashboard();
+                break;
+            case 'tournament':
+                loadTournamentManagement();
+                break;
+            case 'teams':
+                loadTeams();
+                break;
+            case 'matches':
+                loadMatches();
+                break;
+            case 'live':
+                loadLiveControl();
+                break;
+            case 'results':
+                loadResults();
+                break;
+            case 'rules':
+                loadRulesManagement();
+                break;
+            case 'settings':
+                loadSettings();
+                break;
+        }
+        
+        updateTournamentInfo();
+        console.log(`Auto-refreshed tab: ${currentActiveTab}`);
+    } catch (error) {
+        console.error('Auto-refresh failed:', error);
+    }
+}
+
+// Modal Functions (Verbessert)
 function createModal(title, content, actions = []) {
     const modalId = 'dynamic-modal-' + Date.now();
     const modalHtml = `
@@ -61,7 +101,7 @@ function createModal(title, content, actions = []) {
     // Event Listener für Schließen-Button
     modalElement.querySelector('.close-btn').addEventListener('click', () => closeModal(modalId));
     
-    // Event Listener für Action-Buttons im Footer
+    // Event Listener für Action-Buttons
     actions.forEach((action, index) => {
         const button = modalElement.querySelector(`#modal-action-${modalId}-${index}`);
         if (button && typeof action.handler === 'function') {
@@ -119,9 +159,7 @@ async function handleTournamentCreation(e) {
         if (data.success) {
             currentTournament = data.tournament;
             showNotification('Turnier erfolgreich erstellt! Teams können sich jetzt anmelden.');
-            await loadInitialData();
-            updateTournamentInfo();
-            loadTournamentManagement();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH STATT MANUAL REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -137,11 +175,9 @@ function setupTournamentForm() {
     const form = document.getElementById('tournament-creation-form');
     if (form) {
         console.log('Tournament form found, adding event listener');
-        // Entferne alte Event Listener, um Duplikate zu vermeiden
         const newForm = form.cloneNode(true);
         form.parentNode.replaceChild(newForm, form);
         
-        // Füge Event Listener hinzu
         newForm.addEventListener('submit', handleTournamentCreation);
         
         console.log('Event listener added to tournament form');
@@ -181,96 +217,14 @@ function getStatusInfo(status) {
     return statusMap[status] || statusMap['registration'];
 }
 
-// Tournament Management
-function loadTournamentManagement() {
-    console.log('Loading tournament management');
-    const tournamentStatus = document.getElementById('tournament-status');
-    const tournamentCreation = document.getElementById('tournament-creation');
-    const registrationManagement = document.getElementById('registration-management');
-    
-    if (!currentTournament) {
-        // Kein Turnier vorhanden - Erstellung anzeigen
-        console.log('No current tournament, showing creation form');
-        tournamentStatus.innerHTML = `
-            <div class="status-card info">
-                <i class="fas fa-info-circle"></i>
-                <h4>Kein aktives Turnier</h4>
-                <p>Erstelle ein neues Turnier für dieses Jahr.</p>
-            </div>
-        `;
-        tournamentCreation.style.display = 'block';
-        registrationManagement.style.display = 'none';
-        
-        // Setup Event Listener nach einem kurzen Delay
-        setTimeout(() => {
-            setupTournamentForm();
-        }, 100);
-        
-    } else {
-        // Turnier vorhanden - Status anzeigen
-        console.log('Current tournament exists:', currentTournament);
-        const statusInfo = getStatusInfo(currentTournament.status);
-        tournamentStatus.innerHTML = `
-            <div class="status-card ${statusInfo.type}">
-                <i class="fas ${statusInfo.icon}"></i>
-                <h4>Turnier ${currentTournament.year} - ${statusInfo.title}</h4>
-                <p>${statusInfo.description}</p>
-                <div class="tournament-stats">
-                    <span><strong>Teams:</strong> ${teams.length}</span>
-                    <span><strong>Status:</strong> ${statusInfo.title}</span>
-                    ${currentTournament.registrationClosedAt ? 
-                        `<span><strong>Anmeldung geschlossen:</strong> ${new Date(currentTournament.registrationClosedAt).toLocaleDateString('de-DE')}</span>` : 
-                        ''
-                    }
-                </div>
-                <div class="tournament-actions" style="margin-top: 1rem;">
-                    <button class="btn btn-warning" onclick="changeTournamentStatus()">
-                        <i class="fas fa-edit"></i> Status ändern
-                    </button>
-                    <button class="btn btn-outline" onclick="reorganizeGroups()">
-                        <i class="fas fa-refresh"></i> Gruppen neu organisieren
-                    </button>
-                    <button class="btn btn-outline" onclick="resetAllResults()">
-                        <i class="fas fa-undo"></i> Alle Ergebnisse zurücksetzen
-                    </button>
-                    <button class="btn btn-outline" onclick="resetAllSchedules()">
-                        <i class="fas fa-calendar-times"></i> Zeitpläne zurücksetzen
-                    </button>
-                    <button class="btn btn-outline" onclick="exportTournamentData()">
-                        <i class="fas fa-download"></i> Daten exportieren
-                    </button>
-                    <button class="btn btn-danger" onclick="resetTournamentComplete()">
-                        <i class="fas fa-trash"></i> Turnier komplett zurücksetzen
-                    </button>
-                </div>
-            </div>
-        `;
-        
-        if (currentTournament.status === 'registration') {
-            registrationManagement.innerHTML = `
-                <h4>Anmeldephase verwalten</h4>
-                <p>Aktuell können sich Teams anmelden. Schließe die Anmeldung, um den Spielplan zu erstellen.</p>
-                <div class="registration-actions">
-                    <button class="btn btn-warning" onclick="closeRegistration()" ${teams.length < 4 ? 'disabled' : ''}>
-                        <i class="fas fa-lock"></i> Anmeldung schließen und Spielplan erstellen
-                    </button>
-                    ${teams.length < 4 ? '<p><small>Mindestens 4 Teams erforderlich</small></p>' : ''}
-                </div>
-            `;
-            registrationManagement.style.display = 'block';
-        } else {
-            registrationManagement.style.display = 'none';
-        }
-        
-        tournamentCreation.style.display = 'none';
-    }
-}
-
 // Navigation
 menuItems.forEach(item => {
     item.addEventListener('click', (e) => {
         e.preventDefault();
         const targetTab = item.dataset.tab;
+        
+        // Update current active tab
+        currentActiveTab = targetTab;
         
         // Update active menu item
         menuItems.forEach(mi => mi.classList.remove('active'));
@@ -368,6 +322,7 @@ function updateTournamentInfo() {
 
 // Tab Content Loading
 async function loadTabContent(tab) {
+    currentActiveTab = tab; // Track current tab
     switch (tab) {
         case 'dashboard':
             loadDashboard();
@@ -396,150 +351,414 @@ async function loadTabContent(tab) {
     }
 }
 
-// Dashboard
-function loadDashboard() {
-    // Update stats
-    document.getElementById('total-teams').textContent = teams.length;
-    document.getElementById('total-matches').textContent = matches.length;
-    document.getElementById('completed-matches').textContent = matches.filter(m => m.completed).length;
-    document.getElementById('pending-matches').textContent = matches.filter(m => !m.completed).length;
+// Tournament Management
+function loadTournamentManagement() {
+    console.log('Loading tournament management');
+    const tournamentStatus = document.getElementById('tournament-status');
+    const tournamentCreation = document.getElementById('tournament-creation');
+    const registrationManagement = document.getElementById('registration-management');
     
-    // Current match
-    const currentMatchDisplay = document.getElementById('current-match-display');
-    if (currentTournament && currentTournament.currentMatch) {
-        const match = matches.find(m => m.id === currentTournament.currentMatch);
-        if (match) {
-            currentMatchDisplay.innerHTML = `
-                <div class="current-match">
-                    <h4>${match.team1} vs ${match.team2}</h4>
-                    ${match.liveScore ? `
-                        <div class="live-score">
-                            ${match.liveScore.score1} : ${match.liveScore.score2}
-                            <span class="minute">${match.liveScore.minute}'</span>
-                        </div>
-                    ` : '<p>Spiel läuft</p>'}
-                    ${match.referee ? `
-                        <div class="match-referee">
-                            <small><i class="fas fa-whistle"></i> Schiedsrichter: ${match.referee.team}</small>
-                        </div>
-                    ` : ''}
-                </div>
-            `;
-        }
+    if (!currentTournament) {
+        console.log('No current tournament, showing creation form');
+        tournamentStatus.innerHTML = `
+            <div class="status-card info">
+                <i class="fas fa-info-circle"></i>
+                <h4>Kein aktives Turnier</h4>
+                <p>Erstelle ein neues Turnier für dieses Jahr.</p>
+            </div>
+        `;
+        tournamentCreation.style.display = 'block';
+        registrationManagement.style.display = 'none';
+        
+        setTimeout(() => {
+            setupTournamentForm();
+        }, 100);
+        
     } else {
-        currentMatchDisplay.innerHTML = '<p>Kein Spiel läuft gerade</p>';
-    }
-    
-    // Upcoming matches
-    loadUpcomingMatches();
-}
-
-async function loadUpcomingMatches() {
-    try {
-        const response = await fetch('/api/next-match');
-        const data = await response.json();
+        console.log('Current tournament exists:', currentTournament);
+        const statusInfo = getStatusInfo(currentTournament.status);
+        tournamentStatus.innerHTML = `
+            <div class="status-card ${statusInfo.type}">
+                <i class="fas ${statusInfo.icon}"></i>
+                <h4>Turnier ${currentTournament.year} - ${statusInfo.title}</h4>
+                <p>${statusInfo.description}</p>
+                <div class="tournament-stats">
+                    <span><strong>Teams:</strong> ${teams.length}</span>
+                    <span><strong>Status:</strong> ${statusInfo.title}</span>
+                    <span><strong>Format:</strong> ${currentTournament.settings?.format || 'Nicht festgelegt'}</span>
+                    ${currentTournament.registrationClosedAt ? 
+                        `<span><strong>Anmeldung geschlossen:</strong> ${new Date(currentTournament.registrationClosedAt).toLocaleDateString('de-DE')}</span>` : 
+                        ''
+                    }
+                </div>
+                <div class="tournament-actions" style="margin-top: 1rem;">
+                    <button class="btn btn-warning" onclick="changeTournamentStatus()">
+                        <i class="fas fa-edit"></i> Status ändern
+                    </button>
+                    <button class="btn btn-outline" onclick="reorganizeGroups()">
+                        <i class="fas fa-refresh"></i> Gruppen neu organisieren
+                    </button>
+                    <button class="btn btn-outline" onclick="resetAllResults()">
+                        <i class="fas fa-undo"></i> Alle Ergebnisse zurücksetzen
+                    </button>
+                    <button class="btn btn-outline" onclick="resetAllSchedules()">
+                        <i class="fas fa-calendar-times"></i> Zeitpläne zurücksetzen
+                    </button>
+                    <button class="btn btn-outline" onclick="exportTournamentData()">
+                        <i class="fas fa-download"></i> Daten exportieren
+                    </button>
+                    <button class="btn btn-danger" onclick="resetTournamentComplete()">
+                        <i class="fas fa-trash"></i> Turnier komplett zurücksetzen
+                    </button>
+                </div>
+            </div>
+        `;
         
-        const upcomingMatches = document.getElementById('upcoming-matches');
-        
-        if (data.nextMatch) {
-            const nextMatch = data.nextMatch;
-            const nextTime = new Date(nextMatch.datetime);
-            const timeUntilMatch = nextTime - new Date();
-            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
-            
-            upcomingMatches.innerHTML = `
-                <div class="next-match-admin">
-                    <div class="next-match-time">
-                        <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
-                        <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
-                    </div>
-                    <div class="next-match-info">
-                        <strong>${nextMatch.team1} vs ${nextMatch.team2}</strong>
-                        <div class="match-details">
-                            <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
-                            <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
-                        </div>
-                        ${nextMatch.referee ? `
-                            <div class="match-referee">
-                                <i class="fas fa-whistle"></i>
-                                <span>Schiedsrichter: <strong>${nextMatch.referee.team}</strong> (${nextMatch.referee.group})</span>
-                            </div>
-                        ` : ''}
-                    </div>
-                    <div class="next-match-actions">
-                        <button class="btn btn-small btn-success" onclick="startMatchDialog('${nextMatch.id}')">
-                            <i class="fas fa-play"></i> Spiel starten
-                        </button>
-                    </div>
+        if (currentTournament.status === 'registration') {
+            registrationManagement.innerHTML = `
+                <h4>Anmeldephase verwalten</h4>
+                <p>Aktuell können sich Teams anmelden. Wähle das Format und schließe die Anmeldung, um den Spielplan zu erstellen.</p>
+                <div class="registration-actions">
+                    <button class="btn btn-warning" onclick="openAdvancedRegistrationDialog()" ${teams.length < 4 ? 'disabled' : ''}>
+                        <i class="fas fa-cog"></i> Anmeldung schließen - Erweiterte Optionen
+                    </button>
+                    ${teams.length < 4 ? '<p><small>Mindestens 4 Teams erforderlich</small></p>' : ''}
                 </div>
             `;
+            registrationManagement.style.display = 'block';
         } else {
-            // Show next 3 scheduled matches if no specific next match
-            const nextMatches = matches
-                .filter(m => !m.completed && m.scheduled)
-                .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime))
-                .slice(0, 3);
-            
-            if (nextMatches.length > 0) {
-                upcomingMatches.innerHTML = nextMatches.map(match => `
-                    <div class="upcoming-match">
-                        <div><strong>${match.team1} vs ${match.team2}</strong></div>
-                        <div><small>${formatDateTime(match.scheduled.datetime)}</small></div>
-                        ${match.referee ? `
-                            <div class="match-referee">
-                                <small><i class="fas fa-whistle"></i> ${match.referee.team}</small>
-                            </div>
-                        ` : ''}
-                    </div>
-                `).join('');
-            } else {
-                upcomingMatches.innerHTML = '<p>Keine bevorstehenden Spiele</p>';
-            }
+            registrationManagement.style.display = 'none';
         }
-    } catch (error) {
-        console.error('Error loading upcoming matches:', error);
-        document.getElementById('upcoming-matches').innerHTML = '<p>Fehler beim Laden der nächsten Spiele</p>';
+        
+        tournamentCreation.style.display = 'none';
     }
 }
 
-// Close Registration Functions
-async function closeRegistration() {
+// NEUE ERWEITERTE ANMELDUNG-SCHLIESSEN DIALOG
+async function openAdvancedRegistrationDialog() {
     if (teams.length < 4) {
         showNotification('Mindestens 4 Teams erforderlich', 'error');
         return;
     }
     
-    // Berechne verfügbare Platzierungsspiele basierend auf Teamanzahl
-    const possiblePlacements = calculatePossiblePlacements(teams.length);
+    const dialogContent = `
+        <div style="margin-bottom: 2rem;">
+            <h4>Turnier-Format wählen</h4>
+            <p><strong>${teams.length} Teams</strong> haben sich angemeldet. Wähle das gewünschte Format:</p>
+        </div>
+        
+        <div style="margin-bottom: 2rem;">
+            <div class="format-selector">
+                <label style="display: block; margin-bottom: 1rem; cursor: pointer; padding: 1rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <input type="radio" name="tournament-format" value="groups" checked style="margin-right: 1rem;">
+                    <strong>Gruppen-System</strong> <small>(klassisch)</small>
+                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+                        Teams werden in Gruppen aufgeteilt, Gruppenphase + K.O.-Phase
+                    </div>
+                </label>
+                
+                <label style="display: block; margin-bottom: 1rem; cursor: pointer; padding: 1rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <input type="radio" name="tournament-format" value="swiss" style="margin-right: 1rem;">
+                    <strong>Champions League Format</strong> <small>(modern)</small>
+                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+                        Alle Teams in einer Liga, jedes Team spielt gegen verschiedene Gegner
+                    </div>
+                </label>
+                
+                <label style="display: block; margin-bottom: 1rem; cursor: pointer; padding: 1rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <input type="radio" name="tournament-format" value="league" style="margin-right: 1rem;">
+                    <strong>Liga-Modus</strong> <small>(fair)</small>
+                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+                        Alle Teams in einer Liga, garantiert gleiche Spielanzahl pro Team
+                    </div>
+                </label>
+            </div>
+        </div>
+        
+        <!-- Options Container -->
+        <div id="format-options">
+            <!-- Wird dynamisch gefüllt -->
+        </div>
+        
+        <div style="margin-top: 2rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem;">
+            <button type="button" class="btn btn-outline" onclick="analyzeCurrentConfiguration()" style="margin-bottom: 1rem;">
+                <i class="fas fa-brain"></i> Konfiguration analysieren & Empfehlungen erhalten
+            </button>
+            <div id="analysis-results" style="display: none;">
+                <!-- Analysis results will be shown here -->
+            </div>
+        </div>
+    `;
     
-    // Erstelle Dialog für Gruppengröße und Platzierungsspiele
-    const tournamentOptions = await createTournamentDialog(possiblePlacements);
+    const modal = createModal('Turnier-Konfiguration', dialogContent, [
+        { text: 'Spielplan erstellen', handler: (modalId) => submitAdvancedRegistration(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
     
-    if (!tournamentOptions) {
-        return; // User hat abgebrochen
+    // Event listeners für Format-Änderung
+    const formatRadios = modal.querySelectorAll('input[name="tournament-format"]');
+    formatRadios.forEach(radio => {
+        radio.addEventListener('change', () => {
+            updateFormatOptions(radio.value, modal);
+            // Update radio button styling
+            formatRadios.forEach(r => {
+                const label = r.closest('label');
+                if (r.checked) {
+                    label.style.borderColor = '#dc2626';
+                    label.style.backgroundColor = '#fef2f2';
+                } else {
+                    label.style.borderColor = '#ccc';
+                    label.style.backgroundColor = 'white';
+                }
+            });
+        });
+    });
+    
+    // Initial format options load
+    updateFormatOptions('groups', modal);
+    
+    // Initial styling
+    formatRadios[0].closest('label').style.borderColor = '#dc2626';
+    formatRadios[0].closest('label').style.backgroundColor = '#fef2f2';
+}
+
+function updateFormatOptions(format, modal) {
+    const optionsContainer = modal.querySelector('#format-options');
+    
+    if (format === 'groups') {
+        optionsContainer.innerHTML = `
+            <h5>Gruppen-Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Teams pro Gruppe:</label>
+                <select id="group-size" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="3">3 Teams pro Gruppe</option>
+                    <option value="4" selected>4 Teams pro Gruppe</option>
+                    <option value="5">5 Teams pro Gruppe</option>
+                </select>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Max. Spiele pro Team in Gruppenphase:</label>
+                <select id="max-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="">Alle möglichen Spiele (Jeder gegen Jeden)</option>
+                    <option value="2">Maximal 2 Spiele pro Team</option>
+                    <option value="3">Maximal 3 Spiele pro Team</option>
+                    <option value="4">Maximal 4 Spiele pro Team</option>
+                </select>
+            </div>
+            <h5>K.O.-Phase Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-quarterfinals" ${teams.length >= 8 ? 'checked' : 'disabled'}> 
+                    Viertelfinale (nur ab 8+ Teams)
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-third-place" checked> Spiel um Platz 3
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-fifth-place"> Spiel um Platz 5
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-seventh-place"> Spiel um Platz 7
+                </label>
+            </div>
+        `;
+    } else if (format === 'swiss') {
+        const recommendedRounds = Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1);
+        optionsContainer.innerHTML = `
+            <h5>Champions League Format Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Anzahl Runden:</label>
+                <select id="swiss-rounds" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="3">3 Runden</option>
+                    <option value="4">4 Runden</option>
+                    <option value="5" ${recommendedRounds === 5 ? 'selected' : ''}>5 Runden</option>
+                    <option value="6" ${recommendedRounds === 6 ? 'selected' : ''}>6 Runden</option>
+                    <option value="7" ${recommendedRounds === 7 ? 'selected' : ''}>7 Runden</option>
+                </select>
+                <small style="color: #666; margin-top: 0.5rem; display: block;">
+                    Empfohlen für ${teams.length} Teams: ${recommendedRounds} Runden
+                </small>
+            </div>
+            <h5>K.O.-Phase Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-quarterfinals" ${teams.length >= 8 ? 'checked' : 'disabled'}> 
+                    Viertelfinale (nur ab 8+ Teams)
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-third-place" checked> Spiel um Platz 3
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-fifth-place"> Spiel um Platz 5
+                </label>
+            </div>
+        `;
+    } else if (format === 'league') {
+        const maxPossible = teams.length - 1;
+        optionsContainer.innerHTML = `
+            <h5>Liga-Modus Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Spiele pro Team:</label>
+                <select id="league-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="3">3 Spiele pro Team</option>
+                    <option value="4">4 Spiele pro Team</option>
+                    <option value="5" ${maxPossible >= 5 ? 'selected' : ''}>5 Spiele pro Team</option>
+                    <option value="${maxPossible}" ${maxPossible < 5 ? 'selected' : ''}>Alle möglichen (${maxPossible} pro Team)</option>
+                </select>
+            </div>
+            <h5>K.O.-Phase Einstellungen</h5>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-quarterfinals" ${teams.length >= 8 ? 'checked' : 'disabled'}> 
+                    Viertelfinale (nur ab 8+ Teams)
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-third-place" checked> Spiel um Platz 3
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-fifth-place"> Spiel um Platz 5
+                </label>
+            </div>
+        `;
+    }
+}
+
+async function analyzeCurrentConfiguration() {
+    const modal = document.querySelector('.modal.active');
+    const format = modal.querySelector('input[name="tournament-format"]:checked').value;
+    
+    let options = {};
+    
+    if (format === 'groups') {
+        options.groupSize = parseInt(modal.querySelector('#group-size').value);
+        options.maxGamesPerTeam = modal.querySelector('#max-games').value ? parseInt(modal.querySelector('#max-games').value) : null;
+    } else if (format === 'swiss') {
+        options.rounds = parseInt(modal.querySelector('#swiss-rounds').value);
+    } else if (format === 'league') {
+        options.maxGamesPerTeam = parseInt(modal.querySelector('#league-games').value);
     }
     
     try {
-        const response = await fetch('/api/admin/close-registration', {
+        const response = await fetch('/api/admin/analyze-tournament-config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 password: adminPassword,
-                groupSize: tournamentOptions.groupSize,
-                enableThirdPlace: tournamentOptions.thirdPlace,
-                enableFifthPlace: tournamentOptions.fifthPlace,
-                enableSeventhPlace: tournamentOptions.seventhPlace,
-                maxGamesPerTeam: tournamentOptions.maxGamesPerTeam
+                format: format,
+                options: options
             })
         });
         
         const data = await response.json();
         
         if (data.success) {
+            displayAnalysisResults(data.analysis, modal);
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler bei der Analyse', 'error');
+        console.error('Analysis error:', error);
+    }
+}
+
+function displayAnalysisResults(analysis, modal) {
+    const resultsContainer = modal.querySelector('#analysis-results');
+    
+    let html = '<h5>Analyse-Ergebnisse:</h5>';
+    
+    if (analysis.feasible) {
+        html += '<div style="background: #f0fdf4; border: 1px solid #16a34a; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+        html += '<strong style="color: #16a34a;">✓ Konfiguration ist durchführbar</strong>';
+        html += '</div>';
+    } else {
+        html += '<div style="background: #fef2f2; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+        html += '<strong style="color: #dc2626;">⚠ Probleme mit der Konfiguration:</strong>';
+        analysis.warnings.forEach(warning => {
+            html += `<div style="margin-top: 0.5rem;">• ${warning}</div>`;
+        });
+        html += '</div>';
+    }
+    
+    if (analysis.recommendations.length > 0) {
+        html += '<div style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+        html += '<strong style="color: #f59e0b;">💡 Empfehlungen:</strong>';
+        analysis.recommendations.forEach(rec => {
+            html += `<div style="margin-top: 0.5rem;">• ${rec}</div>`;
+        });
+        html += '</div>';
+    }
+    
+    if (analysis.alternatives.length > 0) {
+        html += '<div style="background: #f0f9ff; border: 1px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+        html += '<strong style="color: #3b82f6;">🔄 Alternative Formate:</strong>';
+        analysis.alternatives.forEach(alt => {
+            html += `<div style="margin-top: 1rem; padding: 0.5rem; background: white; border-radius: 0.25rem;">`;
+            html += `<strong>${alt.description}</strong>`;
+            if (alt.advantages) {
+                html += '<div style="margin-top: 0.5rem; font-size: 0.9rem;">';
+                alt.advantages.forEach(adv => {
+                    html += `<div>✓ ${adv}</div>`;
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+        });
+        html += '</div>';
+    }
+    
+    resultsContainer.innerHTML = html;
+    resultsContainer.style.display = 'block';
+}
+
+async function submitAdvancedRegistration(modalId) {
+    const modal = document.getElementById(modalId);
+    const format = modal.querySelector('input[name="tournament-format"]:checked').value;
+    
+    let requestData = {
+        password: adminPassword,
+        format: format
+    };
+    
+    // Format-spezifische Optionen sammeln
+    if (format === 'groups') {
+        requestData.groupSize = parseInt(modal.querySelector('#group-size').value);
+        const maxGamesValue = modal.querySelector('#max-games').value;
+        requestData.maxGamesPerTeam = maxGamesValue ? parseInt(maxGamesValue) : null;
+        
+        requestData.enableQuarterfinals = modal.querySelector('#enable-quarterfinals')?.checked || false;
+        requestData.enableThirdPlace = modal.querySelector('#enable-third-place')?.checked || false;
+        requestData.enableFifthPlace = modal.querySelector('#enable-fifth-place')?.checked || false;
+        requestData.enableSeventhPlace = modal.querySelector('#enable-seventh-place')?.checked || false;
+        
+    } else if (format === 'swiss') {
+        requestData.rounds = parseInt(modal.querySelector('#swiss-rounds').value);
+        
+        requestData.enableQuarterfinals = modal.querySelector('#enable-quarterfinals')?.checked || false;
+        requestData.enableThirdPlace = modal.querySelector('#enable-third-place')?.checked || false;
+        requestData.enableFifthPlace = modal.querySelector('#enable-fifth-place')?.checked || false;
+        
+    } else if (format === 'league') {
+        requestData.maxGamesPerTeam = parseInt(modal.querySelector('#league-games').value);
+        
+        requestData.enableQuarterfinals = modal.querySelector('#enable-quarterfinals')?.checked || false;
+        requestData.enableThirdPlace = modal.querySelector('#enable-third-place')?.checked || false;
+        requestData.enableFifthPlace = modal.querySelector('#enable-fifth-place')?.checked || false;
+    }
+    
+    try {
+        const response = await fetch('/api/admin/close-registration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestData)
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
             showNotification(data.message || `Anmeldung geschlossen! Spielplan mit ${data.matchesGenerated} Spielen erstellt.`);
-            await loadInitialData();
-            updateTournamentInfo();
-            loadTournamentManagement();
+            closeModal(modalId);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -548,131 +767,6 @@ async function closeRegistration() {
         console.error('Close registration error:', error);
     }
 }
-
-// Helper Functions
-function calculatePossiblePlacements(teamCount) {
-    const placements = {
-        thirdPlace: teamCount >= 4,
-        fifthPlace: teamCount >= 6,
-        seventhPlace: teamCount >= 8
-    };
-    return placements;
-}
-
-function createTournamentDialog(possiblePlacements) {
-    let dialogHtml = `
-        <div style="margin-bottom: 1.5rem;">
-            <h4>Turnier-Einstellungen festlegen</h4>
-            <p>Für ${teams.length} angemeldete Teams:</p>
-        </div>
-        
-        <div style="margin-bottom: 1.5rem;">
-            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">
-                Teams pro Gruppe:
-            </label>
-            <select id="tournament-group-size" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                <option value="3">3 Teams pro Gruppe</option>
-                <option value="4" selected>4 Teams pro Gruppe</option>
-                <option value="5">5 Teams pro Gruppe</option>
-            </select>
-        </div>
-        
-        <div style="margin-bottom: 1.5rem;">
-            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">
-                Maximale Spiele pro Team in der Gruppenphase:
-            </label>
-            <select id="tournament-max-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                <option value="">Alle möglichen Spiele (Jeder gegen Jeden)</option>
-                <option value="2">Maximal 2 Spiele pro Team</option>
-                <option value="3">Maximal 3 Spiele pro Team</option>
-                <option value="4">Maximal 4 Spiele pro Team</option>
-            </select>
-            <small style="color: #666; margin-top: 0.5rem; display: block;">
-                Wenn z.B. 5 Teams in einer Gruppe sind, können Sie begrenzen, dass jedes Team nur gegen 3 zufällige Gegner spielt.
-            </small>
-        </div>
-        
-        <div style="margin-bottom: 1rem;">
-            <h5 style="margin-bottom: 0.5rem;">Platzierungsspiele:</h5>
-        </div>
-    `;
-    
-    if (possiblePlacements.thirdPlace) {
-        dialogHtml += `
-            <label style="display: block; margin-bottom: 0.5rem;">
-                <input type="checkbox" id="placement-third" checked> Spiel um Platz 3
-            </label>
-        `;
-    }
-    
-    if (possiblePlacements.fifthPlace) {
-        dialogHtml += `
-            <label style="display: block; margin-bottom: 0.5rem;">
-                <input type="checkbox" id="placement-fifth"> Spiel um Platz 5
-            </label>
-        `;
-    }
-    
-    if (possiblePlacements.seventhPlace) {
-        dialogHtml += `
-            <label style="display: block; margin-bottom: 0.5rem;">
-                <input type="checkbox" id="placement-seventh"> Spiel um Platz 7
-            </label>
-        `;
-    }
-    
-    const modalDiv = document.createElement('div');
-    modalDiv.style.cssText = `
-        position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
-        background: rgba(0,0,0,0.5); z-index: 10000; 
-        display: flex; align-items: center; justify-content: center;
-    `;
-    
-    modalDiv.innerHTML = `
-        <div style="background: white; padding: 2rem; border-radius: 1rem; max-width: 600px; width: 90%;">
-            ${dialogHtml}
-            <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
-                <button id="confirm-tournament" style="background: #dc2626; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer;">
-                    Spielplan erstellen
-                </button>
-                <button id="cancel-tournament" style="background: #6b7280; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer;">
-                    Abbrechen
-                </button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(modalDiv);
-    
-    return new Promise((resolve) => {
-        document.getElementById('confirm-tournament').onclick = () => {
-            const maxGamesValue = document.getElementById('tournament-max-games').value;
-            const result = {
-                groupSize: parseInt(document.getElementById('tournament-group-size').value),
-                maxGamesPerTeam: maxGamesValue ? parseInt(maxGamesValue) : null,
-                thirdPlace: document.getElementById('placement-third')?.checked || false,
-                fifthPlace: document.getElementById('placement-fifth')?.checked || false,
-                seventhPlace: document.getElementById('placement-seventh')?.checked || false
-            };
-            document.body.removeChild(modalDiv);
-            resolve(result);
-        };
-        
-        document.getElementById('cancel-tournament').onclick = () => {
-            document.body.removeChild(modalDiv);
-            resolve(null);
-        };
-        
-        modalDiv.onclick = (e) => {
-            if (e.target === modalDiv) {
-                document.body.removeChild(modalDiv);
-                resolve(null);
-            }
-        };
-    });
-}
-
-// NEW ADMIN MANAGEMENT FUNCTIONS
 
 // Change Tournament Status
 async function changeTournamentStatus() {
@@ -720,8 +814,7 @@ async function saveNewStatus(modalId) {
         if (data.success) {
             showNotification(`Turnier-Status erfolgreich auf "${newStatus}" geändert`);
             closeModal(modalId);
-            await loadInitialData();
-            loadTournamentManagement();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -772,8 +865,7 @@ async function executeReorganizeGroups(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await loadInitialData();
-            loadTournamentManagement();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -810,7 +902,7 @@ async function executeResetResults(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -847,7 +939,7 @@ async function executeResetSchedules(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -929,8 +1021,7 @@ async function executeResetComplete(modalId) {
             teams = [];
             matches = [];
             
-            updateTournamentInfo();
-            loadTournamentManagement();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -943,7 +1034,6 @@ async function executeResetComplete(modalId) {
 async function loadRulesManagement() {
     const rulesManagement = document.getElementById('rules-management');
     
-    // Load current rules
     try {
         const response = await fetch('/api/rules');
         const data = await response.json();
@@ -986,6 +1076,111 @@ async function saveRules() {
 async function loadCurrentRules() {
     await loadRulesManagement();
     showNotification('Regeln neu geladen');
+}
+
+// Dashboard
+function loadDashboard() {
+    // Update stats
+    document.getElementById('total-teams').textContent = teams.length;
+    document.getElementById('total-matches').textContent = matches.length;
+    document.getElementById('completed-matches').textContent = matches.filter(m => m.completed).length;
+    document.getElementById('pending-matches').textContent = matches.filter(m => !m.completed).length;
+    
+    // Current match
+    const currentMatchDisplay = document.getElementById('current-match-display');
+    if (currentTournament && currentTournament.currentMatch) {
+        const match = matches.find(m => m.id === currentTournament.currentMatch);
+        if (match) {
+            currentMatchDisplay.innerHTML = `
+                <div class="current-match">
+                    <h4>${match.team1} vs ${match.team2}</h4>
+                    ${match.liveScore ? `
+                        <div class="live-score">
+                            ${match.liveScore.score1} : ${match.liveScore.score2}
+                            <span class="minute">${match.liveScore.minute}'</span>
+                        </div>
+                    ` : '<p>Spiel läuft</p>'}
+                    ${match.referee ? `
+                        <div class="match-referee">
+                            <small><i class="fas fa-whistle"></i> Schiedsrichter: ${match.referee.team}</small>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+    } else {
+        currentMatchDisplay.innerHTML = '<p>Kein Spiel läuft gerade</p>';
+    }
+    
+    // Upcoming matches
+    loadUpcomingMatches();
+}
+
+async function loadUpcomingMatches() {
+    try {
+        const response = await fetch('/api/next-match');
+        const data = await response.json();
+        
+        const upcomingMatches = document.getElementById('upcoming-matches');
+        
+        if (data.nextMatch) {
+            const nextMatch = data.nextMatch;
+            const nextTime = new Date(nextMatch.datetime);
+            const timeUntilMatch = nextTime - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            
+            upcomingMatches.innerHTML = `
+                <div class="next-match-admin">
+                    <div class="next-match-time">
+                        <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                        <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
+                    </div>
+                    <div class="next-match-info">
+                        <strong>${nextMatch.team1} vs ${nextMatch.team2}</strong>
+                        <div class="match-details">
+                            <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
+                            <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
+                        </div>
+                        ${nextMatch.referee ? `
+                            <div class="match-referee">
+                                <i class="fas fa-whistle"></i>
+                                <span>Schiedsrichter: <strong>${nextMatch.referee.team}</strong> (${nextMatch.referee.group})</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="next-match-actions">
+                        <button class="btn btn-small btn-success" onclick="startMatchDialog('${nextMatch.id}')">
+                            <i class="fas fa-play"></i> Spiel starten
+                        </button>
+                    </div>
+                </div>
+            `;
+        } else {
+            const nextMatches = matches
+                .filter(m => !m.completed && m.scheduled)
+                .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime))
+                .slice(0, 3);
+            
+            if (nextMatches.length > 0) {
+                upcomingMatches.innerHTML = nextMatches.map(match => `
+                    <div class="upcoming-match">
+                        <div><strong>${match.team1} vs ${match.team2}</strong></div>
+                        <div><small>${formatDateTime(match.scheduled.datetime)}</small></div>
+                        ${match.referee ? `
+                            <div class="match-referee">
+                                <small><i class="fas fa-whistle"></i> ${match.referee.team}</small>
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('');
+            } else {
+                upcomingMatches.innerHTML = '<p>Keine bevorstehenden Spiele</p>';
+            }
+        }
+    } catch (error) {
+        console.error('Error loading upcoming matches:', error);
+        document.getElementById('upcoming-matches').innerHTML = '<p>Fehler beim Laden der nächsten Spiele</p>';
+    }
 }
 
 // Teams verwalten
@@ -1070,8 +1265,7 @@ async function saveTeamEdit(teamId, modalId) {
         if (data.success) {
             showNotification('Team erfolgreich bearbeitet');
             closeModal(modalId);
-            await loadInitialData();
-            loadTeams();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1100,8 +1294,7 @@ async function deleteTeam(teamId) {
         
         if (data.success) {
             showNotification(data.message);
-            await loadInitialData();
-            loadTeams();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1394,8 +1587,7 @@ async function saveNewMatch(modalId) {
         if (data.success) {
             showNotification('Spiel erfolgreich hinzugefügt');
             closeModal(modalId);
-            await loadInitialData();
-            loadMatches();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1497,8 +1689,7 @@ async function saveMatchEdit(matchId, modalId) {
         if (data.success) {
             showNotification('Spiel erfolgreich bearbeitet');
             closeModal(modalId);
-            await loadInitialData();
-            loadMatches();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1507,7 +1698,7 @@ async function saveMatchEdit(matchId, modalId) {
     }
 }
 
-// NEUE Funktion zum Entfernen von Schiedsrichtern
+// Schiedsrichter entfernen
 async function removeReferee(matchId, modalId) {
     if (!confirm('Schiedsrichter wirklich von diesem Spiel entfernen?')) return;
 
@@ -1517,15 +1708,14 @@ async function removeReferee(matchId, modalId) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 password: adminPassword,
-                referee: null // null senden, um den Schiedsrichter zu entfernen
+                referee: null
             })
         });
 
         const data = await response.json();
         if (data.success) {
             showNotification('Schiedsrichter entfernt');
-            await loadInitialData();
-            // Modal neu aufbauen, um die Änderung zu zeigen
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
             closeModal(modalId);
             editMatch(matchId);
         } else {
@@ -1535,7 +1725,6 @@ async function removeReferee(matchId, modalId) {
         showNotification('Fehler beim Entfernen des Schiedsrichters', 'error');
     }
 }
-
 
 // Delete Match
 async function deleteMatch(matchId) {
@@ -1557,8 +1746,7 @@ async function deleteMatch(matchId) {
         
         if (data.success) {
             showNotification(data.message);
-            await loadInitialData();
-            loadMatches();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1770,8 +1958,7 @@ async function saveResultEdit(matchId, modalId) {
         if (data.success) {
             showNotification('Ergebnis erfolgreich bearbeitet');
             closeModal(modalId);
-            await loadInitialData();
-            loadResults();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -1796,6 +1983,10 @@ function loadSettings() {
                 <p>${currentTournament.year}</p>
             </div>
             <div class="setting-item">
+                <label>Format</label>
+                <p>${currentTournament.settings?.format || 'Nicht festgelegt'}</p>
+            </div>
+            <div class="setting-item">
                 <label>Gruppengröße</label>
                 <p>${currentTournament.settings?.groupSize || 4} Teams</p>
             </div>
@@ -1811,14 +2002,6 @@ function loadSettings() {
                 <label>Spiel um Platz 5</label>
                 <p>${currentTournament.settings?.enableFifthPlace ? 'Aktiviert' : 'Deaktiviert'}</p>
             </div>
-        </div>
-        
-        <div class="danger-zone">
-            <h4>Danger Zone</h4>
-            <p>Gefährliche Aktionen, die nicht rückgängig gemacht werden können.</p>
-            <button class="btn btn-danger" onclick="resetTournamentComplete()">
-                <i class="fas fa-trash"></i> Turnier komplett zurücksetzen
-            </button>
         </div>
     `;
 }
@@ -2018,8 +2201,7 @@ async function startMatchDialog(matchId) {
         
         if (data.success) {
             showNotification(`Spiel gestartet! Halbzeitlänge: ${halfTimeMinutes} Minuten`);
-            await loadInitialData();
-            loadTabContent('live');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2048,7 +2230,7 @@ async function updateLiveScore(matchId) {
         
         if (data.success) {
             showNotification('Live-Score aktualisiert!');
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2069,8 +2251,7 @@ async function finishMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel beendet!');
-            await loadInitialData();
-            loadTabContent('live');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2104,8 +2285,7 @@ async function submitResult(matchId) {
         
         if (data.success) {
             showNotification('Ergebnis erfolgreich gespeichert!');
-            await loadInitialData();
-            loadResults();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2140,7 +2320,7 @@ function scheduleMatch(matchId) {
         }).then(response => response.json()).then(data => {
             if (data.success) {
                 showNotification(`Spiel geplant für ${time} Uhr!`);
-                loadInitialData().then(() => loadMatches());
+                autoRefreshCurrentTab(); // AUTO-REFRESH
             } else {
                 showNotification(data.error, 'error');
             }
@@ -2187,8 +2367,7 @@ async function scheduleAllMatches() {
         
         if (data.success) {
             showNotification(`${data.scheduledMatches} Spiele automatisch geplant ab ${startTime} Uhr!`);
-            await loadInitialData();
-            loadMatches();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2211,7 +2390,7 @@ async function pauseMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel pausiert');
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2232,7 +2411,7 @@ async function resumeMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel fortgesetzt');
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2255,7 +2434,7 @@ async function halftimeBreak(matchId) {
         
         if (data.success) {
             showNotification('Halbzeitpause gestartet');
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2278,7 +2457,7 @@ async function startSecondHalf(matchId) {
         
         if (data.success) {
             showNotification('Zweite Halbzeit gestartet');
-            await loadInitialData();
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
             showNotification(data.error, 'error');
         }
@@ -2292,14 +2471,9 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Admin page loaded, DOM ready');
 });
 
-
-// KORREKTUR: Diese Logik wurde von admin.html hierher verschoben,
-// um sicherzustellen, dass sie NACH dem Laden der Funktionen in admin.js ausgeführt wird.
-
 // Helper function to refresh teams display
 function refreshTeams() {
-    loadInitialData().then(() => {
-        loadTeams();
+    autoRefreshCurrentTab().then(() => {
         showNotification('Teams aktualisiert');
     });
 }
@@ -2313,10 +2487,7 @@ function updateTeamCountDisplay() {
 }
 
 // Override loadTeams to include count update
-// This needs to be done carefully after the original loadTeams is defined.
-// We can wrap it in a DOMContentLoaded listener or just place it at the end of the file.
 {
-    // Block-Scope, um `originalLoadTeams` nicht global zu machen
     const originalLoadTeams = loadTeams;
     loadTeams = function() {
         originalLoadTeams();
