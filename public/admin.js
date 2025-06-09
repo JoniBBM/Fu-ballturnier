@@ -434,7 +434,7 @@ function loadTournamentManagement() {
     }
 }
 
-// NEUE ERWEITERTE ANMELDUNG-SCHLIESSEN DIALOG
+// NEUE ERWEITERTE ANMELDUNG-SCHLIESSEN DIALOG (ohne Liga-Modus)
 async function openAdvancedRegistrationDialog() {
     if (teams.length < 4) {
         showNotification('Mindestens 4 Teams erforderlich', 'error');
@@ -461,15 +461,7 @@ async function openAdvancedRegistrationDialog() {
                     <input type="radio" name="tournament-format" value="swiss" style="margin-right: 1rem;">
                     <strong>Champions League Format</strong> <small>(modern)</small>
                     <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-                        Alle Teams in einer Liga, jedes Team spielt gegen verschiedene Gegner
-                    </div>
-                </label>
-                
-                <label style="display: block; margin-bottom: 1rem; cursor: pointer; padding: 1rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                    <input type="radio" name="tournament-format" value="league" style="margin-right: 1rem;">
-                    <strong>Liga-Modus</strong> <small>(fair)</small>
-                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-                        Alle Teams in einer Liga, garantiert gleiche Spielanzahl pro Team
+                        Alle Teams in einer Liga, jedes Team spielt verschiedene Gegner + K.O.-Phase
                     </div>
                 </label>
             </div>
@@ -480,9 +472,10 @@ async function openAdvancedRegistrationDialog() {
             <!-- Wird dynamisch gefüllt -->
         </div>
         
+        <!-- NEUE Validierungs-Sektion -->
         <div style="margin-top: 2rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem;">
             <button type="button" class="btn btn-outline" onclick="analyzeCurrentConfiguration()" style="margin-bottom: 1rem;">
-                <i class="fas fa-brain"></i> Konfiguration analysieren & Empfehlungen erhalten
+                <i class="fas fa-brain"></i> Konfiguration analysieren & validieren
             </button>
             <div id="analysis-results" style="display: none;">
                 <!-- Analysis results will be shown here -->
@@ -537,13 +530,16 @@ function updateFormatOptions(format, modal) {
                 </select>
             </div>
             <div style="margin-bottom: 1rem;">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Max. Spiele pro Team in Gruppenphase:</label>
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Spiele pro Team in Gruppenphase:</label>
                 <select id="max-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
                     <option value="">Alle möglichen Spiele (Jeder gegen Jeden)</option>
-                    <option value="2">Maximal 2 Spiele pro Team</option>
-                    <option value="3">Maximal 3 Spiele pro Team</option>
-                    <option value="4">Maximal 4 Spiele pro Team</option>
+                    <option value="2">Genau 2 Spiele pro Team</option>
+                    <option value="3">Genau 3 Spiele pro Team</option>
+                    <option value="4">Genau 4 Spiele pro Team</option>
                 </select>
+                <small style="color: #dc2626; font-weight: 600; margin-top: 0.5rem; display: block;">
+                    ⚠️ Wird automatisch validiert - unmögliche Kombinationen werden abgelehnt
+                </small>
             </div>
             <h5>K.O.-Phase Einstellungen</h5>
             <div style="margin-bottom: 1rem;">
@@ -578,33 +574,9 @@ function updateFormatOptions(format, modal) {
                 <small style="color: #666; margin-top: 0.5rem; display: block;">
                     Empfohlen für ${teams.length} Teams: ${recommendedRounds} Runden
                 </small>
-            </div>
-            <h5>K.O.-Phase Einstellungen</h5>
-            <div style="margin-bottom: 1rem;">
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-quarterfinals" ${teams.length >= 8 ? 'checked' : 'disabled'}> 
-                    Viertelfinale (nur ab 8+ Teams)
-                </label>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-third-place" checked> Spiel um Platz 3
-                </label>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-fifth-place"> Spiel um Platz 5
-                </label>
-            </div>
-        `;
-    } else if (format === 'league') {
-        const maxPossible = teams.length - 1;
-        optionsContainer.innerHTML = `
-            <h5>Liga-Modus Einstellungen</h5>
-            <div style="margin-bottom: 1rem;">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Spiele pro Team:</label>
-                <select id="league-games" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                    <option value="3">3 Spiele pro Team</option>
-                    <option value="4">4 Spiele pro Team</option>
-                    <option value="5" ${maxPossible >= 5 ? 'selected' : ''}>5 Spiele pro Team</option>
-                    <option value="${maxPossible}" ${maxPossible < 5 ? 'selected' : ''}>Alle möglichen (${maxPossible} pro Team)</option>
-                </select>
+                <small style="color: #dc2626; font-weight: 600; margin-top: 0.5rem; display: block;">
+                    ⚠️ Wird automatisch validiert - ungerade Spiel-Kombinationen werden verhindert
+                </small>
             </div>
             <h5>K.O.-Phase Einstellungen</h5>
             <div style="margin-bottom: 1rem;">
@@ -634,8 +606,6 @@ async function analyzeCurrentConfiguration() {
         options.maxGamesPerTeam = modal.querySelector('#max-games').value ? parseInt(modal.querySelector('#max-games').value) : null;
     } else if (format === 'swiss') {
         options.rounds = parseInt(modal.querySelector('#swiss-rounds').value);
-    } else if (format === 'league') {
-        options.maxGamesPerTeam = parseInt(modal.querySelector('#league-games').value);
     }
     
     try {
@@ -669,11 +639,11 @@ function displayAnalysisResults(analysis, modal) {
     
     if (analysis.feasible) {
         html += '<div style="background: #f0fdf4; border: 1px solid #16a34a; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
-        html += '<strong style="color: #16a34a;">✓ Konfiguration ist durchführbar</strong>';
+        html += '<strong style="color: #16a34a;">✓ Konfiguration ist mathematisch korrekt und durchführbar</strong>';
         html += '</div>';
     } else {
         html += '<div style="background: #fef2f2; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
-        html += '<strong style="color: #dc2626;">⚠ Probleme mit der Konfiguration:</strong>';
+        html += '<strong style="color: #dc2626;">⚠ FEHLER: Mathematisch unmögliche Konfiguration!</strong>';
         analysis.warnings.forEach(warning => {
             html += `<div style="margin-top: 0.5rem;">• ${warning}</div>`;
         });
@@ -682,7 +652,7 @@ function displayAnalysisResults(analysis, modal) {
     
     if (analysis.recommendations.length > 0) {
         html += '<div style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
-        html += '<strong style="color: #f59e0b;">💡 Empfehlungen:</strong>';
+        html += '<strong style="color: #f59e0b;">💡 Lösungsvorschläge:</strong>';
         analysis.recommendations.forEach(rec => {
             html += `<div style="margin-top: 0.5rem;">• ${rec}</div>`;
         });
@@ -737,13 +707,6 @@ async function submitAdvancedRegistration(modalId) {
         requestData.enableQuarterfinals = modal.querySelector('#enable-quarterfinals')?.checked || false;
         requestData.enableThirdPlace = modal.querySelector('#enable-third-place')?.checked || false;
         requestData.enableFifthPlace = modal.querySelector('#enable-fifth-place')?.checked || false;
-        
-    } else if (format === 'league') {
-        requestData.maxGamesPerTeam = parseInt(modal.querySelector('#league-games').value);
-        
-        requestData.enableQuarterfinals = modal.querySelector('#enable-quarterfinals')?.checked || false;
-        requestData.enableThirdPlace = modal.querySelector('#enable-third-place')?.checked || false;
-        requestData.enableFifthPlace = modal.querySelector('#enable-fifth-place')?.checked || false;
     }
     
     try {
@@ -760,7 +723,18 @@ async function submitAdvancedRegistration(modalId) {
             closeModal(modalId);
             await autoRefreshCurrentTab(); // AUTO-REFRESH
         } else {
-            showNotification(data.error, 'error');
+            // Spezielle Behandlung für Validierungsfehler
+            if (data.details && data.suggestions) {
+                let errorMsg = data.error + '\n\nProbleme:\n';
+                data.details.forEach(detail => errorMsg += '• ' + detail + '\n');
+                if (data.suggestions.length > 0) {
+                    errorMsg += '\nLösungen:\n';
+                    data.suggestions.forEach(suggestion => errorMsg += '• ' + suggestion + '\n');
+                }
+                alert(errorMsg);
+            } else {
+                showNotification(data.error, 'error');
+            }
         }
     } catch (error) {
         showNotification('Fehler beim Schließen der Anmeldung', 'error');

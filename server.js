@@ -94,7 +94,98 @@ function loadCurrentYearData() {
 // Admin-Authentifizierung
 const ADMIN_PASSWORD = '1234qwer!';
 
-// ========================= NEUE VERBESSERTE ALGORITHMEN =========================
+// ========================= NEUE VALIDIERUNGS-ALGORITHMEN =========================
+
+// Neue Validierungsfunktion für Spielverteilung
+function validateGameDistribution(teams, format, options) {
+    const validation = {
+        isValid: true,
+        warnings: [],
+        impossibleConstraints: [],
+        suggestions: []
+    };
+    
+    if (format === 'groups') {
+        const { groupSize, maxGamesPerTeam } = options;
+        const groupCount = Math.ceil(teams.length / groupSize);
+        
+        // Berechne tatsächliche Gruppengrößen
+        for (let i = 0; i < groupCount; i++) {
+            const startIndex = i * groupSize;
+            const endIndex = Math.min(startIndex + groupSize, teams.length);
+            const actualGroupSize = endIndex - startIndex;
+            const groupName = String.fromCharCode(65 + i);
+            
+            if (maxGamesPerTeam) {
+                // Prüfe mathematische Möglichkeit
+                const totalGameSlots = actualGroupSize * maxGamesPerTeam;
+                const possibleMatches = Math.floor(totalGameSlots / 2);
+                const maxPossibleMatches = Math.floor(actualGroupSize * (actualGroupSize - 1) / 2);
+                
+                console.log(`Gruppe ${groupName}: ${actualGroupSize} Teams, ${maxGamesPerTeam} Spiele pro Team`);
+                console.log(`- Spiel-Slots: ${totalGameSlots}, mögliche Spiele: ${possibleMatches}`);
+                console.log(`- Max. mögliche Spiele in Gruppe: ${maxPossibleMatches}`);
+                
+                // Mathematisch unmöglich?
+                if (totalGameSlots % 2 !== 0) {
+                    validation.isValid = false;
+                    validation.impossibleConstraints.push(
+                        `Gruppe ${groupName}: ${actualGroupSize} Teams × ${maxGamesPerTeam} Spiele = ${totalGameSlots} Spiel-Slots. Das ist eine ungerade Zahl - mathematisch unmöglich!`
+                    );
+                    
+                    // Vorschläge für gerade Anzahl
+                    const suggestions = [];
+                    for (let games = 1; games <= actualGroupSize - 1; games++) {
+                        if ((actualGroupSize * games) % 2 === 0) {
+                            suggestions.push(`${games} Spiele pro Team`);
+                        }
+                    }
+                    validation.suggestions.push(
+                        `Gruppe ${groupName}: Mögliche Spielanzahlen: ${suggestions.join(', ')}`
+                    );
+                }
+                
+                // Zu viele Spiele gewünscht?
+                if (possibleMatches > maxPossibleMatches) {
+                    validation.isValid = false;
+                    validation.impossibleConstraints.push(
+                        `Gruppe ${groupName}: ${possibleMatches} Spiele gewünscht, aber nur ${maxPossibleMatches} möglich bei ${actualGroupSize} Teams`
+                    );
+                }
+                
+                // Zu wenig Spiele für faire Verteilung?
+                if (maxGamesPerTeam < 2 && actualGroupSize > 3) {
+                    validation.warnings.push(
+                        `Gruppe ${groupName}: Nur ${maxGamesPerTeam} Spiel(e) pro Team bei ${actualGroupSize} Teams - sehr wenig für faire Bewertung`
+                    );
+                }
+            }
+        }
+    } else if (format === 'swiss') {
+        const { rounds } = options;
+        const totalGameSlots = teams.length * rounds;
+        
+        if (totalGameSlots % 2 !== 0) {
+            validation.isValid = false;
+            validation.impossibleConstraints.push(
+                `Swiss System: ${teams.length} Teams × ${rounds} Runden = ${totalGameSlots} Spiel-Slots (ungerade Zahl - unmöglich!)`
+            );
+            
+            // Gerade Rundenzahlen vorschlagen
+            const evenRounds = [];
+            for (let r = 2; r <= teams.length - 1; r++) {
+                if ((teams.length * r) % 2 === 0) {
+                    evenRounds.push(r);
+                }
+            }
+            validation.suggestions.push(
+                `Mögliche Rundenzahlen: ${evenRounds.slice(0, 5).join(', ')}`
+            );
+        }
+    }
+    
+    return validation;
+}
 
 // Hilfsfunktionen
 function shuffleArray(array) {
@@ -113,10 +204,25 @@ function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}
         warnings: [],
         recommendations: [],
         alternatives: [],
-        chosenConfig: null
+        chosenConfig: null,
+        validation: null
     };
     
     console.log(`Analysiere Turnier: ${teamCount} Teams, Format: ${requestedFormat}`, options);
+    
+    // Erste mathematische Validierung
+    const validation = validateGameDistribution({ length: teamCount }, requestedFormat, options);
+    analysis.validation = validation;
+    
+    if (!validation.isValid) {
+        analysis.feasible = false;
+        analysis.warnings.push(...validation.impossibleConstraints);
+        analysis.recommendations.push(...validation.suggestions);
+    }
+    
+    if (validation.warnings.length > 0) {
+        analysis.warnings.push(...validation.warnings);
+    }
     
     if (requestedFormat === 'groups') {
         const { groupSize, maxGamesPerTeam } = options;
@@ -130,40 +236,53 @@ function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}
             actualGroupSizes.push(endIndex - startIndex);
         }
         
-        // Analysiere jede Gruppe
-        actualGroupSizes.forEach((size, index) => {
-            const maxPossibleGames = Math.floor((size - 1));
-            const totalPossibleMatches = Math.floor(size * (size - 1) / 2);
-            
-            if (maxGamesPerTeam && maxGamesPerTeam > maxPossibleGames) {
-                analysis.warnings.push(`Gruppe ${String.fromCharCode(65 + index)}: Nur ${maxPossibleGames} Spiele pro Team möglich (${size} Teams), aber ${maxGamesPerTeam} gewünscht`);
-                analysis.feasible = false;
-            }
-            
-            if (size < 3) {
-                analysis.warnings.push(`Gruppe ${String.fromCharCode(65 + index)}: Nur ${size} Teams - zu wenig für sinnvolle Gruppe`);
-            }
-        });
-        
         // Empfehlungen für bessere Konfiguration
-        if (teamCount % groupSize !== 0) {
-            const betterGroupSizes = [];
+        if (!analysis.feasible || teamCount % groupSize !== 0) {
+            const betterConfigs = [];
+            
+            // Teste verschiedene Gruppengrößen
             for (let testSize = 3; testSize <= 6; testSize++) {
-                const remainder = teamCount % testSize;
-                const groups = Math.ceil(teamCount / testSize);
-                if (remainder === 0 || remainder >= Math.floor(testSize / 2)) {
-                    betterGroupSizes.push({
+                const testGroups = Math.ceil(teamCount / testSize);
+                let validConfig = true;
+                
+                for (let g = 0; g < testGroups; g++) {
+                    const start = g * testSize;
+                    const end = Math.min(start + testSize, teamCount);
+                    const groupTeams = end - start;
+                    
+                    if (maxGamesPerTeam) {
+                        const gameSlots = groupTeams * maxGamesPerTeam;
+                        if (gameSlots % 2 !== 0) {
+                            validConfig = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (validConfig) {
+                    const remainder = teamCount % testSize;
+                    betterConfigs.push({
                         size: testSize,
-                        groups: groups,
+                        groups: testGroups,
                         remainder: remainder,
-                        score: remainder === 0 ? 100 : (testSize - remainder)
+                        score: remainder === 0 ? 100 : (10 - remainder),
+                        description: `${testSize} Teams pro Gruppe (${testGroups} Gruppen)`
                     });
                 }
             }
             
-            betterGroupSizes.sort((a, b) => b.score - a.score);
-            if (betterGroupSizes.length > 0 && betterGroupSizes[0].size !== groupSize) {
-                analysis.recommendations.push(`Bessere Gruppengröße: ${betterGroupSizes[0].size} Teams pro Gruppe (${betterGroupSizes[0].groups} Gruppen)`);
+            betterConfigs.sort((a, b) => b.score - a.score);
+            if (betterConfigs.length > 0) {
+                analysis.alternatives.push({
+                    format: 'groups',
+                    description: `Bessere Gruppenkonfiguration: ${betterConfigs[0].description}`,
+                    config: betterConfigs[0],
+                    advantages: [
+                        'Mathematisch korrekte Spielverteilung',
+                        'Ausgeglichenere Gruppengrößen',
+                        'Faire Spielanzahl für alle Teams'
+                    ]
+                });
             }
         }
         
@@ -171,7 +290,8 @@ function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}
             format: 'groups', 
             groupSize, 
             maxGamesPerTeam,
-            actualGroupSizes 
+            actualGroupSizes,
+            mathematicallyValid: validation.isValid
         };
         
     } else if (requestedFormat === 'swiss') {
@@ -183,72 +303,34 @@ function analyzeTournamentConfiguration(teamCount, requestedFormat, options = {}
             analysis.feasible = false;
         }
         
-        if (rounds < 3) {
-            analysis.warnings.push(`Mindestens 3 Runden empfohlen für aussagekräftige Ergebnisse`);
-        }
-        
-        // Berechne optimale Rundenzahl
-        const optimalRounds = Math.min(Math.max(3, Math.ceil(Math.log2(teamCount)) + 1), maxPossibleRounds);
-        if (rounds !== optimalRounds) {
-            analysis.recommendations.push(`Empfohlene Rundenzahl: ${optimalRounds} (basiert auf Teamanzahl)`);
-        }
-        
         analysis.chosenConfig = { 
             format: 'swiss', 
             rounds: Math.min(rounds, maxPossibleRounds),
-            totalMatches: Math.floor(teamCount * rounds / 2)
-        };
-        
-    } else if (requestedFormat === 'league') {
-        const { maxGamesPerTeam } = options;
-        const maxPossibleGames = teamCount - 1;
-        const actualGames = maxGamesPerTeam || maxPossibleGames;
-        
-        if (actualGames > maxPossibleGames) {
-            analysis.warnings.push(`Maximal ${maxPossibleGames} Spiele pro Team möglich`);
-            analysis.feasible = false;
-        }
-        
-        analysis.chosenConfig = { 
-            format: 'league', 
-            gamesPerTeam: Math.min(actualGames, maxPossibleGames),
-            totalMatches: Math.floor(teamCount * actualGames / 2)
+            totalMatches: Math.floor(teamCount * rounds / 2),
+            mathematicallyValid: validation.isValid
         };
     }
     
-    // Alternative Formate vorschlagen
-    if (!analysis.feasible || analysis.warnings.length > 0) {
-        // Swiss System Alternative
-        const swissRounds = Math.min(Math.ceil(Math.log2(teamCount)) + 1, teamCount - 1);
-        analysis.alternatives.push({
-            format: 'swiss',
-            description: `Champions League Format: ${swissRounds} Runden, alle Teams in einer Liga`,
-            rounds: swissRounds,
-            totalMatches: Math.floor(teamCount * swissRounds / 2),
-            advantages: ['Faire Spielverteilung', 'Keine unausgeglichenen Gruppen', 'Mehr spannende Begegnungen']
-        });
-        
-        // Liga-Format Alternative  
-        const leagueGames = Math.min(5, teamCount - 1);
-        analysis.alternatives.push({
-            format: 'league',
-            description: `Jeder-gegen-Jeden (limitiert): ${leagueGames} Spiele pro Team`,
-            gamesPerTeam: leagueGames,
-            totalMatches: Math.floor(teamCount * leagueGames / 2),
-            advantages: ['Garantiert gleiche Spielanzahl', 'Einfache Tabelle', 'Faire Bewertung']
-        });
-        
-        // Verbesserte Gruppen Alternative
-        if (requestedFormat === 'groups') {
-            const betterGroupSize = teamCount <= 8 ? 4 : (teamCount <= 15 ? 5 : 4);
-            const betterGroupCount = Math.ceil(teamCount / betterGroupSize);
-            analysis.alternatives.push({
-                format: 'groups',
-                description: `Ausgeglichenere Gruppen: ${betterGroupSize} Teams pro Gruppe`,
-                groupSize: betterGroupSize,
-                groupCount: betterGroupCount,
-                advantages: ['Ausgeglichenere Gruppengrößen', 'Mehr Spiele pro Team']
-            });
+    // Champions League Alternative (wenn Gruppen-Problem)
+    if (!analysis.feasible && requestedFormat === 'groups') {
+        // Teste Swiss System
+        for (let testRounds = 3; testRounds <= Math.min(7, teamCount - 1); testRounds++) {
+            const gameSlots = teamCount * testRounds;
+            if (gameSlots % 2 === 0) {
+                analysis.alternatives.push({
+                    format: 'swiss',
+                    description: `Champions League Format: ${testRounds} Runden`,
+                    rounds: testRounds,
+                    totalMatches: gameSlots / 2,
+                    advantages: [
+                        'Keine Gruppenprobleme',
+                        'Alle Teams spielen gleich viele Spiele',
+                        'Faire Verteilung garantiert',
+                        'Champions League feeling'
+                    ]
+                });
+                break; // Erste gültige Alternative reicht
+            }
         }
     }
     
@@ -353,82 +435,6 @@ function generateSwissSystemMatches(teams, rounds) {
     });
     
     console.log('Swiss System Spielverteilung:', teamGameCounts);
-    
-    return matches;
-}
-
-// VERBESSERTER Fair Limited Round-Robin
-function generateFairLimitedRoundRobin(teams, maxGamesPerTeam) {
-    console.log(`Generiere Fair Limited Round-Robin: ${teams.length} Teams, max ${maxGamesPerTeam} Spiele pro Team`);
-    
-    const matches = [];
-    const teamStats = teams.map(team => ({
-        name: team.name,
-        opponents: new Set(),
-        gamesPlayed: 0
-    }));
-    
-    // Erstelle alle möglichen Paarungen mit Priorität
-    const allPairings = [];
-    for (let i = 0; i < teams.length; i++) {
-        for (let j = i + 1; j < teams.length; j++) {
-            allPairings.push({
-                team1: teams[i].name,
-                team2: teams[j].name,
-                priority: Math.random() // Zufällige Priorität für Fairness
-            });
-        }
-    }
-    
-    // Sortiere Paarungen nach Priorität
-    allPairings.sort((a, b) => a.priority - b.priority);
-    
-    // Greedy-Auswahl der Spiele
-    let matchId = 0;
-    for (const pairing of allPairings) {
-        const team1Stats = teamStats.find(t => t.name === pairing.team1);
-        const team2Stats = teamStats.find(t => t.name === pairing.team2);
-        
-        // Prüfe ob beide Teams noch Spiele brauchen
-        if (team1Stats.gamesPlayed < maxGamesPerTeam && team2Stats.gamesPlayed < maxGamesPerTeam) {
-            const match = {
-                id: `fair_rr_${matchId++}`,
-                phase: 'league',
-                group: 'Liga',
-                team1: pairing.team1,
-                team2: pairing.team2,
-                score1: null,
-                score2: null,
-                completed: false
-            };
-            
-            matches.push(match);
-            team1Stats.gamesPlayed++;
-            team2Stats.gamesPlayed++;
-            team1Stats.opponents.add(pairing.team2);
-            team2Stats.opponents.add(pairing.team1);
-            
-            console.log(`Match ${matchId}: ${pairing.team1} vs ${pairing.team2}`);
-        }
-    }
-    
-    // Validierung und Nachoptimierung
-    const finalGameCounts = {};
-    teams.forEach(team => finalGameCounts[team.name] = 0);
-    matches.forEach(match => {
-        finalGameCounts[match.team1]++;
-        finalGameCounts[match.team2]++;
-    });
-    
-    console.log('Fair Round-Robin Spielverteilung:', finalGameCounts);
-    
-    // Wenn möglich, gleiche die Spielanzahl aus
-    const minGames = Math.min(...Object.values(finalGameCounts));
-    const maxGames = Math.max(...Object.values(finalGameCounts));
-    
-    if (maxGames - minGames > 1) {
-        console.log(`Warnung: Ungleiche Spielverteilung (${minGames}-${maxGames} Spiele pro Team)`);
-    }
     
     return matches;
 }
@@ -820,7 +826,7 @@ function assignReferees(matches, groups) {
             teamsByGroup[group.name] = group.teams.map(t => t.name);
         });
     } else {
-        // Für Swiss System oder Liga: Alle Teams sind in einer "Gruppe"
+        // Für Swiss System: Alle Teams sind in einer "Gruppe"
         teamsByGroup['Liga'] = teams.map(t => t.name);
     }
     
@@ -1076,6 +1082,141 @@ app.get('/api/teams', (req, res) => {
 // Admin: Alle Teams mit Kontaktdaten
 app.get('/api/admin/teams', (req, res) => {
     res.json(teams);
+});
+
+// ========= NEUE ROUTE: Tournament-Konfiguration analysieren ==========
+app.post('/api/admin/analyze-tournament-config', (req, res) => {
+    const { password, format, options } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (teams.length === 0) {
+        return res.status(400).json({ error: 'Keine Teams zum Analysieren' });
+    }
+    
+    const analysis = analyzeTournamentConfiguration(teams.length, format, options);
+    
+    res.json({ 
+        success: true, 
+        analysis: analysis,
+        teamCount: teams.length
+    });
+});
+
+// ========= VERBESSERTE ROUTE: Anmeldung schließen (nur Gruppen + Swiss System) ==========
+app.post('/api/admin/close-registration', (req, res) => {
+    const { 
+        password, 
+        format, // 'groups', 'swiss'
+        groupSize, 
+        rounds, // für Swiss System
+        maxGamesPerTeam,
+        enableQuarterfinals,
+        enableThirdPlace, 
+        enableFifthPlace, 
+        enableSeventhPlace 
+    } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament || currentTournament.status !== 'registration') {
+        return res.status(400).json({ error: 'Kein Turnier in Anmeldephase vorhanden' });
+    }
+    
+    if (teams.length < 4) {
+        return res.status(400).json({ error: 'Mindestens 4 Teams für Spielplan erforderlich' });
+    }
+    
+    console.log(`Schließe Anmeldung mit Format: ${format}`, { groupSize, rounds, maxGamesPerTeam });
+    
+    // VALIDIERE ZUERST DIE KONFIGURATION
+    const validation = validateGameDistribution(teams, format, { groupSize, rounds, maxGamesPerTeam });
+    if (!validation.isValid) {
+        return res.status(400).json({ 
+            error: 'Mathematisch unmögliche Konfiguration!', 
+            details: validation.impossibleConstraints,
+            suggestions: validation.suggestions
+        });
+    }
+    
+    // Anmeldung schließen
+    currentTournament.status = 'closed';
+    currentTournament.registrationClosedAt = new Date();
+    currentTournament.lastUpdated = new Date().toISOString();
+    
+    // Einstellungen speichern
+    currentTournament.settings = {
+        format: format || 'groups',
+        groupSize: groupSize || 4,
+        rounds: rounds || null,
+        maxGamesPerTeam: maxGamesPerTeam || null,
+        enableQuarterfinals: enableQuarterfinals || false,
+        enableThirdPlace: enableThirdPlace || false,
+        enableFifthPlace: enableFifthPlace || false,
+        enableSeventhPlace: enableSeventhPlace || false
+    };
+    
+    let generatedMatches = [];
+    
+    try {
+        if (format === 'swiss') {
+            // Swiss System (Champions League Style)
+            currentTournament.format = 'swiss';
+            currentTournament.groups = [{
+                name: 'Champions League Format',
+                teams: teams,
+                table: teams.map(team => ({
+                    team: team.name,
+                    games: 0,
+                    wins: 0,
+                    draws: 0,
+                    losses: 0,
+                    goalsFor: 0,
+                    goalsAgainst: 0,
+                    goalDiff: 0,
+                    points: 0
+                }))
+            }];
+            
+            generatedMatches = generateSwissSystemMatches(teams, rounds || Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1));
+            
+        } else {
+            // Standard Gruppensystem (verbessert)
+            currentTournament.format = 'groups';
+            const groups = createImprovedGroups(teams, currentTournament.settings.groupSize);
+            currentTournament.groups = groups;
+            
+            generatedMatches = generateImprovedGroupMatches(groups, currentTournament.settings.maxGamesPerTeam);
+        }
+        
+        // Schiedsrichter zuweisen
+        const matchesWithReferees = assignReferees(generatedMatches, currentTournament.groups);
+        matches = [...matchesWithReferees];
+        
+        // Status auf aktiv setzen
+        currentTournament.status = 'active';
+        currentTournament.phase = currentTournament.format === 'groups' ? 'group' : currentTournament.format;
+        
+        autoSave();
+        
+        console.log(`Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
+        
+        res.json({ 
+            success: true, 
+            tournament: currentTournament, 
+            matchesGenerated: matches.length,
+            format: format,
+            message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Format: ${format})`
+        });
+        
+    } catch (error) {
+        console.error('Fehler beim Generieren des Spielplans:', error);
+        res.status(500).json({ error: 'Fehler beim Erstellen des Spielplans: ' + error.message });
+    }
 });
 
 // Admin: Team löschen
@@ -1545,152 +1686,6 @@ app.post('/api/admin/tournament', (req, res) => {
     res.json({ success: true, tournament: currentTournament });
 });
 
-// ========= NEUE ROUTE: Tournament-Konfiguration analysieren ==========
-app.post('/api/admin/analyze-tournament-config', (req, res) => {
-    const { password, format, options } = req.body;
-    
-    if (password !== ADMIN_PASSWORD) {
-        return res.status(401).json({ error: 'Ungültiges Passwort' });
-    }
-    
-    if (teams.length === 0) {
-        return res.status(400).json({ error: 'Keine Teams zum Analysieren' });
-    }
-    
-    const analysis = analyzeTournamentConfiguration(teams.length, format, options);
-    
-    res.json({ 
-        success: true, 
-        analysis: analysis,
-        teamCount: teams.length
-    });
-});
-
-// ========= VERBESSERTE ROUTE: Anmeldung schließen ==========
-app.post('/api/admin/close-registration', (req, res) => {
-    const { 
-        password, 
-        format, // 'groups', 'swiss', 'league'
-        groupSize, 
-        rounds, // für Swiss System
-        maxGamesPerTeam,
-        enableQuarterfinals,
-        enableThirdPlace, 
-        enableFifthPlace, 
-        enableSeventhPlace 
-    } = req.body;
-    
-    if (password !== ADMIN_PASSWORD) {
-        return res.status(401).json({ error: 'Ungültiges Passwort' });
-    }
-    
-    if (!currentTournament || currentTournament.status !== 'registration') {
-        return res.status(400).json({ error: 'Kein Turnier in Anmeldephase vorhanden' });
-    }
-    
-    if (teams.length < 4) {
-        return res.status(400).json({ error: 'Mindestens 4 Teams für Spielplan erforderlich' });
-    }
-    
-    console.log(`Schließe Anmeldung mit Format: ${format}`, { groupSize, rounds, maxGamesPerTeam });
-    
-    // Anmeldung schließen
-    currentTournament.status = 'closed';
-    currentTournament.registrationClosedAt = new Date();
-    currentTournament.lastUpdated = new Date().toISOString();
-    
-    // Einstellungen speichern
-    currentTournament.settings = {
-        format: format || 'groups',
-        groupSize: groupSize || 4,
-        rounds: rounds || null,
-        maxGamesPerTeam: maxGamesPerTeam || null,
-        enableQuarterfinals: enableQuarterfinals || false,
-        enableThirdPlace: enableThirdPlace || false,
-        enableFifthPlace: enableFifthPlace || false,
-        enableSeventhPlace: enableSeventhPlace || false
-    };
-    
-    let generatedMatches = [];
-    
-    try {
-        if (format === 'swiss') {
-            // Swiss System (Champions League Style)
-            currentTournament.format = 'swiss';
-            currentTournament.groups = [{
-                name: 'Champions League Format',
-                teams: teams,
-                table: teams.map(team => ({
-                    team: team.name,
-                    games: 0,
-                    wins: 0,
-                    draws: 0,
-                    losses: 0,
-                    goalsFor: 0,
-                    goalsAgainst: 0,
-                    goalDiff: 0,
-                    points: 0
-                }))
-            }];
-            
-            generatedMatches = generateSwissSystemMatches(teams, rounds || Math.min(Math.ceil(Math.log2(teams.length)) + 1, teams.length - 1));
-            
-        } else if (format === 'league') {
-            // Liga-Format (Jeder gegen jeden mit Limit)
-            currentTournament.format = 'league';
-            currentTournament.groups = [{
-                name: 'Liga',
-                teams: teams,
-                table: teams.map(team => ({
-                    team: team.name,
-                    games: 0,
-                    wins: 0,
-                    draws: 0,
-                    losses: 0,
-                    goalsFor: 0,
-                    goalsAgainst: 0,
-                    goalDiff: 0,
-                    points: 0
-                }))
-            }];
-            
-            generatedMatches = generateFairLimitedRoundRobin(teams, maxGamesPerTeam || teams.length - 1);
-            
-        } else {
-            // Standard Gruppensystem (verbessert)
-            currentTournament.format = 'groups';
-            const groups = createImprovedGroups(teams, currentTournament.settings.groupSize);
-            currentTournament.groups = groups;
-            
-            generatedMatches = generateImprovedGroupMatches(groups, currentTournament.settings.maxGamesPerTeam);
-        }
-        
-        // Schiedsrichter zuweisen
-        const matchesWithReferees = assignReferees(generatedMatches, currentTournament.groups);
-        matches = [...matchesWithReferees];
-        
-        // Status auf aktiv setzen
-        currentTournament.status = 'active';
-        currentTournament.phase = currentTournament.format === 'groups' ? 'group' : currentTournament.format;
-        
-        autoSave();
-        
-        console.log(`Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
-        
-        res.json({ 
-            success: true, 
-            tournament: currentTournament, 
-            matchesGenerated: matches.length,
-            format: format,
-            message: `Spielplan mit ${matches.length} Spielen für ${teams.length} Teams erstellt (Format: ${format})`
-        });
-        
-    } catch (error) {
-        console.error('Fehler beim Generieren des Spielplans:', error);
-        res.status(500).json({ error: 'Fehler beim Erstellen des Spielplans: ' + error.message });
-    }
-});
-
 // Admin: Spielzeit setzen
 app.post('/api/admin/schedule', (req, res) => {
     const { password, matchId, datetime, field } = req.body;
@@ -2064,65 +2059,6 @@ app.post('/api/admin/result', (req, res) => {
     
     autoSave();
     res.json({ success: true, match });
-});
-
-// Admin: Daten importieren
-app.post('/api/admin/import', (req, res) => {
-    const { password, importData } = req.body;
-    
-    if (password !== ADMIN_PASSWORD) {
-        return res.status(401).json({ error: 'Ungültiges Passwort' });
-    }
-    
-    try {
-        if (!importData || typeof importData !== 'object') {
-            return res.status(400).json({ error: 'Ungültige Import-Daten' });
-        }
-        
-        let importedTeams = 0;
-        let importedMatches = 0;
-        
-        if (importData.tournament) {
-            currentTournament = importData.tournament;
-            console.log('Tournament imported:', currentTournament.year);
-        }
-        
-        if (importData.teams && Array.isArray(importData.teams)) {
-            teams = importData.teams;
-            importedTeams = teams.length;
-            console.log('Teams imported:', importedTeams);
-        }
-        
-        if (importData.matches && Array.isArray(importData.matches)) {
-            matches = importData.matches;
-            importedMatches = matches.length;
-            console.log('Matches imported:', importedMatches);
-        }
-        
-        if (importData.rules || importData.tournamentRules) {
-            tournamentRules = importData.rules || importData.tournamentRules || "";
-            console.log('Rules imported');
-        }
-        
-        autoSave();
-        
-        console.log(`Import completed: ${importedTeams} teams, ${importedMatches} matches`);
-        
-        res.json({ 
-            success: true, 
-            message: `Daten erfolgreich importiert`,
-            imported: {
-                teams: importedTeams,
-                matches: importedMatches,
-                tournament: !!importData.tournament,
-                rules: !!(importData.rules || importData.tournamentRules)
-            }
-        });
-        
-    } catch (error) {
-        console.error('Import error:', error);
-        res.status(500).json({ error: 'Fehler beim Importieren der Daten' });
-    }
 });
 
 // Admin-Login prüfen
