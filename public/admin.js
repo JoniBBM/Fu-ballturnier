@@ -6,6 +6,18 @@ let teams = [];
 let matches = [];
 let isMobileMenuOpen = false;
 
+// WebSocket Connection
+let socket = null;
+let isConnected = false;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+const reconnectDelay = 3000;
+
+// Debouncing and Request Management
+let refreshTimeout = null;
+let isRefreshing = false;
+let pendingRefresh = false;
+
 // DOM Elements
 const loginScreen = document.getElementById('login-screen');
 const adminContent = document.getElementById('admin-content');
@@ -17,9 +29,10 @@ const pageTitle = document.getElementById('page-title');
 const refreshIndicator = document.getElementById('refresh-indicator');
 const loadingOverlay = document.getElementById('loading-overlay');
 
-// Auto-Refresh State
+// Auto-Refresh State (now handled by WebSocket)
 let currentActiveTab = 'dashboard';
-let autoRefreshInterval = null;
+// Auto-refresh now handled by WebSocket events - interval no longer needed
+let liveControlInterval = null;
 
 // Session Management
 const SESSION_KEY = 'admin_session';
@@ -103,7 +116,11 @@ function logout() {
     document.getElementById('admin-password').value = '';
     document.getElementById('remember-login').checked = false;
     
-    stopAutoRefresh();
+    if (socket) {
+        socket.close();
+        socket = null;
+        isConnected = false;
+    }
     showNotification('Erfolgreich abgemeldet');
 }
 
@@ -132,17 +149,245 @@ function closeMobileMenu() {
     }
 }
 
-// Auto-Refresh System
-async function autoRefreshCurrentTab() {
-    if (!isLoggedIn) return;
+// WebSocket System
+function initializeWebSocket() {
+    if (socket) {
+        socket.disconnect();
+    }
+
+    socket = io();
+    
+    socket.on('connect', () => {
+        isConnected = true;
+        reconnectAttempts = 0;
+        updateConnectionStatus();
+        console.log('WebSocket connected');
+        
+        // Initiale Daten anfordern
+        if (isLoggedIn) {
+            loadInitialData();
+        }
+    });
+
+    socket.on('disconnect', () => {
+        isConnected = false;
+        updateConnectionStatus();
+        console.log('WebSocket disconnected');
+        
+        // Versuche Reconnect
+        if (reconnectAttempts < maxReconnectAttempts) {
+            setTimeout(() => {
+                reconnectAttempts++;
+                console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+                initializeWebSocket();
+            }, reconnectDelay);
+        }
+    });
+
+    socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error);
+        isConnected = false;
+        updateConnectionStatus();
+    });
+
+    // WebSocket Event Listeners
+    setupWebSocketEventListeners();
+}
+
+function updateConnectionStatus() {
+    const statusElement = document.getElementById('connection-status');
+    if (statusElement) {
+        const icon = statusElement.querySelector('i');
+        const span = statusElement.querySelector('span');
+        
+        if (isConnected) {
+            icon.style.color = '#16a34a';
+            span.textContent = 'Live';
+            statusElement.title = 'WebSocket Verbindung aktiv';
+        } else {
+            icon.style.color = '#dc2626';
+            span.textContent = 'Offline';
+            statusElement.title = 'WebSocket Verbindung getrennt';
+        }
+    }
+    
+    // Update refresh indicator
+    showRefreshIndicator(!isConnected);
+}
+
+function setupWebSocketEventListeners() {
+    // Live Score Updates - only update UI, no refresh needed
+    socket.on('live-score-update', (data) => {
+        console.log('Live score update received:', data);
+        updateLiveScore(data);
+        // Only refresh if not currently refreshing and on relevant tabs
+        if (!isRefreshing && (currentActiveTab === 'dashboard')) {
+            refreshCurrentTabContent();
+        }
+    });
+
+    // Match Started - refresh live tab
+    socket.on('match-started', (data) => {
+        console.log('Match started:', data);
+        showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        if (!isRefreshing && (currentActiveTab === 'live' || currentActiveTab === 'dashboard')) {
+            refreshCurrentTabContent();
+        }
+    });
+
+    // Match Paused - minimal refresh
+    socket.on('match-paused', (data) => {
+        console.log('Match paused:', data);
+        showNotification(`Spiel pausiert: ${data.match.team1} vs ${data.match.team2}`, 'warning');
+        // Update UI state without full refresh
+        updateMatchStatus(data.match, 'paused');
+    });
+
+    // Match Resumed - minimal refresh
+    socket.on('match-resumed', (data) => {
+        console.log('Match resumed:', data);
+        showNotification(`Spiel fortgesetzt: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        // Update UI state without full refresh
+        updateMatchStatus(data.match, 'resumed');
+    });
+
+    // Match Finished - important refresh
+    socket.on('match-finished', (data) => {
+        console.log('Match finished:', data);
+        showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
+        if (!isRefreshing) {
+            refreshCurrentTabContent();
+        }
+    });
+
+    // Match Result Added
+    socket.on('match-result-added', (data) => {
+        console.log('Match result added:', data);
+        showNotification(`Ergebnis eingetragen: ${data.match.team1} ${data.score1}:${data.score2} ${data.match.team2}`, 'success');
+        if (!isRefreshing && (currentActiveTab === 'results' || currentActiveTab === 'dashboard')) {
+            refreshCurrentTabContent();
+        }
+    });
+
+    // Current Match Changed
+    socket.on('current-match-changed', (data) => {
+        console.log('Current match changed:', data);
+        if (!isRefreshing && currentActiveTab === 'live') {
+            refreshCurrentTabContent();
+        }
+    });
+
+    // Data Imported Event
+    socket.on('data-imported', (data) => {
+        console.log('Data imported:', data);
+        showNotification(`Daten für ${data.year} erfolgreich importiert: ${data.teamsCount} Teams, ${data.matchesCount} Spiele`, 'success');
+        if (!isRefreshing) {
+            refreshCurrentTabContent();
+        }
+    });
+}
+
+// Helper function to update match status without full refresh
+function updateMatchStatus(match, status) {
+    const matchElements = document.querySelectorAll(`[data-match-id="${match.id}"]`);
+    matchElements.forEach(element => {
+        const statusElement = element.querySelector('.match-status');
+        if (statusElement) {
+            switch(status) {
+                case 'paused':
+                    statusElement.textContent = 'PAUSIERT';
+                    statusElement.className = 'match-status paused';
+                    break;
+                case 'resumed':
+                    statusElement.textContent = 'LIVE';
+                    statusElement.className = 'match-status live';
+                    break;
+            }
+        }
+    });
+    
+    // Update pause/resume buttons in live control
+    updatePauseResumeButtons(match.id, status);
+}
+
+// Helper function to update pause/resume buttons
+function updatePauseResumeButtons(matchId, status) {
+    const pauseResumeButton = document.querySelector(`button[onclick*="pauseMatch('${matchId}')"], button[onclick*="resumeMatch('${matchId}')"]`);
+    
+    if (pauseResumeButton) {
+        switch(status) {
+            case 'paused':
+                // Change to Resume button
+                pauseResumeButton.innerHTML = '<i class="fas fa-play"></i> Spiel fortsetzen';
+                pauseResumeButton.className = 'btn btn-success btn-large';
+                pauseResumeButton.setAttribute('onclick', `resumeMatch('${matchId}')`);
+                break;
+            case 'resumed':
+                // Change to Pause button
+                pauseResumeButton.innerHTML = '<i class="fas fa-pause"></i> Spiel pausieren';
+                pauseResumeButton.className = 'btn btn-warning btn-large';
+                pauseResumeButton.setAttribute('onclick', `pauseMatch('${matchId}')`);
+                break;
+        }
+    }
+}
+
+// Helper function to update live scores in real-time
+function updateLiveScore(data) {
+    const { matchId, score1, score2, match } = data;
+    
+    // Update live score inputs if visible
+    const score1Input = document.querySelector(`input[data-match-id="${matchId}"][data-score="1"]`);
+    const score2Input = document.querySelector(`input[data-match-id="${matchId}"][data-score="2"]`);
+    
+    if (score1Input) score1Input.value = score1;
+    if (score2Input) score2Input.value = score2;
+
+    // Update match displays
+    const matchElements = document.querySelectorAll(`[data-match-id="${matchId}"]`);
+    matchElements.forEach(element => {
+        const scoreDisplay = element.querySelector('.live-score');
+        if (scoreDisplay) {
+            scoreDisplay.textContent = `${score1}:${score2}`;
+        }
+    });
+}
+
+// Helper function to refresh current tab content with debouncing
+async function refreshCurrentTabContent() {
+    if (!isLoggedIn || !isConnected) return;
+    
+    // If already refreshing, mark as pending
+    if (isRefreshing) {
+        pendingRefresh = true;
+        return;
+    }
+    
+    // Clear any pending timeout
+    if (refreshTimeout) {
+        clearTimeout(refreshTimeout);
+    }
+    
+    // Debounce rapid refresh calls
+    refreshTimeout = setTimeout(async () => {
+        await performTabRefresh();
+    }, 300);
+}
+
+// Actual tab refresh implementation
+async function performTabRefresh() {
+    if (!isLoggedIn || !isConnected) return;
+    
+    if (isRefreshing) return;
+    isRefreshing = true;
     
     try {
-        showRefreshIndicator(true);
+        // Only load initial data if we're in a stable state
+        if (socket && socket.connected) {
+            await loadInitialData();
+        }
         
-        // Lade immer neue Basis-Daten
-        await loadInitialData();
-        
-        // Refresh nur den aktuellen Tab-Inhalt
+        // Refresh current tab
         switch(currentActiveTab) {
             case 'dashboard':
                 await loadDashboard();
@@ -171,35 +416,22 @@ async function autoRefreshCurrentTab() {
         }
         
         updateTournamentInfo();
-        console.log(`Auto-refreshed tab: ${currentActiveTab}`);
+        console.log(`WebSocket refreshed tab: ${currentActiveTab}`);
     } catch (error) {
-        console.error('Auto-refresh failed:', error);
+        console.error('Failed to refresh tab content:', error);
+        // Show user-friendly error only for critical tabs
+        if (currentActiveTab === 'live') {
+            showNotification('Live-Control aktualisiert sich automatisch...', 'info');
+        }
     } finally {
-        showRefreshIndicator(false);
+        isRefreshing = false;
+        
+        // Handle pending refresh if needed
+        if (pendingRefresh) {
+            pendingRefresh = false;
+            setTimeout(() => refreshCurrentTabContent(), 500);
+        }
     }
-}
-
-function startAutoRefresh() {
-    if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-    }
-    
-    autoRefreshInterval = setInterval(autoRefreshCurrentTab, 8000); // Alle 8 Sekunden
-    console.log('Auto-refresh started');
-}
-
-function stopAutoRefresh() {
-    if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
-        console.log('Auto-refresh stopped');
-    }
-}
-
-// Manual Refresh Function
-async function manualRefresh() {
-    await autoRefreshCurrentTab();
-    showNotification('Daten manuell aktualisiert');
 }
 
 // Modal Functions
@@ -286,7 +518,7 @@ async function handleTournamentCreation(e) {
         if (data.success) {
             currentTournament = data.tournament;
             showNotification('Turnier erfolgreich erstellt! Teams können sich jetzt anmelden.');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -424,7 +656,7 @@ loginForm.addEventListener('submit', async (e) => {
             
             await loadInitialData();
             loadTabContent('dashboard');
-            startAutoRefresh();
+            initializeWebSocket();
         } else {
             showNotification('Ungültiges Passwort', 'error');
         }
@@ -457,7 +689,7 @@ async function checkAutoLogin() {
                 
                 await loadInitialData();
                 loadTabContent('dashboard');
-                startAutoRefresh();
+                initializeWebSocket();
                 console.log('Auto-login successful');
             } else {
                 clearSession();
@@ -471,23 +703,61 @@ async function checkAutoLogin() {
 
 // Load Initial Data
 async function loadInitialData() {
+    // Alle API-Aufrufe parallel ausführen mit Promise.allSettled
+    const apiCalls = [
+        fetch('/api/tournament').then(response => response.json()),
+        fetch('/api/admin/teams').then(response => response.json()),
+        fetch('/api/matches').then(response => response.json())
+    ];
+    
     try {
-        // Load tournament
-        const tournamentResponse = await fetch('/api/tournament');
-        const tournamentData = await tournamentResponse.json();
-        currentTournament = tournamentData.tournament;
+        const results = await Promise.allSettled(apiCalls);
         
-        // Load teams
-        const teamsResponse = await fetch('/api/admin/teams');
-        teams = await teamsResponse.json();
+        // Tournament-Daten verarbeiten
+        if (results[0].status === 'fulfilled') {
+            currentTournament = results[0].value.tournament;
+        } else {
+            console.error('Fehler beim Laden des Turniers:', results[0].reason);
+            currentTournament = null;
+        }
         
-        // Load matches
-        const matchesResponse = await fetch('/api/matches');
-        matches = await matchesResponse.json();
+        // Teams-Daten verarbeiten
+        if (results[1].status === 'fulfilled') {
+            teams = results[1].value;
+        } else {
+            console.error('Fehler beim Laden der Teams:', results[1].reason);
+            teams = [];
+        }
         
+        // Matches-Daten verarbeiten
+        if (results[2].status === 'fulfilled') {
+            matches = results[2].value;
+        } else {
+            console.error('Fehler beim Laden der Spiele:', results[2].reason);
+            matches = [];
+        }
+        
+        // UI aktualisieren (auch wenn einige Requests fehlgeschlagen sind)
         updateTournamentInfo();
+        
+        // Erfolgreich geladene Daten loggen
+        const successCount = results.filter(r => r.status === 'fulfilled').length;
+        const failureCount = results.length - successCount;
+        
+        if (failureCount > 0) {
+            console.warn(`${successCount}/${results.length} API-Aufrufe erfolgreich. ${failureCount} fehlgeschlagen.`);
+        } else {
+            console.log('Alle Daten erfolgreich geladen');
+        }
+        
     } catch (error) {
-        console.error('Fehler beim Laden der Daten:', error);
+        // Sollte theoretisch nicht auftreten, da Promise.allSettled nie rejected
+        console.error('Unerwarteter Fehler beim Laden der Daten:', error);
+        // Fallback-Werte setzen
+        currentTournament = null;
+        teams = [];
+        matches = [];
+        updateTournamentInfo();
     }
 }
 
@@ -700,7 +970,7 @@ async function executeSwissReconfiguration(modalId) {
         if (data.success) {
             showNotification(`Champions League Format mit ${newRounds} Runden neu erstellt`);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -736,7 +1006,7 @@ async function generatePenaltyShootouts() {
         
         if (data.success) {
             showNotification(data.message);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1037,7 +1307,7 @@ async function submitAdvancedRegistration(modalId) {
         if (data.success) {
             showNotification(data.message || `Anmeldung geschlossen! Spielplan mit ${data.matchesGenerated} Spielen erstellt.`);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             // Spezielle Behandlung für Validierungsfehler
             if (data.details && data.suggestions) {
@@ -1108,7 +1378,7 @@ async function saveNewStatus(modalId) {
         if (data.success) {
             showNotification(`Turnier-Status erfolgreich auf "${newStatus}" geändert`);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1163,7 +1433,7 @@ async function executeReorganizeGroups(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1204,7 +1474,7 @@ async function executeResetResults(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1245,7 +1515,7 @@ async function executeResetSchedules(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1312,11 +1582,21 @@ async function importTournamentData(data) {
             })
         });
         
+        // Überprüfe HTTP-Statuscode
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unbekannter Serverfehler' }));
+            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const result = await response.json();
         
         if (result.success) {
+            // Korrekte Feldnamen basierend auf Server-Response
+            const teamsCount = result.data?.teamsImported || 0;
+            const matchesCount = result.data?.matchesImported || 0;
+            
             showNotification('Turnierdaten erfolgreich importiert!');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
             
             // Update status display
             const statusDiv = document.getElementById('import-status');
@@ -1324,29 +1604,36 @@ async function importTournamentData(data) {
                 statusDiv.innerHTML = `
                     <div class="import-status success">
                         <strong>✓ Import erfolgreich!</strong><br>
-                        ${result.importedTeams} Teams, ${result.importedMatches} Spiele importiert
+                        ${teamsCount} Teams, ${matchesCount} Spiele importiert
                     </div>
                 `;
                 statusDiv.style.display = 'block';
             }
         } else {
-            showNotification(result.error, 'error');
-            
-            // Update status display
-            const statusDiv = document.getElementById('import-status');
-            if (statusDiv) {
-                statusDiv.innerHTML = `
-                    <div class="import-status error">
-                        <strong>✗ Import fehlgeschlagen!</strong><br>
-                        ${result.error}
-                    </div>
-                `;
-                statusDiv.style.display = 'block';
-            }
+            throw new Error(result.error || 'Unbekannter Fehler beim Import');
         }
     } catch (error) {
-        showNotification('Fehler beim Importieren', 'error');
         console.error('Import error:', error);
+        
+        // Detailliertere Fehlermeldungen
+        let errorMessage = 'Fehler beim Importieren der Turnierdaten';
+        if (error.message) {
+            errorMessage += `: ${error.message}`;
+        }
+        
+        showNotification(errorMessage, 'error');
+        
+        // Update status display mit detaillierten Fehlerinformationen
+        const statusDiv = document.getElementById('import-status');
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <div class="import-status error">
+                    <strong>✗ Import fehlgeschlagen!</strong><br>
+                    ${error.message || 'Unbekannter Fehler'}
+                </div>
+            `;
+            statusDiv.style.display = 'block';
+        }
     } finally {
         showLoading(false);
     }
@@ -1409,7 +1696,7 @@ async function executeResetComplete(modalId) {
             teams = [];
             matches = [];
             
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1774,7 +2061,7 @@ async function saveTeamEdit(teamId, modalId) {
         if (data.success) {
             showNotification('Team erfolgreich bearbeitet');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -1807,7 +2094,7 @@ async function deleteTeam(teamId) {
         
         if (data.success) {
             showNotification(data.message);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2073,7 +2360,7 @@ async function saveResultEdit(matchId, modalId) {
         if (data.success) {
             showNotification('Ergebnis erfolgreich korrigiert');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2184,7 +2471,7 @@ async function saveNewMatch(modalId) {
         if (data.success) {
             showNotification('Spiel erfolgreich hinzugefügt');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2290,7 +2577,7 @@ async function saveMatchEdit(matchId, modalId) {
         if (data.success) {
             showNotification('Spiel erfolgreich bearbeitet');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2323,7 +2610,7 @@ async function deleteMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel erfolgreich gelöscht');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2388,7 +2675,7 @@ async function saveMatchSchedule(matchId, modalId) {
         if (data.success) {
             showNotification('Spiel erfolgreich geplant');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2414,7 +2701,7 @@ async function removeMatchSchedule(matchId, modalId) {
         if (data.success) {
             showNotification('Zeitplanung entfernt');
             closeModal(modalId);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2451,7 +2738,7 @@ async function scheduleAllMatches() {
         
         if (data.success) {
             showNotification(data.message);
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2530,7 +2817,7 @@ async function executeStartMatch(matchId, modalId) {
             
             // AUTO-SWITCH TO LIVE TAB + AUTO-REFRESH
             switchToTab('live');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -2544,6 +2831,17 @@ async function executeStartMatch(matchId, modalId) {
 // VERBESSERTE LIVE CONTROL FUNCTION mit besserem Design
 async function loadLiveControl() {
     const liveControl = document.getElementById('live-match-control');
+    
+    // Show loading state
+    liveControl.innerHTML = `
+        <div class="loading-state-improved">
+            <div class="loading-spinner">
+                <i class="fas fa-spinner fa-spin"></i>
+            </div>
+            <h3>Live-Control wird geladen...</h3>
+            <p>Lade aktuelle Spieldaten...</p>
+        </div>
+    `;
     
     try {
         // Load current live match and next match data
@@ -2792,11 +3090,11 @@ async function loadLiveControl() {
         liveControl.innerHTML = `
             <div class="error-state-improved">
                 <div class="error-icon">
-                    <i class="fas fa-exclamation-triangle"></i>
+                    <i class="fas fa-wifi"></i>
                 </div>
-                <h3>Fehler beim Laden</h3>
-                <p>Live-Control konnte nicht geladen werden.</p>
-                <button class="btn btn-outline btn-large" onclick="autoRefreshCurrentTab()">
+                <h3>Verbindungsproblem</h3>
+                <p>Live-Control konnte nicht geladen werden. Bitte überprüfe deine Internetverbindung.</p>
+                <button class="btn btn-outline btn-large" onclick="refreshCurrentTabContent()">
                     <i class="fas fa-refresh"></i> Erneut versuchen
                 </button>
             </div>
@@ -2805,8 +3103,6 @@ async function loadLiveControl() {
 }
 
 // LIVE CONTROL TIMER UPDATES
-let liveControlInterval = null;
-
 function startLiveControlUpdates(liveMatch) {
     console.log('Starting live control updates for admin...');
     
@@ -2997,7 +3293,7 @@ async function pauseMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel pausiert');
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3018,7 +3314,7 @@ async function resumeMatch(matchId) {
         
         if (data.success) {
             showNotification('Spiel fortgesetzt');
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3039,7 +3335,7 @@ async function startHalfTime(matchId) {
         
         if (data.success) {
             showNotification('Halbzeit eingeläutet');
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3060,7 +3356,7 @@ async function startSecondHalf(matchId) {
         
         if (data.success) {
             showNotification('2. Halbzeit gestartet');
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3104,7 +3400,7 @@ async function executeEndMatch(matchId, modalId) {
                 liveControlInterval = null;
             }
             
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3151,7 +3447,7 @@ async function executeStopMatch(matchId, modalId) {
                 liveControlInterval = null;
             }
             
-            await autoRefreshCurrentTab();
+            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
             showNotification(data.error, 'error');
         }
@@ -3277,7 +3573,7 @@ async function submitResult(matchId) {
         
         if (data.success) {
             showNotification('Ergebnis erfolgreich gespeichert!');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -3417,7 +3713,7 @@ async function saveTournamentSettings() {
         
         if (data.success) {
             showNotification('Einstellungen erfolgreich gespeichert');
-            await autoRefreshCurrentTab();
+            await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
@@ -3442,7 +3738,7 @@ function updateTeamCountDisplay() {
 }
 
 function refreshTeams() {
-    autoRefreshCurrentTab();
+    refreshCurrentTabContent();
     showNotification('Teams manuell aktualisiert');
 }
 
@@ -3453,7 +3749,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Page Unload - Clean up timers
 window.addEventListener('beforeunload', () => {
-    stopAutoRefresh();
+    // WebSocket cleanup handled by beforeunload - no manual stop needed
     if (liveControlInterval) {
         clearInterval(liveControlInterval);
     }

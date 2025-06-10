@@ -2,14 +2,35 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { Server } = require('socket.io');
+const { createServer } = require('http');
 
 const app = express();
+const server = createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 const PORT = 5678;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ 
+    limit: '10mb',
+    type: 'application/json'
+}));
 app.use(express.static('public'));
+
+// JSON Error Handling Middleware
+app.use((error, req, res, next) => {
+    if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+        console.error('JSON Parse Error:', error.message);
+        return res.status(400).json({ error: 'Invalid JSON format' });
+    }
+    next(error);
+});
 
 // Saves-Ordner
 const SAVES_DIR = path.join(__dirname, 'saves');
@@ -1169,7 +1190,7 @@ function assignReferees(matches, groups) {
         });
     } else {
         // Für Swiss System: Alle Teams sind in einer "Gruppe"
-        teamsByGroup['Liga'] = teams.map(t => t.name);
+        teamsByGroup['Champions League Format'] = teams.map(t => t.name);
     }
     
     const groupNames = Object.keys(teamsByGroup);
@@ -2226,6 +2247,7 @@ app.post('/api/admin/current-match', (req, res) => {
     if (currentTournament) {
         currentTournament.currentMatch = matchId;
         autoSave();
+        broadcastUpdate('current-match-changed', { matchId, currentMatch: matchId });
     }
     
     res.json({ success: true });
@@ -2249,6 +2271,7 @@ app.post('/api/admin/live-score', (req, res) => {
     match.liveScore.lastScoreUpdate = new Date();
     
     autoSave();
+    broadcastUpdate('live-score-update', { matchId, score1: match.liveScore.score1, score2: match.liveScore.score2, match });
     res.json({ success: true, match });
 });
 
@@ -2287,6 +2310,7 @@ app.post('/api/admin/start-match', (req, res) => {
     };
     
     autoSave();
+    broadcastUpdate('match-started', { matchId, match, currentMatch: matchId });
     res.json({ success: true, match });
 });
 
@@ -2308,6 +2332,7 @@ app.post('/api/admin/pause-match', (req, res) => {
         match.liveScore.pauseStartTime = new Date();
         
         autoSave();
+        broadcastUpdate('match-paused', { matchId, match });
         res.json({ success: true, message: 'Spiel pausiert' });
     } else {
         res.status(400).json({ error: 'Spiel ist bereits pausiert oder in Halbzeitpause' });
@@ -2334,6 +2359,7 @@ app.post('/api/admin/resume-match', (req, res) => {
         delete match.liveScore.pauseStartTime;
         
         autoSave();
+        broadcastUpdate('match-resumed', { matchId, match });
         res.json({ success: true, message: 'Spiel fortgesetzt' });
     } else {
         res.status(400).json({ error: 'Spiel ist nicht pausiert' });
@@ -2419,6 +2445,7 @@ app.post('/api/admin/finish-match', (req, res) => {
     }
     
     autoSave();
+    broadcastUpdate('match-finished', { matchId, match });
     res.json({ success: true, match });
 });
 
@@ -2457,25 +2484,152 @@ app.post('/api/admin/result', (req, res) => {
     }
     
     autoSave();
+    broadcastUpdate('match-result-added', { matchId, match, score1, score2 });
     res.json({ success: true, match });
 });
 
 // Admin-Login prüfen
 app.post('/api/admin/login', (req, res) => {
-    const { password } = req.body;
-    if (password === ADMIN_PASSWORD) {
-        res.json({ success: true });
-    } else {
-        res.status(401).json({ error: 'Ungültiges Passwort' });
+    try {
+        const { password } = req.body;
+        
+        if (!password) {
+            return res.status(400).json({ error: 'Passwort fehlt' });
+        }
+        
+        if (password === ADMIN_PASSWORD) {
+            res.json({ success: true });
+        } else {
+            res.status(401).json({ error: 'Ungültiges Passwort' });
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Login' });
+    }
+});
+
+// Admin: Import von Turnierdaten
+app.post('/api/admin/import', (req, res) => {
+    try {
+        const { password, data } = req.body;
+        
+        if (password !== ADMIN_PASSWORD) {
+            return res.status(401).json({ error: 'Ungültiges Passwort' });
+        }
+        
+        if (!data) {
+            return res.status(400).json({ error: 'Keine Daten zum Importieren bereitgestellt' });
+        }
+        
+        // Extrahiere Jahr aus verschiedenen möglichen Quellen
+        const year = data.year || (data.tournament && data.tournament.year);
+        const exportDate = data.exportDate || data.exportedAt;
+        
+        // Validiere Import-Daten-Struktur (flexibel für verschiedene Export-Formate)
+        if (!year || !exportDate) {
+            return res.status(400).json({ 
+                error: 'Ungültiges Datenformat: Jahr und Exportdatum erforderlich',
+                details: 'Fehlende Felder: ' + (!year ? 'year/tournament.year ' : '') + (!exportDate ? 'exportDate/exportedAt' : ''),
+                receivedFields: Object.keys(data)
+            });
+        }
+        
+        // Stelle sicher, dass data.year gesetzt ist für die weitere Verarbeitung
+        data.year = year;
+        
+        // Backup current data before import
+        const backupData = {
+            tournaments: [...tournaments],
+            teams: [...teams],
+            matches: [...matches],
+            currentTournament: currentTournament ? {...currentTournament} : null,
+            tournamentRules: tournamentRules
+        };
+        
+        // Import data
+        if (data.tournaments && Array.isArray(data.tournaments)) {
+            tournaments = data.tournaments;
+        }
+        
+        if (data.teams && Array.isArray(data.teams)) {
+            teams = data.teams;
+        }
+        
+        if (data.matches && Array.isArray(data.matches)) {
+            matches = data.matches;
+        }
+        
+        if (data.currentTournament) {
+            currentTournament = data.currentTournament;
+        }
+        
+        if (data.rules) {
+            tournamentRules = data.rules;
+        }
+        
+        // Save imported data
+        autoSave();
+        
+        // Broadcast update to all connected clients
+        broadcastUpdate('data-imported', {
+            year: data.year,
+            importDate: new Date(),
+            exportDate: data.exportDate || data.exportedAt,
+            teamsCount: teams.length,
+            matchesCount: matches.length,
+            tournament: currentTournament
+        });
+        
+        res.json({
+            success: true,
+            message: 'Daten erfolgreich importiert',
+            data: {
+                year: data.year,
+                teamsImported: teams.length,
+                matchesImported: matches.length,
+                tournamentImported: !!currentTournament
+            }
+        });
+        
+    } catch (error) {
+        console.error('Import error:', error);
+        res.status(500).json({
+            error: 'Fehler beim Importieren der Daten',
+            details: error.message
+        });
     }
 });
 
 // Daten beim Start laden
 loadCurrentYearData();
 
+// WebSocket Connection Handler
+io.on('connection', (socket) => {
+    console.log('Admin client connected:', socket.id);
+    
+    // Send initial data to newly connected admin
+    socket.emit('initial-data', {
+        tournaments,
+        teams,
+        matches,
+        currentTournament,
+        tournamentRules
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('Admin client disconnected:', socket.id);
+    });
+});
+
+// Broadcast function for real-time updates
+function broadcastUpdate(event, data) {
+    io.emit(event, data);
+}
+
 // Server starten
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`CVJM Fellbach Fußballturnier-Server läuft auf Port ${PORT}`);
     console.log(`Admin-Passwort: ${ADMIN_PASSWORD}`);
     console.log(`Daten werden in ${SAVES_DIR} gespeichert`);
+    console.log(`WebSocket Server aktiv für Live-Updates`);
 });
