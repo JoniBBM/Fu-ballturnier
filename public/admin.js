@@ -1975,12 +1975,12 @@ async function openKnockoutConfigModal() {
                     <button class="btn btn-success" onclick="generateKnockoutWithConfig()">
                         <i class="fas fa-trophy"></i> K.O.-Spiele generieren
                     </button>
-                    <button class="btn btn-outline" onclick="closeModal('modal')">
+                    <button class="btn btn-outline" onclick="this.closest('.modal').remove()">
                         <i class="fas fa-times"></i> Abbrechen
                     </button>
                 </div>
             </div>
-        `, 'knockout-config-modal');
+        `, []);
         
         // Event Listeners für Live-Vorschau
         document.querySelectorAll('#enable-quarterfinals, #enable-third-place, #enable-fifth-place, #enable-seventh-place').forEach(checkbox => {
