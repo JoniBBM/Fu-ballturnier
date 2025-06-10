@@ -304,7 +304,8 @@ body {
     color: var(--primary);
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
     width: 100%;
     padding: 0.875rem;
     border: 2px solid var(--gray-300);
@@ -314,10 +315,66 @@ body {
     background: var(--white);
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+}
+
+/* NEUE TRIKOTFARBEN-STYLES */
+.jersey-color-preview {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: var(--gray-50);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--gray-200);
+}
+
+.color-sample {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    border: 2px solid var(--gray-300);
+    box-shadow: var(--shadow-sm);
+}
+
+.color-usage-info {
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+}
+
+.color-usage-info.available {
+    color: var(--success);
+    background: rgba(22, 163, 74, 0.1);
+}
+
+.color-usage-info.taken {
+    color: var(--warning);
+    background: rgba(217, 119, 6, 0.1);
+}
+
+.team-jersey-color {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    color: var(--gray-600);
+}
+
+.jersey-color-display {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    border: 2px solid var(--gray-300);
+    box-shadow: var(--shadow-sm);
 }
 
 .privacy-notice {
@@ -1099,6 +1156,13 @@ tr:hover td {
     justify-content: center;
 }
 
+.vs-large {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--primary);
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
 .live-group-info {
     background: var(--primary);
     color: var(--white);
@@ -1135,6 +1199,253 @@ tr:hover td {
 @keyframes blink {
     0%, 50% { opacity: 1; }
     51%, 100% { opacity: 0.3; }
+}
+
+/* NEXT MATCH DISPLAY (Verbessertes Design) */
+.next-match-display {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    border: 2px solid #3b82f6;
+    border-radius: var(--radius-xl);
+    padding: 2.5rem;
+    text-align: center;
+    margin: 2rem 0;
+}
+
+.next-match-header {
+    margin-bottom: 2rem;
+}
+
+.next-match-header h3 {
+    color: #1e40af;
+    font-size: 1.75rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+}
+
+.countdown-big {
+    background: #3b82f6;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    border-radius: var(--radius-lg);
+    font-size: 1.25rem;
+    font-weight: 700;
+    display: inline-block;
+}
+
+.next-match-teams {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    margin: 2rem 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--dark);
+}
+
+.next-match-details {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+}
+
+.next-match-details > div {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    color: #1e40af;
+    font-weight: 500;
+}
+
+.next-match-details i {
+    color: #3b82f6;
+}
+
+/* PROMINENTE SCHIEDSRICHTER-ANZEIGE */
+.referee-display-prominent {
+    background: linear-gradient(135deg, #fef3c7 0%, #fed7aa 100%);
+    border: 3px solid var(--warning);
+    border-radius: var(--radius-xl);
+    padding: 2rem;
+    margin: 2rem 0;
+    text-align: center;
+    box-shadow: var(--shadow-lg);
+    animation: referee-highlight 3s ease-in-out infinite;
+}
+
+@keyframes referee-highlight {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: var(--shadow-lg);
+    }
+    50% {
+        transform: scale(1.02);
+        box-shadow: 0 20px 25px -5px rgba(217, 119, 6, 0.3), 0 8px 10px -6px rgba(217, 119, 6, 0.2);
+    }
+}
+
+.referee-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #92400e;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.referee-header i {
+    font-size: 1.5rem;
+    color: var(--warning);
+}
+
+.referee-name-big {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #78350f;
+    margin-bottom: 0.5rem;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
+.referee-group {
+    font-size: 1.25rem;
+    color: #92400e;
+    font-weight: 600;
+}
+
+/* NÄCHSTER SCHIEDSRICHTER ALERT (während Live-Spiel) */
+.next-referee-alert {
+    background: linear-gradient(135deg, #fef3c7 0%, #ffffff 100%);
+    border: 2px solid var(--warning);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin: 2rem 0;
+    text-align: center;
+    animation: referee-pulse 2s ease-in-out infinite;
+}
+
+@keyframes referee-pulse {
+    0%, 100% {
+        border-color: var(--warning);
+        background: linear-gradient(135deg, #fef3c7 0%, #ffffff 100%);
+    }
+    50% {
+        border-color: #f59e0b;
+        background: linear-gradient(135deg, #fed7aa 0%, #fef3c7 100%);
+    }
+}
+
+.next-referee-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #92400e;
+}
+
+.next-referee-header i {
+    color: var(--warning);
+    font-size: 1.25rem;
+}
+
+.next-referee-team {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #78350f;
+    margin-bottom: 0.5rem;
+}
+
+.next-referee-details {
+    font-size: 1rem;
+    color: #92400e;
+    font-weight: 500;
+}
+
+/* UPCOMING MATCHES SECTION */
+.upcoming-matches-section {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 2px solid var(--gray-200);
+}
+
+.upcoming-matches-section h4 {
+    color: var(--dark);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.upcoming-matches-section h4 i {
+    color: var(--primary);
+}
+
+.upcoming-matches-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.upcoming-match-item {
+    background: var(--gray-50);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 1rem;
+    align-items: center;
+    transition: all 0.3s ease;
+}
+
+.upcoming-match-item:hover {
+    border-color: var(--primary);
+    background: var(--white);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.upcoming-match-item .match-time {
+    font-weight: 700;
+    color: var(--primary);
+    font-size: 1.1rem;
+}
+
+.upcoming-match-item .match-teams {
+    font-weight: 600;
+    color: var(--dark);
+    font-size: 1rem;
+}
+
+.upcoming-match-item .match-info {
+    font-size: 0.875rem;
+    color: var(--gray-600);
+}
+
+.upcoming-match-item .match-referee {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--gray-700);
+    font-weight: 500;
+}
+
+.upcoming-match-item .match-referee i {
+    color: var(--warning);
 }
 
 .no-live-match {
@@ -1232,6 +1543,20 @@ tr:hover td {
         gap: 0.5rem;
     }
     
+    .upcoming-match-item {
+        grid-template-columns: 1fr;
+        text-align: center;
+        gap: 0.75rem;
+    }
+    
+    .referee-display-prominent {
+        padding: 1.5rem;
+    }
+    
+    .referee-name-big {
+        font-size: 2rem;
+    }
+    
     /* Live Display Mobile */
     .live-timer {
         font-size: 3rem;
@@ -1250,6 +1575,10 @@ tr:hover td {
         margin: 0 auto;
     }
     
+    .vs-large {
+        font-size: 2rem;
+    }
+    
     .live-team .team-name {
         font-size: 1.25rem;
     }
@@ -1260,6 +1589,18 @@ tr:hover td {
     
     .live-half-info {
         font-size: 1.25rem;
+    }
+    
+    .next-match-display {
+        padding: 1.5rem;
+    }
+    
+    .next-referee-alert {
+        padding: 1rem;
+    }
+    
+    .next-referee-team {
+        font-size: 1.5rem;
     }
     
     /* Rules Mobile */

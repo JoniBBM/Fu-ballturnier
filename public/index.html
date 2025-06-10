@@ -90,21 +90,36 @@
                             <label for="team-name">
                                 <i class="fas fa-shield-alt"></i> Teamname
                             </label>
-                            <input type="text" id="team-name" required>
+                            <input type="text" id="team-name" required placeholder="z.B. FC Fellbach">
                         </div>
                         
                         <div class="form-group">
                             <label for="contact-name">
                                 <i class="fas fa-user"></i> Ansprechpartner
                             </label>
-                            <input type="text" id="contact-name" required>
+                            <input type="text" id="contact-name" required placeholder="Vollständiger Name">
                         </div>
                         
                         <div class="form-group">
                             <label for="contact-info">
                                 <i class="fas fa-phone"></i> E-Mail oder Handynummer
                             </label>
-                            <input type="text" id="contact-info" required>
+                            <input type="text" id="contact-info" required placeholder="E-Mail oder Telefonnummer">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="jersey-color">
+                                <i class="fas fa-tshirt"></i> Trikotfarbe
+                            </label>
+                            <select id="jersey-color" required>
+                                <option value="">Bitte Trikotfarbe wählen</option>
+                                <!-- Wird dynamisch geladen -->
+                            </select>
+                            <div class="jersey-color-preview" id="jersey-color-preview" style="display: none;">
+                                <div class="color-sample" id="color-sample"></div>
+                                <span id="color-name"></span>
+                            </div>
+                            <small id="color-usage-info" class="color-usage-info"></small>
                         </div>
                         
                         <div class="privacy-notice">

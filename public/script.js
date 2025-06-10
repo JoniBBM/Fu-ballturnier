@@ -2,6 +2,7 @@
 let currentTournament = null;
 let isAdminLoggedIn = false;
 let adminPassword = '';
+let availableColors = [];
 
 // DOM Elements
 const navBtns = document.querySelectorAll('.nav-btn');
@@ -174,19 +175,94 @@ loginForm.addEventListener('submit', async (e) => {
     }
 });
 
-// Team Registration
+// TRIKOTFARBEN-FUNKTIONEN
+async function loadJerseyColors() {
+    try {
+        const response = await fetch('/api/jersey-colors');
+        availableColors = await response.json();
+        
+        const jerseySelect = document.getElementById('jersey-color');
+        
+        // Clear existing options (except first)
+        while (jerseySelect.children.length > 1) {
+            jerseySelect.removeChild(jerseySelect.lastChild);
+        }
+        
+        // Add color options
+        availableColors.forEach(color => {
+            const option = document.createElement('option');
+            option.value = color.value;
+            option.textContent = `${color.name} ${color.usage > 0 ? `(${color.usage}x vergeben)` : ''}`;
+            option.setAttribute('data-hex', color.hex);
+            option.setAttribute('data-usage', color.usage);
+            jerseySelect.appendChild(option);
+        });
+        
+    } catch (error) {
+        console.error('Error loading jersey colors:', error);
+    }
+}
+
+function updateJerseyColorPreview() {
+    const jerseySelect = document.getElementById('jersey-color');
+    const preview = document.getElementById('jersey-color-preview');
+    const colorSample = document.getElementById('color-sample');
+    const colorName = document.getElementById('color-name');
+    const usageInfo = document.getElementById('color-usage-info');
+    
+    const selectedOption = jerseySelect.selectedOptions[0];
+    
+    if (selectedOption && selectedOption.value) {
+        const hex = selectedOption.getAttribute('data-hex');
+        const usage = parseInt(selectedOption.getAttribute('data-usage')) || 0;
+        
+        // Show preview
+        preview.style.display = 'flex';
+        colorSample.style.backgroundColor = hex;
+        colorSample.style.borderColor = hex === '#ffffff' ? '#ccc' : hex;
+        colorName.textContent = selectedOption.textContent;
+        
+        // Update usage info
+        if (usage === 0) {
+            usageInfo.textContent = '✅ Diese Farbe ist noch frei';
+            usageInfo.className = 'color-usage-info available';
+        } else {
+            usageInfo.textContent = `⚠️ Diese Farbe wurde bereits ${usage}x vergeben`;
+            usageInfo.className = 'color-usage-info taken';
+        }
+    } else {
+        preview.style.display = 'none';
+        usageInfo.textContent = '';
+    }
+}
+
+// Event listener für Farbauswahl
+document.addEventListener('DOMContentLoaded', () => {
+    const jerseySelect = document.getElementById('jersey-color');
+    if (jerseySelect) {
+        jerseySelect.addEventListener('change', updateJerseyColorPreview);
+    }
+});
+
+// Team Registration (erweitert mit Trikotfarbe)
 teamForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
     const teamName = document.getElementById('team-name').value;
     const contactName = document.getElementById('contact-name').value;
     const contactInfo = document.getElementById('contact-info').value;
+    const jerseyColor = document.getElementById('jersey-color').value;
+    
+    if (!jerseyColor) {
+        showNotification('Bitte eine Trikotfarbe auswählen', 'error');
+        return;
+    }
     
     try {
         const response = await fetch('/api/teams', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ teamName, contactName, contactInfo })
+            body: JSON.stringify({ teamName, contactName, contactInfo, jerseyColor })
         });
         
         const data = await response.json();
@@ -194,7 +270,12 @@ teamForm.addEventListener('submit', async (e) => {
         if (data.success) {
             showNotification('Team erfolgreich angemeldet!');
             teamForm.reset();
+            updateJerseyColorPreview(); // Reset preview
             updateStats();
+            
+            // Reload colors to update usage count
+            await loadJerseyColors();
+            
             // Auto-refresh teams list if on teams tab
             if (currentActiveTab === 'teams') {
                 loadTeams();
@@ -234,7 +315,7 @@ tournamentForm.addEventListener('submit', async (e) => {
     }
 });
 
-// Check Registration Status
+// Check Registration Status (erweitert)
 async function checkRegistrationStatus() {
     try {
         const response = await fetch('/api/tournament');
@@ -263,6 +344,9 @@ async function checkRegistrationStatus() {
                 </div>
             `;
             teamForm.style.display = 'block';
+            
+            // Lade Trikotfarben
+            await loadJerseyColors();
         } else {
             // Anmeldung geschlossen oder Turnier läuft bereits
             const statusMessages = {
@@ -446,6 +530,22 @@ async function loadLiveMatch() {
                 </div>
             `;
             
+            // NÄCHSTER SCHIEDSRICHTER WÄHREND LIVE-SPIEL
+            if (nextData.nextMatch && nextData.nextMatch.referee) {
+                html += `
+                    <div class="next-referee-alert">
+                        <div class="next-referee-header">
+                            <i class="fas fa-whistle"></i>
+                            <span>Nächster Schiedsrichter bereitmachen:</span>
+                        </div>
+                        <div class="next-referee-team">${nextData.nextMatch.referee.team}</div>
+                        <div class="next-referee-details">
+                            Für: ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}
+                        </div>
+                    </div>
+                `;
+            }
+            
             // Start live updates
             startLiveUpdates(liveMatch);
         }
@@ -485,12 +585,12 @@ async function loadLiveMatch() {
                     </div>
                     
                     ${nextMatch.referee ? `
-                        <div class="referee-display">
+                        <div class="referee-display-prominent">
                             <div class="referee-header">
                                 <i class="fas fa-whistle"></i>
-                                <span>Schiedsrichter</span>
+                                <span>SCHIEDSRICHTER</span>
                             </div>
-                            <div class="referee-name">${nextMatch.referee.team}</div>
+                            <div class="referee-name-big">${nextMatch.referee.team}</div>
                             <div class="referee-group">${nextMatch.referee.group}</div>
                         </div>
                     ` : ''}
@@ -525,6 +625,11 @@ async function loadLiveMatch() {
                                 <div class="match-time">${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</div>
                                 <div class="match-teams">${match.team1} vs ${match.team2}</div>
                                 <div class="match-info">${match.group} • ${match.scheduled.field}</div>
+                                ${match.referee ? `
+                                    <div class="match-referee">
+                                        <i class="fas fa-whistle"></i> ${match.referee.team}
+                                    </div>
+                                ` : ''}
                             </div>
                         `;
                     });
@@ -586,18 +691,23 @@ function startLiveUpdates(liveMatch) {
     liveUpdateInterval = setInterval(async () => {
         try {
             // Fetch latest data first
-            const response = await fetch('/api/live-match');
-            const data = await response.json();
+            const [liveResponse, nextResponse] = await Promise.all([
+                fetch('/api/live-match'),
+                fetch('/api/next-match')
+            ]);
             
-            if (!data.liveMatch) {
-                // Match ended, reload page
+            const liveData = await liveResponse.json();
+            const nextData = await nextResponse.json();
+            
+            if (!liveData.liveMatch) {
+                // Match ended, reload entire live match display to show next match
                 console.log('Match ended, reloading live match display');
                 loadLiveMatch();
                 return;
             }
             
             // Update liveMatch object with fresh data
-            const updatedMatch = data.liveMatch;
+            const updatedMatch = liveData.liveMatch;
             
             // Update timer
             const timeInfo = calculateLiveTime(updatedMatch);
@@ -616,6 +726,28 @@ function startLiveUpdates(liveMatch) {
             
             if (score1Element) score1Element.textContent = updatedMatch.score1;
             if (score2Element) score2Element.textContent = updatedMatch.score2;
+            
+            // Update next referee info if needed
+            const existingRefereeAlert = document.querySelector('.next-referee-alert');
+            if (nextData.nextMatch && nextData.nextMatch.referee && !existingRefereeAlert) {
+                // Add referee alert if not present
+                const liveDisplay = document.querySelector('.live-match-display');
+                if (liveDisplay) {
+                    const refereeAlert = document.createElement('div');
+                    refereeAlert.className = 'next-referee-alert';
+                    refereeAlert.innerHTML = `
+                        <div class="next-referee-header">
+                            <i class="fas fa-whistle"></i>
+                            <span>Nächster Schiedsrichter bereitmachen:</span>
+                        </div>
+                        <div class="next-referee-team">${nextData.nextMatch.referee.team}</div>
+                        <div class="next-referee-details">
+                            Für: ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}
+                        </div>
+                    `;
+                    liveDisplay.parentNode.insertBefore(refereeAlert, liveDisplay.nextSibling);
+                }
+            }
             
         } catch (error) {
             console.error('Fehler beim Live-Update:', error);
@@ -666,7 +798,7 @@ async function loadRules() {
     }
 }
 
-// Load Functions
+// Load Functions (erweitert mit Trikotfarben)
 async function loadTeams() {
     try {
         const response = await fetch('/api/teams');
@@ -689,11 +821,53 @@ async function loadTeams() {
             <div class="team-card">
                 <h3>${team.name}</h3>
                 <div class="team-number">Team #${index + 1}</div>
+                ${team.jerseyColor ? `
+                    <div class="team-jersey-color">
+                        <div class="jersey-color-display" style="background-color: ${getJerseyColorHex(team.jerseyColor)}; border-color: ${team.jerseyColor === 'white' ? '#ccc' : getJerseyColorHex(team.jerseyColor)};"></div>
+                        <span>${getJerseyColorName(team.jerseyColor)}</span>
+                    </div>
+                ` : ''}
             </div>
         `).join('');
     } catch (error) {
         console.error('Fehler beim Laden der Teams:', error);
     }
+}
+
+function getJerseyColorName(colorValue) {
+    const colors = {
+        'red': 'Rot',
+        'blue': 'Blau',
+        'green': 'Grün',
+        'yellow': 'Gelb',
+        'orange': 'Orange',
+        'purple': 'Lila',
+        'white': 'Weiß',
+        'black': 'Schwarz',
+        'pink': 'Pink',
+        'teal': 'Türkis',
+        'gray': 'Grau',
+        'brown': 'Braun'
+    };
+    return colors[colorValue] || colorValue;
+}
+
+function getJerseyColorHex(colorValue) {
+    const colors = {
+        'red': '#dc2626',
+        'blue': '#2563eb',
+        'green': '#16a34a',
+        'yellow': '#eab308',
+        'orange': '#ea580c',
+        'purple': '#9333ea',
+        'white': '#ffffff',
+        'black': '#000000',
+        'pink': '#ec4899',
+        'teal': '#0891b2',
+        'gray': '#6b7280',
+        'brown': '#92400e'
+    };
+    return colors[colorValue] || '#6b7280';
 }
 
 async function loadSchedule() {
@@ -1000,6 +1174,12 @@ async function loadAdminContent() {
                 <p><strong>Kontakt:</strong> ${team.contact.name}</p>
                 <p><strong>Info:</strong> ${team.contact.info}</p>
                 <p><small>Angemeldet: ${new Date(team.registeredAt).toLocaleDateString('de-DE')}</small></p>
+                ${team.jerseyColor ? `
+                    <div class="team-jersey-color">
+                        <div class="jersey-color-display" style="background-color: ${getJerseyColorHex(team.jerseyColor)}; border-color: ${team.jerseyColor === 'white' ? '#ccc' : getJerseyColorHex(team.jerseyColor)};"></div>
+                        <span>${getJerseyColorName(team.jerseyColor)}</span>
+                    </div>
+                ` : ''}
             </div>
         `).join('');
     } catch (error) {
