@@ -2085,7 +2085,7 @@ async function generateKnockoutWithConfig() {
             }
             
             // Daten neu laden
-            await loadAllData();
+            await loadInitialData();
             
             // Button deaktivieren
             const generateBtn = document.getElementById('generate-knockout-btn');

@@ -1197,30 +1197,83 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
     const { enableQuarterfinals, enableThirdPlace, enableFifthPlace, enableSeventhPlace } = knockoutConfig;
     
     if (enableQuarterfinals && finalTable.length >= 8) {
-        // Viertelfinale: 1vs8, 2vs7, 3vs6, 4vs5
+        // Sortiere Teams nach Gruppen-Gewinner/Zweitplatzierte
+        const groupWinners = finalTable.filter(t => t.groupPosition === 1);
+        const groupRunnersUp = finalTable.filter(t => t.groupPosition === 2);
+        
+        // Erstelle optimale Paarungen um Gruppen-Rematches zu vermeiden
         const quarterfinalsIds = [];
-        for (let i = 0; i < 4; i++) {
-            const team1 = finalTable[i];
-            const team2 = finalTable[7 - i];
-            const matchId = `quarterfinal_${i + 1}`;
+        const pairings = [];
+        
+        // Versuche Paarungen zu erstellen, wo Teams aus verschiedenen Gruppen spielen
+        for (let i = 0; i < Math.min(groupWinners.length, groupRunnersUp.length); i++) {
+            // Finde einen Zweitplatzierten aus einer anderen Gruppe für jeden Gruppensieger
+            let bestOpponent = null;
+            let bestOpponentIndex = -1;
             
-            koMatches.push({
-                id: matchId,
-                phase: 'quarterfinal',
-                group: 'Viertelfinale',
-                team1: team1.team,
-                team2: team2.team,
-                score1: null,
-                score2: null,
-                completed: false,
-                koInfo: {
-                    position1: i + 1,
-                    position2: 8 - i,
-                    description: `Viertelfinale ${i + 1}: ${i + 1}. vs ${8 - i}.`
+            for (let j = 0; j < groupRunnersUp.length; j++) {
+                if (!groupRunnersUp[j].paired && groupRunnersUp[j].groupName !== groupWinners[i].groupName) {
+                    bestOpponent = groupRunnersUp[j];
+                    bestOpponentIndex = j;
+                    break;
                 }
-            });
+            }
             
-            quarterfinalsIds.push(matchId);
+            if (bestOpponent) {
+                pairings.push({ team1: groupWinners[i], team2: bestOpponent });
+                groupRunnersUp[bestOpponentIndex].paired = true;
+            }
+        }
+        
+        // Falls nicht genug optimale Paarungen möglich sind, verwende Standard-Logik
+        if (pairings.length < 4) {
+            console.log('Verwende Standard-Paarungen für Viertelfinale');
+            for (let i = 0; i < 4; i++) {
+                const team1 = finalTable[i];
+                const team2 = finalTable[7 - i];
+                const matchId = `quarterfinal_${i + 1}`;
+                
+                koMatches.push({
+                    id: matchId,
+                    phase: 'quarterfinal',
+                    group: 'Viertelfinale',
+                    team1: team1.team,
+                    team2: team2.team,
+                    score1: null,
+                    score2: null,
+                    completed: false,
+                    koInfo: {
+                        position1: i + 1,
+                        position2: 8 - i,
+                        description: `Viertelfinale ${i + 1}: ${i + 1}. vs ${8 - i}.`
+                    }
+                });
+                
+                quarterfinalsIds.push(matchId);
+            }
+        } else {
+            // Verwende optimierte Paarungen
+            for (let i = 0; i < pairings.length; i++) {
+                const matchId = `quarterfinal_${i + 1}`;
+                
+                koMatches.push({
+                    id: matchId,
+                    phase: 'quarterfinal',
+                    group: 'Viertelfinale',
+                    team1: pairings[i].team1.team,
+                    team2: pairings[i].team2.team,
+                    score1: null,
+                    score2: null,
+                    completed: false,
+                    koInfo: {
+                        position1: pairings[i].team1.position,
+                        position2: pairings[i].team2.position,
+                        description: `Viertelfinale ${i + 1}`
+                    }
+                });
+                
+                quarterfinalsIds.push(matchId);
+            }
         }
         
         // Halbfinale aus Viertelfinale-Siegern
@@ -1530,6 +1583,14 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
         let bestScore = -1;
         
         unscheduledMatches.forEach((match, index) => {
+            // Überspringe K.O.-Spiele mit Platzhalter-Teams
+            if ((match.team1 && match.team1.includes('Sieger ')) || 
+                (match.team1 && match.team1.includes('Verlierer ')) ||
+                (match.team2 && match.team2.includes('Sieger ')) || 
+                (match.team2 && match.team2.includes('Verlierer '))) {
+                return;
+            }
+            
             const team1LastTime = lastPlayTime[match.team1];
             const team2LastTime = lastPlayTime[match.team2];
             
@@ -1549,6 +1610,14 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
         if (!bestMatch) {
             let longestRest = -1;
             unscheduledMatches.forEach((match, index) => {
+                // Überspringe K.O.-Spiele mit Platzhalter-Teams
+                if ((match.team1 && match.team1.includes('Sieger ')) || 
+                    (match.team1 && match.team1.includes('Verlierer ')) ||
+                    (match.team2 && match.team2.includes('Sieger ')) || 
+                    (match.team2 && match.team2.includes('Verlierer '))) {
+                    return;
+                }
+                
                 const team1LastTime = lastPlayTime[match.team1];
                 const team2LastTime = lastPlayTime[match.team2];
                 
@@ -1579,8 +1648,24 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
             scheduledMatches.push(match);
             currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
         } else {
+            // Überspringe alle K.O.-Spiele mit Platzhaltern
+            const remainingNonPlaceholderMatches = unscheduledMatches.filter(match => 
+                !(match.team1 && match.team1.includes('Sieger ')) && 
+                !(match.team1 && match.team1.includes('Verlierer ')) &&
+                !(match.team2 && match.team2.includes('Sieger ')) && 
+                !(match.team2 && match.team2.includes('Verlierer '))
+            );
+            
+            if (remainingNonPlaceholderMatches.length === 0) {
+                // Alle verbleibenden Spiele haben Platzhalter - breche ab
+                console.log('Nur K.O.-Spiele mit Platzhalter-Teams übrig, beende Planung');
+                break;
+            }
+            
             console.warn('Fallback scheduling used');
-            const match = unscheduledMatches[0];
+            const match = remainingNonPlaceholderMatches[0];
+            const matchIndex = unscheduledMatches.indexOf(match);
+            
             match.scheduled = {
                 datetime: new Date(currentTime),
                 field: field || 'Hauptplatz'
@@ -1589,7 +1674,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
             lastPlayTime[match.team1] = new Date(currentTime);
             lastPlayTime[match.team2] = new Date(currentTime);
             
-            unscheduledMatches.splice(0, 1);
+            unscheduledMatches.splice(matchIndex, 1);
             scheduledMatches.push(match);
             currentTime = new Date(currentTime.getTime() + matchDuration * 60000);
         }
@@ -2064,6 +2149,46 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
     res.json({ success: true, match });
 });
 
+// Funktion zum Aktualisieren abhängiger K.O.-Spiele
+function updateDependentKnockoutMatches(completedMatchId) {
+    const completedMatch = matches.find(m => m.id === completedMatchId);
+    if (!completedMatch || !completedMatch.completed) return;
+    
+    // Bestimme Sieger und Verlierer (berücksichtige Elfmeterschießen)
+    let winner, loser;
+    
+    if (completedMatch.penaltyWinner) {
+        // Sieger durch Elfmeterschießen
+        winner = completedMatch.penaltyWinner === 1 ? completedMatch.team1 : completedMatch.team2;
+        loser = completedMatch.penaltyWinner === 1 ? completedMatch.team2 : completedMatch.team1;
+    } else {
+        // Regulärer Sieger
+        const totalScore1 = completedMatch.score1 + (completedMatch.liveScore?.overtime?.score1 || 0);
+        const totalScore2 = completedMatch.score2 + (completedMatch.liveScore?.overtime?.score2 || 0);
+        
+        winner = totalScore1 > totalScore2 ? completedMatch.team1 : completedMatch.team2;
+        loser = totalScore1 > totalScore2 ? completedMatch.team2 : completedMatch.team1;
+    }
+    
+    // Finde alle Spiele, die von diesem Spiel abhängen
+    matches.forEach(match => {
+        if (match.koInfo && match.koInfo.dependsOn && match.koInfo.dependsOn.includes(completedMatchId)) {
+            // Ersetze Platzhalter-Teams
+            if (match.team1 === `Sieger ${completedMatchId}`) {
+                match.team1 = winner;
+            } else if (match.team1 === `Verlierer ${completedMatchId}`) {
+                match.team1 = loser;
+            }
+            
+            if (match.team2 === `Sieger ${completedMatchId}`) {
+                match.team2 = winner;
+            } else if (match.team2 === `Verlierer ${completedMatchId}`) {
+                match.team2 = loser;
+            }
+        }
+    });
+}
+
 // Admin: Ergebnis bearbeiten
 app.put('/api/admin/results/:matchId', (req, res) => {
     const { password, score1, score2 } = req.body;
@@ -2090,6 +2215,9 @@ app.put('/api/admin/results/:matchId', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
+    } else if (match.phase !== 'group') {
+        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+        updateDependentKnockoutMatches(matchId);
     }
     
     autoSave();
@@ -2765,6 +2893,66 @@ app.post('/api/admin/schedule', (req, res) => {
 });
 
 // Admin: Alle Spiele automatisch planen (intelligenter Algorithmus)
+// Admin: K.O.-Spiele intelligent planen
+app.post('/api/admin/schedule-knockout', (req, res) => {
+    const { password, startTime, matchDuration, field, breakBetweenRounds } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+        return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
+    }
+    
+    const koMatches = matches.filter(m => m.phase !== 'group');
+    const schedulableMatches = koMatches.filter(m => !m.scheduled && 
+        !(m.team1.includes('Sieger ') || m.team1.includes('Verlierer ') ||
+          m.team2.includes('Sieger ') || m.team2.includes('Verlierer ')));
+    
+    if (schedulableMatches.length === 0) {
+        return res.status(400).json({ error: 'Keine K.O.-Spiele zum Planen verfügbar' });
+    }
+    
+    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
+    const today = new Date();
+    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+    
+    // Sortiere nach Phasen (quarterfinals -> semifinals -> finals -> placement)
+    const phaseOrder = { 'quarterfinal': 1, 'semifinal': 2, 'final': 3, 'placement': 4 };
+    schedulableMatches.sort((a, b) => phaseOrder[a.phase] - phaseOrder[b.phase]);
+    
+    let scheduledCount = 0;
+    let currentPhase = null;
+    
+    schedulableMatches.forEach(match => {
+        // Neue Phase = längere Pause
+        if (currentPhase && currentPhase !== match.phase) {
+            currentTime = new Date(currentTime.getTime() + (breakBetweenRounds || 30) * 60000);
+        }
+        
+        match.scheduled = {
+            datetime: new Date(currentTime),
+            field: field || 'Hauptplatz'
+        };
+        
+        currentTime = new Date(currentTime.getTime() + parseInt(matchDuration) * 60000);
+        currentPhase = match.phase;
+        scheduledCount++;
+    });
+    
+    if (currentTournament) {
+        currentTournament.lastUpdated = new Date().toISOString();
+    }
+    
+    autoSave();
+    res.json({ 
+        success: true, 
+        scheduledMatches: scheduledCount,
+        message: `${scheduledCount} K.O.-Spiele geplant`
+    });
+});
+
 app.post('/api/admin/schedule-all', (req, res) => {
     const { password, startTime, matchDuration, field } = req.body;
     
@@ -3068,6 +3256,53 @@ app.post('/api/admin/finish-match', (req, res) => {
         return res.status(404).json({ error: 'Spiel nicht gefunden oder kein Live-Score' });
     }
     
+    // Bei K.O.-Spielen: Prüfe auf Unentschieden
+    if (match.phase !== 'group') {
+        const totalScore1 = match.liveScore.score1 + (match.liveScore.overtime?.score1 || 0);
+        const totalScore2 = match.liveScore.score2 + (match.liveScore.overtime?.score2 || 0);
+        
+        // Nach regulärer Spielzeit unentschieden
+        if (match.liveScore.currentHalf === 2 && match.liveScore.score1 === match.liveScore.score2) {
+            return res.status(400).json({ 
+                error: 'unentschieden_ko',
+                message: 'K.O.-Spiel ist unentschieden - Verlängerung erforderlich',
+                requiresOvertime: true
+            });
+        }
+        
+        // Nach Verlängerung unentschieden
+        if (match.liveScore.currentHalf === 4 && totalScore1 === totalScore2) {
+            return res.status(400).json({ 
+                error: 'unentschieden_ko_overtime',
+                message: 'K.O.-Spiel ist nach Verlängerung unentschieden - Elfmeterschießen erforderlich',
+                requiresPenaltyShootout: true
+            });
+        }
+        
+        // Elfmeterschießen nicht beendet
+        if (match.liveScore.penaltyShootout?.isActive) {
+            return res.status(400).json({ 
+                error: 'penalty_shootout_active',
+                message: 'Elfmeterschießen ist noch aktiv',
+                requiresPenaltyCompletion: true
+            });
+        }
+        
+        // Setze Endresultat bei Elfmeterschießen
+        if (match.liveScore.penaltyShootout?.finished) {
+            const penalty = match.liveScore.penaltyShootout;
+            if (penalty.score1 > penalty.score2) {
+                match.score1 = totalScore1;
+                match.score2 = totalScore2;
+                match.penaltyWinner = 1;
+            } else {
+                match.score1 = totalScore1;
+                match.score2 = totalScore2;
+                match.penaltyWinner = 2;
+            }
+        }
+    }
+    
     match.score1 = match.liveScore.score1;
     match.score2 = match.liveScore.score2;
     match.completed = true;
@@ -3082,6 +3317,9 @@ app.post('/api/admin/finish-match', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
         }
+    } else if (match.phase !== 'group') {
+        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+        updateDependentKnockoutMatches(matchId);
     }
     
     if (currentTournament && currentTournament.currentMatch === matchId) {
@@ -3091,6 +3329,197 @@ app.post('/api/admin/finish-match', (req, res) => {
     autoSave();
     broadcastUpdate('match-finished', { matchId, match });
     res.json({ success: true, match });
+});
+
+// Admin: Verlängerung starten
+app.post('/api/admin/start-overtime', (req, res) => {
+    const { password, matchId, overtimeDuration } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match || !match.liveScore?.isLive) {
+        return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
+    }
+    
+    if (match.phase === 'group') {
+        return res.status(400).json({ error: 'Verlängerung nur in K.O.-Spielen möglich' });
+    }
+    
+    if (match.liveScore.score1 !== match.liveScore.score2) {
+        return res.status(400).json({ error: 'Verlängerung nur bei Unentschieden möglich' });
+    }
+    
+    // Initialisiere Verlängerung
+    match.liveScore.overtime = {
+        isActive: true,
+        currentHalf: 1, // Erste Halbzeit der Verlängerung
+        duration: parseInt(overtimeDuration) || 15, // Standard: 15 Minuten pro Halbzeit
+        score1: 0,
+        score2: 0,
+        startTime: new Date(),
+        halfTimeBreak: false
+    };
+    
+    match.liveScore.currentHalf = 3; // Kennzeichnet Verlängerung
+    match.liveScore.isPaused = false;
+    
+    autoSave();
+    broadcastUpdate('overtime-started', { matchId, match });
+    res.json({ success: true, message: 'Verlängerung gestartet' });
+});
+
+// Admin: Verlängerung Halbzeit
+app.post('/api/admin/overtime-halftime', (req, res) => {
+    const { password, matchId } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match || !match.liveScore?.overtime?.isActive) {
+        return res.status(404).json({ error: 'Keine aktive Verlängerung gefunden' });
+    }
+    
+    if (match.liveScore.overtime.currentHalf === 1) {
+        match.liveScore.overtime.halfTimeBreak = true;
+        match.liveScore.isPaused = true;
+        
+        autoSave();
+        broadcastUpdate('overtime-halftime', { matchId, match });
+        res.json({ success: true, message: 'Verlängerung Halbzeitpause' });
+    } else {
+        res.status(400).json({ error: 'Halbzeit nur nach der ersten Halbzeit der Verlängerung möglich' });
+    }
+});
+
+// Admin: Verlängerung zweite Halbzeit
+app.post('/api/admin/overtime-second-half', (req, res) => {
+    const { password, matchId } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match || !match.liveScore?.overtime?.isActive) {
+        return res.status(404).json({ error: 'Keine aktive Verlängerung gefunden' });
+    }
+    
+    if (match.liveScore.overtime.halfTimeBreak && match.liveScore.overtime.currentHalf === 1) {
+        match.liveScore.overtime.halfTimeBreak = false;
+        match.liveScore.overtime.currentHalf = 2;
+        match.liveScore.currentHalf = 4; // Zweite Halbzeit Verlängerung
+        match.liveScore.isPaused = false;
+        
+        autoSave();
+        broadcastUpdate('overtime-second-half', { matchId, match });
+        res.json({ success: true, message: 'Verlängerung zweite Halbzeit gestartet' });
+    } else {
+        res.status(400).json({ error: 'Zweite Halbzeit der Verlängerung kann nur nach Halbzeitpause gestartet werden' });
+    }
+});
+
+// Admin: Elfmeterschießen starten
+app.post('/api/admin/start-penalty-shootout', (req, res) => {
+    const { password, matchId, shootersPerTeam } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match || !match.liveScore?.isLive) {
+        return res.status(404).json({ error: 'Kein laufendes Spiel gefunden' });
+    }
+    
+    // Gesamtscore inklusive Verlängerung prüfen
+    const totalScore1 = match.liveScore.score1 + (match.liveScore.overtime?.score1 || 0);
+    const totalScore2 = match.liveScore.score2 + (match.liveScore.overtime?.score2 || 0);
+    
+    if (totalScore1 !== totalScore2) {
+        return res.status(400).json({ error: 'Elfmeterschießen nur bei Unentschieden nach Verlängerung möglich' });
+    }
+    
+    // Initialisiere Elfmeterschießen
+    match.liveScore.penaltyShootout = {
+        isActive: true,
+        shootersPerTeam: parseInt(shootersPerTeam) || 5,
+        currentShooter: 1,
+        currentTeam: 1, // Team 1 beginnt
+        penalties1: [], // Array von {scored: boolean}
+        penalties2: [],
+        score1: 0,
+        score2: 0,
+        finished: false
+    };
+    
+    // Beende Verlängerung falls aktiv
+    if (match.liveScore.overtime) {
+        match.liveScore.overtime.isActive = false;
+    }
+    
+    match.liveScore.currentHalf = 5; // Kennzeichnet Elfmeterschießen
+    
+    autoSave();
+    broadcastUpdate('penalty-shootout-started', { matchId, match });
+    res.json({ success: true, message: 'Elfmeterschießen gestartet' });
+});
+
+// Admin: Elfmeter Ergebnis
+app.post('/api/admin/penalty-result', (req, res) => {
+    const { password, matchId, scored } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match || !match.liveScore?.penaltyShootout?.isActive) {
+        return res.status(404).json({ error: 'Kein aktives Elfmeterschießen gefunden' });
+    }
+    
+    const penalty = match.liveScore.penaltyShootout;
+    const isScored = Boolean(scored);
+    
+    // Füge Elfmeter zu entsprechendem Team hinzu
+    if (penalty.currentTeam === 1) {
+        penalty.penalties1.push({ scored: isScored });
+        if (isScored) penalty.score1++;
+    } else {
+        penalty.penalties2.push({ scored: isScored });
+        if (isScored) penalty.score2++;
+    }
+    
+    // Wechsel zum nächsten Schützen/Team
+    if (penalty.currentTeam === 1) {
+        penalty.currentTeam = 2;
+    } else {
+        penalty.currentTeam = 1;
+        penalty.currentShooter++;
+    }
+    
+    // Prüfe ob Elfmeterschießen beendet
+    const penaltiesTaken1 = penalty.penalties1.length;
+    const penaltiesTaken2 = penalty.penalties2.length;
+    const maxPenalties = penalty.shootersPerTeam;
+    
+    // Beide Teams haben gleich viele geschossen und mindestens die Mindestanzahl
+    if (penaltiesTaken1 >= maxPenalties && penaltiesTaken2 >= maxPenalties && penaltiesTaken1 === penaltiesTaken2) {
+        if (penalty.score1 !== penalty.score2) {
+            // Sieger ermittelt
+            penalty.finished = true;
+            penalty.isActive = false;
+        }
+        // Bei weiterem Unentschieden: Sudden Death (wird automatisch fortgesetzt)
+    }
+    
+    autoSave();
+    broadcastUpdate('penalty-result', { matchId, match, scored: isScored });
+    res.json({ success: true, penalty });
 });
 
 // Aktuelles Turnier abrufen
@@ -3131,6 +3560,9 @@ app.post('/api/admin/result', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
+    } else if (match.phase !== 'group') {
+        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+        updateDependentKnockoutMatches(matchId);
     }
     
     autoSave();
