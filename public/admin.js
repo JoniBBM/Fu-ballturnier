@@ -989,1191 +989,6 @@ async function changeTournamentStatus() {
     
     createModal('Turnier-Status ändern', `
         <div class="form-group">
-            <label for="edit-match-group">Gruppe:</label>
-            <select id="edit-match-group" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                ${groups}
-            </select>
-        </div>
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="edit-match-penalty" ${match.isPenaltyShootout ? 'checked' : ''}> Elfmeterschießen
-            </label>
-        </div>
-        <div class="form-group">
-            <label for="edit-match-datetime">Datum/Zeit:</label>
-            <input type="datetime-local" id="edit-match-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-        <div class="form-group">
-            <label for="edit-match-field">Spielfeld:</label>
-            <input type="text" id="edit-match-field" value="${match.scheduled?.field || ''}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-    `;
-    
-    createModal('Spiel bearbeiten', content, [
-        { text: 'Spiel speichern', handler: (modalId) => saveMatchEdit(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function saveMatchEdit(matchId, modalId) {
-    const team1 = document.getElementById('edit-match-team1').value;
-    const team2 = document.getElementById('edit-match-team2').value;
-    const group = document.getElementById('edit-match-group').value;
-    const isPenalty = document.getElementById('edit-match-penalty').checked;
-    const datetime = document.getElementById('edit-match-datetime').value;
-    const field = document.getElementById('edit-match-field').value;
-    
-    if (!team1 || !team2) {
-        showNotification('Beide Teams müssen ausgewählt werden', 'error');
-        return;
-    }
-    
-    if (team1 === team2) {
-        showNotification('Teams müssen unterschiedlich sein', 'error');
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch(`/api/admin/matches/${matchId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                team1,
-                team2,
-                group,
-                isPenaltyShootout: isPenalty,
-                datetime: datetime || null,
-                field: field || null
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel erfolgreich bearbeitet');
-            closeModal(modalId);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Bearbeiten des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Delete Match
-async function deleteMatch(matchId) {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-    
-    if (!confirm(`Spiel "${match.team1} vs ${match.team2}" wirklich löschen?`)) {
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch(`/api/admin/matches/${matchId}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel erfolgreich gelöscht');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Löschen des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Schedule Match
-async function scheduleMatch(matchId) {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-    
-    const scheduledTime = match.scheduled ? new Date(match.scheduled.datetime).toISOString().slice(0, 16) : '';
-    
-    createModal('Spiel zeitlich planen', `
-        <div class="form-group">
-            <h4>${match.team1} vs ${match.team2}</h4>
-            <p><small>${match.group || 'Kein Gruppe'}</small></p>
-        </div>
-        <div class="form-group">
-            <label for="schedule-datetime">Datum und Uhrzeit:</label>
-            <input type="datetime-local" id="schedule-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-        <div class="form-group">
-            <label for="schedule-field">Spielfeld:</label>
-            <input type="text" id="schedule-field" value="${match.scheduled?.field || 'Hauptplatz'}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-    `, [
-        { text: 'Zeit planen', handler: (modalId) => saveMatchSchedule(matchId, modalId) },
-        { text: 'Zeit entfernen', class: 'btn-warning', handler: (modalId) => removeMatchSchedule(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function saveMatchSchedule(matchId, modalId) {
-    const datetime = document.getElementById('schedule-datetime').value;
-    const field = document.getElementById('schedule-field').value;
-    
-    if (!datetime) {
-        showNotification('Datum und Uhrzeit sind erforderlich', 'error');
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch(`/api/admin/matches/${matchId}/schedule`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                datetime,
-                field: field || 'Hauptplatz'
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel erfolgreich geplant');
-            closeModal(modalId);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Planen des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-async function removeMatchSchedule(matchId, modalId) {
-    showLoading(true);
-    
-    try {
-        const response = await fetch(`/api/admin/matches/${matchId}/schedule`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Zeitplanung entfernt');
-            closeModal(modalId);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Entfernen der Zeitplanung', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Schedule All Matches (Intelligent)
-async function scheduleAllMatches() {
-    const unscheduledCount = matches.filter(m => !m.scheduled).length;
-    
-    if (!confirm(`Alle ${unscheduledCount} ungeplanten Spiele intelligent planen?\n\nDas System wird optimale Zeiten unter Berücksichtigung von Pausen zwischen den Spielen für jedes Team vergeben.`)) {
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/matches/schedule-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification(data.message);
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Planen aller Spiele', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Start Match Dialog (erweitert)
-async function startMatchDialog(matchId) {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-    
-    createModal('Spiel starten', `
-        <div class="start-match-info">
-            <h4>${match.team1} vs ${match.team2}</h4>
-            <p><strong>Gruppe:</strong> ${match.group}</p>
-            ${match.scheduled ? `
-                <p><strong>Geplante Zeit:</strong> ${formatDateTime(match.scheduled.datetime)}</p>
-                <p><strong>Spielfeld:</strong> ${match.scheduled.field}</p>
-            ` : ''}
-            ${match.referee ? `
-                <p><strong>Schiedsrichter:</strong> ${match.referee.team} (${match.referee.group})</p>
-            ` : ''}
-        </div>
-        
-        <div class="start-match-options">
-            <div class="form-group">
-                <label for="half-time-duration">Halbzeit-Dauer (Minuten):</label>
-                <select id="half-time-duration" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                    <option value="45">45 Minuten (Standard)</option>
-                    <option value="30">30 Minuten</option>
-                    <option value="25">25 Minuten</option>
-                    <option value="20">20 Minuten</option>
-                    <option value="15">15 Minuten</option>
-                    <option value="10">10 Minuten</option>
-                    <option value="7">7 Minuten</option>
-                    <option value="5">5 Minuten</option>
-                </select>
-            </div>
-        </div>
-        
-        <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
-            <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
-            <strong>Hinweis:</strong> Nach dem Start wird das Spiel sofort live übertragen und der Timer läuft. Das System wechselt automatisch zur Live-Verwaltung.
-        </div>
-    `, [
-        { text: 'Spiel jetzt starten', class: 'btn-success', handler: (modalId) => executeStartMatch(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function executeStartMatch(matchId, modalId) {
-    const halfTimeDuration = parseInt(document.getElementById('half-time-duration').value);
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/start-match', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                matchId: matchId,
-                halfTimeMinutes: halfTimeDuration
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel erfolgreich gestartet! Live-Timer läuft...');
-            closeModal(modalId);
-            
-            // AUTO-SWITCH TO LIVE TAB + AUTO-REFRESH
-            switchToTab('live');
-            await autoRefreshCurrentTab();
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Starten des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// VERBESSERTE LIVE CONTROL FUNCTION
-async function loadLiveControl() {
-    const liveControl = document.getElementById('live-match-control');
-    
-    try {
-        // Load current live match and next match data
-        const [liveResponse, nextResponse] = await Promise.all([
-            fetch('/api/live-match'),
-            fetch('/api/next-match')
-        ]);
-        
-        const liveData = await liveResponse.json();
-        const nextData = await nextResponse.json();
-        
-        let html = '';
-        
-        if (liveData.liveMatch) {
-            // Live match is running
-            const liveMatch = liveData.liveMatch;
-            
-            html += `
-                <div class="live-control-panel">
-                    <div class="live-status-bar">
-                        <div class="live-indicator-big">
-                            <i class="fas fa-circle" style="color: #dc2626; animation: pulse 1.5s infinite;"></i>
-                            <strong>LIVE SPIEL LÄUFT</strong>
-                        </div>
-                        <div class="live-timer-display" id="admin-live-timer">
-                            ${calculateLiveTime(liveMatch).displayTime}
-                        </div>
-                        <div class="live-half-display" id="admin-live-half">
-                            ${calculateLiveTime(liveMatch).halfInfo}
-                        </div>
-                    </div>
-                    
-                    <div class="live-match-details">
-                        <h3>${liveMatch.team1} vs ${liveMatch.team2}</h3>
-                        <div class="live-score-big">
-                            <div class="score-display">
-                                <div class="team-score">
-                                    <span class="team-name">${liveMatch.team1}</span>
-                                    <input type="number" min="0" id="live-score1" value="${liveMatch.score1}" class="score-input">
-                                </div>
-                                <div class="score-separator">:</div>
-                                <div class="team-score">
-                                    <input type="number" min="0" id="live-score2" value="${liveMatch.score2}" class="score-input">
-                                    <span class="team-name">${liveMatch.team2}</span>
-                                </div>
-                            </div>
-                            <button class="btn btn-primary update-score-btn" onclick="updateLiveScore('${liveMatch.id}')">
-                                <i class="fas fa-save"></i> Score aktualisieren
-                            </button>
-                        </div>
-                        
-                        <div class="live-match-info">
-                            <div><strong>Gruppe:</strong> ${liveMatch.group}</div>
-                            <div><strong>Halbzeit-Dauer:</strong> ${liveMatch.halfTimeMinutes || 45} Minuten</div>
-                            ${liveMatch.referee ? `<div><strong>Schiedsrichter:</strong> ${liveMatch.referee.team}</div>` : ''}
-                        </div>
-                    </div>
-                    
-                    <div class="live-controls">
-                        <div class="live-controls-row">
-                            ${liveMatch.isPaused ? `
-                                <button class="btn btn-success live-control-btn" onclick="resumeMatch('${liveMatch.id}')">
-                                    <i class="fas fa-play"></i> Spiel fortsetzen
-                                </button>
-                            ` : `
-                                <button class="btn btn-warning live-control-btn" onclick="pauseMatch('${liveMatch.id}')">
-                                    <i class="fas fa-pause"></i> Spiel pausieren
-                                </button>
-                            `}
-                            
-                            ${liveMatch.currentHalf === 1 && !liveMatch.halfTimeBreak ? `
-                                <button class="btn btn-info live-control-btn" onclick="startHalfTime('${liveMatch.id}')">
-                                    <i class="fas fa-clock"></i> Halbzeit einläuten
-                                </button>
-                            ` : ''}
-                            
-                            ${liveMatch.halfTimeBreak ? `
-                                <button class="btn btn-success live-control-btn" onclick="startSecondHalf('${liveMatch.id}')">
-                                    <i class="fas fa-play"></i> 2. Halbzeit starten
-                                </button>
-                            ` : ''}
-                            
-                            ${liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak ? `
-                                <button class="btn btn-danger live-control-btn" onclick="endMatch('${liveMatch.id}')">
-                                    <i class="fas fa-flag-checkered"></i> Spiel beenden
-                                </button>
-                            ` : ''}
-                        </div>
-                        
-                        <div class="live-emergency-controls">
-                            <button class="btn btn-danger live-control-btn" onclick="stopMatch('${liveMatch.id}')">
-                                <i class="fas fa-stop"></i> Spiel abbrechen (Notfall)
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // WICHTIG: Nächster Schiedsrichter Anzeige während Live-Spiel
-            if (nextData.nextMatch && nextData.nextMatch.referee) {
-                html += `
-                    <div class="next-referee-section">
-                        <h3><i class="fas fa-whistle"></i> Nächster Schiedsrichter bereitmachen</h3>
-                        <div class="next-referee-card-admin">
-                            <div class="referee-name-admin">${nextData.nextMatch.referee.team}</div>
-                            <div class="referee-details-admin">
-                                <strong>Nächstes Spiel:</strong> ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}<br>
-                                <strong>Gruppe:</strong> ${nextData.nextMatch.referee.group}<br>
-                                <strong>Geplant:</strong> ${new Date(nextData.nextMatch.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Start live timer updates
-            startLiveControlUpdates(liveMatch);
-            
-        } else {
-            // No live match - show next match and upcoming
-            if (nextData.nextMatch) {
-                const nextMatch = nextData.nextMatch;
-                const nextTime = new Date(nextMatch.datetime);
-                const timeUntilMatch = nextTime - new Date();
-                const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
-                
-                html += `
-                    <div class="no-live-match">
-                        <div class="next-match-admin-ready">
-                            <h3><i class="fas fa-clock"></i> Nächstes geplantes Spiel</h3>
-                            <div class="next-match-info-admin">
-                                <div class="match-teams-big">${nextMatch.team1} vs ${nextMatch.team2}</div>
-                                <div class="match-time-big">
-                                    <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
-                                    <span class="countdown-admin">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt startbereit!'}</span>
-                                </div>
-                                <div class="match-details-admin">
-                                    <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
-                                    <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
-                                </div>
-                                ${nextMatch.referee ? `
-                                    <div class="referee-ready-admin">
-                                        <i class="fas fa-whistle"></i>
-                                        <strong>Schiedsrichter bereit:</strong> ${nextMatch.referee.team} (${nextMatch.referee.group})
-                                    </div>
-                                ` : ''}
-                            </div>
-                            
-                            <div class="next-match-actions">
-                                <button class="btn btn-success btn-large" onclick="startMatchDialog('${nextMatch.id}')">
-                                    <i class="fas fa-play"></i> Dieses Spiel jetzt starten
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                // No scheduled matches
-                const allMatches = matches.filter(m => !m.completed);
-                const unscheduledMatches = allMatches.filter(m => !m.scheduled);
-                
-                if (unscheduledMatches.length > 0) {
-                    html += `
-                        <div class="no-live-match">
-                            <div class="no-scheduled-matches">
-                                <h3><i class="fas fa-calendar-times"></i> Keine geplanten Spiele</h3>
-                                <p>Es sind ${unscheduledMatches.length} Spiele vorhanden, aber noch nicht zeitlich geplant.</p>
-                                <div class="scheduling-actions">
-                                    <button class="btn btn-primary" onclick="switchToTab('matches')">
-                                        <i class="fas fa-calendar"></i> Spiele planen
-                                    </button>
-                                    <button class="btn btn-warning" onclick="scheduleAllMatches()">
-                                        <i class="fas fa-brain"></i> Alle automatisch planen
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div class="no-live-match">
-                            <div class="tournament-complete">
-                                <h3><i class="fas fa-flag-checkered"></i> Alle Spiele abgeschlossen</h3>
-                                <p>Das Turnier ist beendet. Alle Spiele wurden gespielt.</p>
-                                <div class="completion-actions">
-                                    <button class="btn btn-success" onclick="switchToTab('results')">
-                                        <i class="fas fa-trophy"></i> Endergebnisse anzeigen
-                                    </button>
-                                    <button class="btn btn-outline" onclick="exportTournamentData()">
-                                        <i class="fas fa-download"></i> Turnierdaten exportieren
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-            }
-        }
-        
-        liveControl.innerHTML = html;
-        
-    } catch (error) {
-        console.error('Error loading live control:', error);
-        const liveControl = document.getElementById('live-match-control');
-        liveControl.innerHTML = `
-            <div class="error-state">
-                <h3><i class="fas fa-exclamation-triangle"></i> Fehler beim Laden</h3>
-                <p>Live-Control konnte nicht geladen werden.</p>
-                <button class="btn btn-outline" onclick="autoRefreshCurrentTab()">
-                    <i class="fas fa-refresh"></i> Erneut versuchen
-                </button>
-            </div>
-        `;
-    }
-}
-
-// LIVE CONTROL TIMER UPDATES
-let liveControlInterval = null;
-
-function startLiveControlUpdates(liveMatch) {
-    console.log('Starting live control updates for admin...');
-    
-    // Clear existing interval
-    if (liveControlInterval) {
-        clearInterval(liveControlInterval);
-    }
-    
-    liveControlInterval = setInterval(async () => {
-        try {
-            // Fetch latest live match data
-            const response = await fetch('/api/live-match');
-            const data = await response.json();
-            
-            if (!data.liveMatch) {
-                // Match ended, reload live control completely
-                console.log('Match ended, reloading live control');
-                clearInterval(liveControlInterval);
-                liveControlInterval = null;
-                await loadLiveControl();
-                return;
-            }
-            
-            // Update timer and half info
-            const updatedMatch = data.liveMatch;
-            const timeInfo = calculateLiveTime(updatedMatch);
-            
-            const timerElement = document.getElementById('admin-live-timer');
-            const halfElement = document.getElementById('admin-live-half');
-            
-            if (timerElement) {
-                timerElement.textContent = timeInfo.displayTime;
-                console.log(`Updated admin timer: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
-            }
-            if (halfElement) halfElement.textContent = timeInfo.halfInfo;
-            
-            // Update scores (sync with any changes from other sources)
-            const score1Input = document.getElementById('live-score1');
-            const score2Input = document.getElementById('live-score2');
-            
-            if (score1Input && score1Input.value != updatedMatch.score1) {
-                score1Input.value = updatedMatch.score1;
-            }
-            if (score2Input && score2Input.value != updatedMatch.score2) {
-                score2Input.value = updatedMatch.score2;
-            }
-            
-        } catch (error) {
-            console.error('Live control update error:', error);
-        }
-    }, 1000);
-}
-
-// Live Time Calculation Function
-function calculateLiveTime(liveMatch) {
-    if (!liveMatch || !liveMatch.startTime) {
-        return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0, currentSecond: 0 };
-    }
-    
-    const now = new Date();
-    const startTime = new Date(liveMatch.startTime);
-    const halfTimeMinutes = liveMatch.halfTimeMinutes || 45;
-    
-    // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
-    if (liveMatch.isPaused && liveMatch.pauseStartTime) {
-        const pauseStartTime = new Date(liveMatch.pauseStartTime);
-        let elapsedTime = 0;
-        
-        if (liveMatch.currentHalf === 1) {
-            elapsedTime = pauseStartTime - startTime - (liveMatch.pausedTime || 0);
-        } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
-            const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
-            elapsedTime = pauseStartTime - secondHalfStart - (liveMatch.pausedTime || 0);
-        }
-        
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        const currentMinute = Math.floor(totalSeconds / 60);
-        const currentSecond = totalSeconds % 60;
-        
-        return {
-            displayTime: formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond)),
-            halfInfo: 'PAUSIERT',
-            currentMinute: Math.max(0, currentMinute),
-            currentSecond: Math.max(0, currentSecond)
-        };
-    }
-    
-    // Halbzeitpause
-    if (liveMatch.halfTimeBreak) {
-        return {
-            displayTime: formatTime(halfTimeMinutes, 0),
-            halfInfo: 'HALBZEIT',
-            currentMinute: halfTimeMinutes,
-            currentSecond: 0
-        };
-    }
-    
-    let elapsedTime = 0;
-    let currentMinute = 0;
-    let currentSecond = 0;
-    let halfInfo = '';
-    
-    if (liveMatch.currentHalf === 1) {
-        // Erste Halbzeit
-        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        currentMinute = Math.floor(totalSeconds / 60);
-        currentSecond = totalSeconds % 60;
-        
-        if (currentMinute >= halfTimeMinutes) {
-            currentMinute = halfTimeMinutes;
-            currentSecond = 0;
-            halfInfo = '1. HALBZEIT ENDE';
-        } else {
-            halfInfo = '1. HALBZEIT';
-        }
-    } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
-        // Zweite Halbzeit
-        const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
-        elapsedTime = now - secondHalfStart - (liveMatch.pausedTime || 0);
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        currentMinute = Math.floor(totalSeconds / 60);
-        currentSecond = totalSeconds % 60;
-        
-        if (currentMinute >= halfTimeMinutes) {
-            currentMinute = halfTimeMinutes;
-            currentSecond = 0;
-            halfInfo = 'SPIEL ENDE';
-        } else {
-            halfInfo = '2. HALBZEIT';
-        }
-    }
-    
-    const displayTime = formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond));
-    
-    return { displayTime, halfInfo, currentMinute, currentSecond };
-}
-
-function formatTime(minutes, seconds) {
-    const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
-    const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
-}
-
-// Live Match Control Functions
-async function updateLiveScore(matchId) {
-    const score1 = parseInt(document.getElementById('live-score1').value);
-    const score2 = parseInt(document.getElementById('live-score2').value);
-    
-    if (isNaN(score1) || isNaN(score2) || score1 < 0 || score2 < 0) {
-        showNotification('Ungültige Ergebnisse', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch('/api/admin/live-match/score', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                matchId,
-                score1,
-                score2
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Score aktualisiert');
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Aktualisieren des Scores', 'error');
-    }
-}
-
-async function pauseMatch(matchId) {
-    try {
-        const response = await fetch('/api/admin/live-match/pause', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel pausiert');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Pausieren', 'error');
-    }
-}
-
-async function resumeMatch(matchId) {
-    try {
-        const response = await fetch('/api/admin/live-match/resume', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel fortgesetzt');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Fortsetzen', 'error');
-    }
-}
-
-async function startHalfTime(matchId) {
-    try {
-        const response = await fetch('/api/admin/live-match/halftime', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Halbzeit eingeläutet');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Einläuten der Halbzeit', 'error');
-    }
-}
-
-async function startSecondHalf(matchId) {
-    try {
-        const response = await fetch('/api/admin/live-match/second-half', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('2. Halbzeit gestartet');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Starten der 2. Halbzeit', 'error');
-    }
-}
-
-async function endMatch(matchId) {
-    createModal('Spiel beenden', `
-        <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-            <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
-            <strong>Spiel regulär beenden:</strong> Das Ergebnis wird gespeichert und das Spiel als abgeschlossen markiert.
-        </div>
-        <p>Das Live-Spiel wird beendet und das aktuelle Ergebnis gespeichert.</p>
-    `, [
-        { text: 'Spiel beenden', class: 'btn-success', handler: (modalId) => executeEndMatch(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function executeEndMatch(matchId, modalId) {
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/live-match/end', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel erfolgreich beendet');
-            closeModal(modalId);
-            
-            // Clear live timer
-            if (liveControlInterval) {
-                clearInterval(liveControlInterval);
-                liveControlInterval = null;
-            }
-            
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Beenden des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-async function stopMatch(matchId) {
-    createModal('Spiel abbrechen (Notfall)', `
-        <div class="danger-box" style="background: #fef2f2; border: 2px solid #dc2626; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-            <i class="fas fa-exclamation-triangle" style="color: #dc2626;"></i>
-            <strong>ACHTUNG: Notfall-Abbruch!</strong> Das Spiel wird gestoppt, aber NICHT als abgeschlossen markiert.
-        </div>
-        <p>Das Spiel wird sofort gestoppt und kann später neu gestartet werden. Das aktuelle Ergebnis geht verloren.</p>
-        <p><strong>Verwende diese Funktion nur im Notfall!</strong></p>
-    `, [
-        { text: 'Spiel abbrechen', class: 'btn-danger', handler: (modalId) => executeStopMatch(matchId, modalId) },
-        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
-    ]);
-}
-
-async function executeStopMatch(matchId, modalId) {
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/live-match/stop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: adminPassword, matchId })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Spiel abgebrochen');
-            closeModal(modalId);
-            
-            // Clear live timer
-            if (liveControlInterval) {
-                clearInterval(liveControlInterval);
-                liveControlInterval = null;
-            }
-            
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Abbrechen des Spiels', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Results Management
-function loadResults() {
-    const resultsInput = document.getElementById('results-input');
-    
-    if (!currentTournament) {
-        resultsInput.innerHTML = '<p>Kein Turnier vorhanden.</p>';
-        return;
-    }
-    
-    if (matches.length === 0) {
-        resultsInput.innerHTML = '<p>Keine Spiele vorhanden.</p>';
-        return;
-    }
-    
-    // Gruppiere Spiele nach Status
-    const completedMatches = matches.filter(m => m.completed);
-    const pendingMatches = matches.filter(m => !m.completed);
-    
-    let html = '';
-    
-    // Statistics
-    html += `
-        <div class="results-stats">
-            <div class="stat-item">
-                <strong>${completedMatches.length}</strong> abgeschlossen
-            </div>
-            <div class="stat-item">
-                <strong>${pendingMatches.length}</strong> ausstehend
-            </div>
-            <div class="stat-item">
-                <strong>${matches.length}</strong> gesamt
-            </div>
-        </div>
-    `;
-    
-    // Pending matches for result input
-    if (pendingMatches.length > 0) {
-        html += '<h4><i class="fas fa-clock"></i> Ergebnisse eintragen</h4>';
-        pendingMatches.forEach(match => {
-            html += `
-                <div class="result-input-card">
-                    <div class="match-header">
-                        <h5>${match.team1} vs ${match.team2}</h5>
-                        <small>${match.group} ${match.isPenaltyShootout ? '(Elfmeterschießen)' : ''}</small>
-                        ${match.scheduled ? `<small>Geplant: ${formatDateTime(match.scheduled.datetime)}</small>` : ''}
-                        ${match.referee ? `<small><i class="fas fa-whistle"></i> ${match.referee.team}</small>` : ''}
-                    </div>
-                    <div class="score-inputs" style="justify-content: center; margin: 1rem 0; display: flex; align-items: center; gap: 1rem;">
-                        <span class="team-name">${match.team1}</span>
-                        <input type="number" min="0" id="result-score1-${match.id}" placeholder="0" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
-                        <span class="score-vs">:</span>
-                        <input type="number" min="0" id="result-score2-${match.id}" placeholder="0" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
-                        <span class="team-name">${match.team2}</span>
-                    </div>
-                    <button class="btn btn-primary" onclick="submitResult('${match.id}')">
-                        <i class="fas fa-save"></i> Ergebnis speichern
-                    </button>
-                </div>
-            `;
-        });
-    }
-    
-    // Completed matches for editing
-    if (completedMatches.length > 0) {
-        html += '<h4><i class="fas fa-check-circle"></i> Abgeschlossene Spiele (bearbeitbar)</h4>';
-        completedMatches.forEach(match => {
-            html += `
-                <div class="completed-match-card">
-                    <div class="match-info">
-                        <h5>${match.team1} vs ${match.team2}</h5>
-                        <div class="final-score-display">${match.score1} : ${match.score2}${match.isPenaltyShootout ? ' (E)' : ''}</div>
-                        <small>${match.group}</small>
-                        ${match.referee ? `<small><i class="fas fa-whistle"></i> ${match.referee.team}</small>` : ''}
-                    </div>
-                    <div class="match-actions">
-                        <button class="btn btn-small btn-warning" onclick="editResult('${match.id}')">
-                            <i class="fas fa-edit"></i> <span class="btn-text">Korrigieren</span>
-                        </button>
-                    </div>
-                </div>
-            `;
-        });
-    }
-    
-    resultsInput.innerHTML = html;
-}
-
-// Submit Result Function
-async function submitResult(matchId) {
-    const score1 = document.getElementById(`result-score1-${matchId}`).value;
-    const score2 = document.getElementById(`result-score2-${matchId}`).value;
-    
-    if (!score1 || !score2) {
-        showNotification('Bitte beide Ergebnisse eingeben', 'warning');
-        return;
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/result', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                matchId,
-                score1: parseInt(score1),
-                score2: parseInt(score2)
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Ergebnis erfolgreich gespeichert!');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Speichern des Ergebnisses', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// Settings Management
-function loadSettings() {
-    const tournamentSettings = document.getElementById('tournament-settings');
-    
-    if (!currentTournament) {
-        tournamentSettings.innerHTML = `
-            <div class="status-card info">
-                <i class="fas fa-info-circle"></i>
-                <h4>Kein aktives Turnier</h4>
-                <p>Erstelle zuerst ein Turnier, um Einstellungen zu verwalten.</p>
-            </div>
-        `;
-        return;
-    }
-    
-    const settings = currentTournament.settings || {};
-    
-    tournamentSettings.innerHTML = `
-        <div class="settings-form">
-            <h4>Aktuelle Turnier-Einstellungen</h4>
-            
-            <div class="form-group">
-                <label for="tournament-format-setting">Turnier-Format:</label>
-                <select id="tournament-format-setting" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                    <option value="groups" ${settings.format === 'groups' ? 'selected' : ''}>Gruppensystem</option>
-                    <option value="swiss" ${settings.format === 'swiss' ? 'selected' : ''}>Champions League Format</option>
-                    <option value="league" ${settings.format === 'league' ? 'selected' : ''}>Liga-Modus</option>
-                </select>
-            </div>
-            
-            ${settings.format === 'groups' ? `
-                <div class="form-group">
-                    <label for="group-size-setting">Teams pro Gruppe:</label>
-                    <input type="number" id="group-size-setting" value="${settings.groupSize || 4}" min="3" max="6" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                </div>
-            ` : ''}
-            
-            ${settings.format === 'swiss' ? `
-                <div class="form-group">
-                    <label for="swiss-rounds-setting">Anzahl Runden:</label>
-                    <input type="number" id="swiss-rounds-setting" value="${settings.rounds || 5}" min="3" max="10" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-                </div>
-            ` : ''}
-            
-            <div class="form-group">
-                <label for="half-time-minutes">Standard Halbzeit-Dauer (Minuten):</label>
-                <input type="number" id="half-time-minutes" value="${settings.halfTimeMinutes || 45}" min="5" max="45" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-            </div>
-            
-            <div class="settings-checkboxes">
-                <h5>K.O.-Phase Optionen:</h5>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-quarterfinals-setting" ${settings.enableQuarterfinals ? 'checked' : ''}> 
-                    Viertelfinale aktivieren
-                </label>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-third-place-setting" ${settings.enableThirdPlace ? 'checked' : ''}> 
-                    Spiel um Platz 3
-                </label>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-fifth-place-setting" ${settings.enableFifthPlace ? 'checked' : ''}> 
-                    Spiel um Platz 5
-                </label>
-                <label style="display: block; margin-bottom: 0.5rem;">
-                    <input type="checkbox" id="enable-seventh-place-setting" ${settings.enableSeventhPlace ? 'checked' : ''}> 
-                    Spiel um Platz 7
-                </label>
-            </div>
-            
-            <div class="settings-actions">
-                <button class="btn btn-primary" onclick="saveTournamentSettings()">
-                    <i class="fas fa-save"></i> Einstellungen speichern
-                </button>
-                <button class="btn btn-outline" onclick="resetTournamentSettings()">
-                    <i class="fas fa-undo"></i> Zurücksetzen
-                </button>
-            </div>
-        </div>
-        
-        <div class="tournament-info-card">
-            <h4>Turnier-Informationen</h4>
-            <div class="info-grid">
-                <div><strong>Jahr:</strong> ${currentTournament.year}</div>
-                <div><strong>Status:</strong> ${currentTournament.status}</div>
-                <div><strong>Teams:</strong> ${teams.length}</div>
-                <div><strong>Spiele:</strong> ${matches.length}</div>
-                <div><strong>Gruppen:</strong> ${currentTournament.groups ? currentTournament.groups.length : 0}</div>
-                <div><strong>Erstellt:</strong> ${new Date(currentTournament.createdAt).toLocaleDateString('de-DE')}</div>
-                ${currentTournament.registrationClosedAt ? `<div><strong>Anmeldung geschlossen:</strong> ${new Date(currentTournament.registrationClosedAt).toLocaleDateString('de-DE')}</div>` : ''}
-            </div>
-        </div>
-    `;
-}
-
-async function saveTournamentSettings() {
-    const format = document.getElementById('tournament-format-setting').value;
-    const halfTimeMinutes = parseInt(document.getElementById('half-time-minutes').value);
-    
-    let settings = {
-        format,
-        halfTimeMinutes,
-        enableQuarterfinals: document.getElementById('enable-quarterfinals-setting')?.checked || false,
-        enableThirdPlace: document.getElementById('enable-third-place-setting')?.checked || false,
-        enableFifthPlace: document.getElementById('enable-fifth-place-setting')?.checked || false,
-        enableSeventhPlace: document.getElementById('enable-seventh-place-setting')?.checked || false
-    };
-    
-    if (format === 'groups') {
-        settings.groupSize = parseInt(document.getElementById('group-size-setting').value);
-    } else if (format === 'swiss') {
-        settings.rounds = parseInt(document.getElementById('swiss-rounds-setting').value);
-    }
-    
-    showLoading(true);
-    
-    try {
-        const response = await fetch('/api/admin/tournament/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                password: adminPassword,
-                settings
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showNotification('Einstellungen erfolgreich gespeichert');
-            await autoRefreshCurrentTab(); // AUTO-REFRESH
-        } else {
-            showNotification(data.error, 'error');
-        }
-    } catch (error) {
-        showNotification('Fehler beim Speichern der Einstellungen', 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-function resetTournamentSettings() {
-    loadSettings();
-    showNotification('Einstellungen zurückgesetzt');
-}
-
-// Helper Functions
-function updateTeamCountDisplay() {
-    const teamCountDisplay = document.getElementById('team-count-display');
-    if (teamCountDisplay) {
-        teamCountDisplay.textContent = `${teams.length} Teams registriert`;
-    }
-}
-
-function refreshTeams() {
-    autoRefreshCurrentTab();
-    showNotification('Teams manuell aktualisiert');
-}
-
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    checkAutoLogin();
-});
-
-// Page Unload - Clean up timers
-window.addEventListener('beforeunload', () => {
-    stopAutoRefresh();
-    if (liveControlInterval) {
-        clearInterval(liveControlInterval);
-    }
-});group">
             <label for="new-status">Neuer Status:</label>
             <select id="new-status" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
                 ${options}
@@ -3242,4 +2057,1194 @@ async function editMatch(matchId) {
                 ${teamOptions}
             </select>
         </div>
-        <div class="form-
+        <div class="form-group">
+            <label for="edit-match-group">Gruppe:</label>
+            <select id="edit-match-group" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                ${groups}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="edit-match-penalty" ${match.isPenaltyShootout ? 'checked' : ''}> Elfmeterschießen
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="edit-match-datetime">Datum/Zeit:</label>
+            <input type="datetime-local" id="edit-match-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="edit-match-field">Spielfeld:</label>
+            <input type="text" id="edit-match-field" value="${match.scheduled?.field || ''}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+    `;
+    
+    createModal('Spiel bearbeiten', content, [
+        { text: 'Spiel speichern', handler: (modalId) => saveMatchEdit(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function saveMatchEdit(matchId, modalId) {
+    const team1 = document.getElementById('edit-match-team1').value;
+    const team2 = document.getElementById('edit-match-team2').value;
+    const group = document.getElementById('edit-match-group').value;
+    const isPenalty = document.getElementById('edit-match-penalty').checked;
+    const datetime = document.getElementById('edit-match-datetime').value;
+    const field = document.getElementById('edit-match-field').value;
+    
+    if (!team1 || !team2) {
+        showNotification('Beide Teams müssen ausgewählt werden', 'error');
+        return;
+    }
+    
+    if (team1 === team2) {
+        showNotification('Teams müssen unterschiedlich sein', 'error');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch(`/api/admin/matches/${matchId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                team1,
+                team2,
+                group,
+                isPenaltyShootout: isPenalty,
+                datetime: datetime || null,
+                field: field || null
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel erfolgreich bearbeitet');
+            closeModal(modalId);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Bearbeiten des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Delete Match
+async function deleteMatch(matchId) {
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    if (!confirm(`Spiel "${match.team1} vs ${match.team2}" wirklich löschen?`)) {
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch(`/api/admin/matches/${matchId}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel erfolgreich gelöscht');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Löschen des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Schedule Match
+async function scheduleMatch(matchId) {
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    const scheduledTime = match.scheduled ? new Date(match.scheduled.datetime).toISOString().slice(0, 16) : '';
+    
+    createModal('Spiel zeitlich planen', `
+        <div class="form-group">
+            <h4>${match.team1} vs ${match.team2}</h4>
+            <p><small>${match.group || 'Kein Gruppe'}</small></p>
+        </div>
+        <div class="form-group">
+            <label for="schedule-datetime">Datum und Uhrzeit:</label>
+            <input type="datetime-local" id="schedule-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="schedule-field">Spielfeld:</label>
+            <input type="text" id="schedule-field" value="${match.scheduled?.field || 'Hauptplatz'}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+    `, [
+        { text: 'Zeit planen', handler: (modalId) => saveMatchSchedule(matchId, modalId) },
+        { text: 'Zeit entfernen', class: 'btn-warning', handler: (modalId) => removeMatchSchedule(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function saveMatchSchedule(matchId, modalId) {
+    const datetime = document.getElementById('schedule-datetime').value;
+    const field = document.getElementById('schedule-field').value;
+    
+    if (!datetime) {
+        showNotification('Datum und Uhrzeit sind erforderlich', 'error');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch(`/api/admin/matches/${matchId}/schedule`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                datetime,
+                field: field || 'Hauptplatz'
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel erfolgreich geplant');
+            closeModal(modalId);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Planen des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function removeMatchSchedule(matchId, modalId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch(`/api/admin/matches/${matchId}/schedule`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Zeitplanung entfernt');
+            closeModal(modalId);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Entfernen der Zeitplanung', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Schedule All Matches (Intelligent)
+async function scheduleAllMatches() {
+    const unscheduledCount = matches.filter(m => !m.scheduled).length;
+    
+    if (!confirm(`Alle ${unscheduledCount} ungeplanten Spiele intelligent planen?\n\nDas System wird optimale Zeiten unter Berücksichtigung von Pausen zwischen den Spielen für jedes Team vergeben.`)) {
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/matches/schedule-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                password: adminPassword,
+                startTime: '09:00',
+                matchDuration: 30,
+                field: 'Hauptplatz'
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification(data.message);
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Planen aller Spiele', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Start Match Dialog (erweitert)
+async function startMatchDialog(matchId) {
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    createModal('Spiel starten', `
+        <div class="start-match-info">
+            <h4>${match.team1} vs ${match.team2}</h4>
+            <p><strong>Gruppe:</strong> ${match.group}</p>
+            ${match.scheduled ? `
+                <p><strong>Geplante Zeit:</strong> ${formatDateTime(match.scheduled.datetime)}</p>
+                <p><strong>Spielfeld:</strong> ${match.scheduled.field}</p>
+            ` : ''}
+            ${match.referee ? `
+                <p><strong>Schiedsrichter:</strong> ${match.referee.team} (${match.referee.group})</p>
+            ` : ''}
+        </div>
+        
+        <div class="start-match-options">
+            <div class="form-group">
+                <label for="half-time-duration">Halbzeit-Dauer (Minuten):</label>
+                <select id="half-time-duration" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="45">45 Minuten (Standard)</option>
+                    <option value="30">30 Minuten</option>
+                    <option value="25">25 Minuten</option>
+                    <option value="20">20 Minuten</option>
+                    <option value="15">15 Minuten</option>
+                    <option value="10">10 Minuten</option>
+                    <option value="7">7 Minuten</option>
+                    <option value="5">5 Minuten</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+            <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
+            <strong>Hinweis:</strong> Nach dem Start wird das Spiel sofort live übertragen und der Timer läuft. Das System wechselt automatisch zur Live-Verwaltung.
+        </div>
+    `, [
+        { text: 'Spiel jetzt starten', class: 'btn-success', handler: (modalId) => executeStartMatch(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function executeStartMatch(matchId, modalId) {
+    const halfTimeDuration = parseInt(document.getElementById('half-time-duration').value);
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                matchId: matchId,
+                halfTimeMinutes: halfTimeDuration
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel erfolgreich gestartet! Live-Timer läuft...');
+            closeModal(modalId);
+            
+            // AUTO-SWITCH TO LIVE TAB + AUTO-REFRESH
+            switchToTab('live');
+            await autoRefreshCurrentTab();
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Starten des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// VERBESSERTE LIVE CONTROL FUNCTION
+async function loadLiveControl() {
+    const liveControl = document.getElementById('live-match-control');
+    
+    try {
+        // Load current live match and next match data
+        const [liveResponse, nextResponse] = await Promise.all([
+            fetch('/api/live-match'),
+            fetch('/api/next-match')
+        ]);
+        
+        const liveData = await liveResponse.json();
+        const nextData = await nextResponse.json();
+        
+        let html = '';
+        
+        if (liveData.liveMatch) {
+            // Live match is running
+            const liveMatch = liveData.liveMatch;
+            
+            html += `
+                <div class="live-control-panel">
+                    <div class="live-status-bar">
+                        <div class="live-indicator-big">
+                            <i class="fas fa-circle" style="color: #dc2626; animation: pulse 1.5s infinite;"></i>
+                            <strong>LIVE SPIEL LÄUFT</strong>
+                        </div>
+                        <div class="live-timer-display" id="admin-live-timer">
+                            ${calculateLiveTime(liveMatch).displayTime}
+                        </div>
+                        <div class="live-half-display" id="admin-live-half">
+                            ${calculateLiveTime(liveMatch).halfInfo}
+                        </div>
+                    </div>
+                    
+                    <div class="live-match-details">
+                        <h3>${liveMatch.team1} vs ${liveMatch.team2}</h3>
+                        <div class="live-score-big">
+                            <div class="score-display">
+                                <div class="team-score">
+                                    <span class="team-name">${liveMatch.team1}</span>
+                                    <input type="number" min="0" id="live-score1" value="${liveMatch.score1}" class="score-input">
+                                </div>
+                                <div class="score-separator">:</div>
+                                <div class="team-score">
+                                    <input type="number" min="0" id="live-score2" value="${liveMatch.score2}" class="score-input">
+                                    <span class="team-name">${liveMatch.team2}</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary update-score-btn" onclick="updateLiveScore('${liveMatch.id}')">
+                                <i class="fas fa-save"></i> Score aktualisieren
+                            </button>
+                        </div>
+                        
+                        <div class="live-match-info">
+                            <div><strong>Gruppe:</strong> ${liveMatch.group}</div>
+                            <div><strong>Halbzeit-Dauer:</strong> ${liveMatch.halfTimeMinutes || 45} Minuten</div>
+                            ${liveMatch.referee ? `<div><strong>Schiedsrichter:</strong> ${liveMatch.referee.team}</div>` : ''}
+                        </div>
+                    </div>
+                    
+                    <div class="live-controls">
+                        <div class="live-controls-row">
+                            ${liveMatch.isPaused ? `
+                                <button class="btn btn-success live-control-btn" onclick="resumeMatch('${liveMatch.id}')">
+                                    <i class="fas fa-play"></i> Spiel fortsetzen
+                                </button>
+                            ` : `
+                                <button class="btn btn-warning live-control-btn" onclick="pauseMatch('${liveMatch.id}')">
+                                    <i class="fas fa-pause"></i> Spiel pausieren
+                                </button>
+                            `}
+                            
+                            ${liveMatch.currentHalf === 1 && !liveMatch.halfTimeBreak ? `
+                                <button class="btn btn-info live-control-btn" onclick="startHalfTime('${liveMatch.id}')">
+                                    <i class="fas fa-clock"></i> Halbzeit einläuten
+                                </button>
+                            ` : ''}
+                            
+                            ${liveMatch.halfTimeBreak ? `
+                                <button class="btn btn-success live-control-btn" onclick="startSecondHalf('${liveMatch.id}')">
+                                    <i class="fas fa-play"></i> 2. Halbzeit starten
+                                </button>
+                            ` : ''}
+                            
+                            ${liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak ? `
+                                <button class="btn btn-danger live-control-btn" onclick="endMatch('${liveMatch.id}')">
+                                    <i class="fas fa-flag-checkered"></i> Spiel beenden
+                                </button>
+                            ` : ''}
+                        </div>
+                        
+                        <div class="live-emergency-controls">
+                            <button class="btn btn-danger live-control-btn" onclick="stopMatch('${liveMatch.id}')">
+                                <i class="fas fa-stop"></i> Spiel abbrechen (Notfall)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // WICHTIG: Nächster Schiedsrichter Anzeige während Live-Spiel
+            if (nextData.nextMatch && nextData.nextMatch.referee) {
+                html += `
+                    <div class="next-referee-section">
+                        <h3><i class="fas fa-whistle"></i> Nächster Schiedsrichter bereitmachen</h3>
+                        <div class="next-referee-card-admin">
+                            <div class="referee-name-admin">${nextData.nextMatch.referee.team}</div>
+                            <div class="referee-details-admin">
+                                <strong>Nächstes Spiel:</strong> ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}<br>
+                                <strong>Gruppe:</strong> ${nextData.nextMatch.referee.group}<br>
+                                <strong>Geplant:</strong> ${new Date(nextData.nextMatch.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Start live timer updates
+            startLiveControlUpdates(liveMatch);
+            
+        } else {
+            // No live match - show next match and upcoming
+            if (nextData.nextMatch) {
+                const nextMatch = nextData.nextMatch;
+                const nextTime = new Date(nextMatch.datetime);
+                const timeUntilMatch = nextTime - new Date();
+                const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+                
+                html += `
+                    <div class="no-live-match">
+                        <div class="next-match-admin-ready">
+                            <h3><i class="fas fa-clock"></i> Nächstes geplantes Spiel</h3>
+                            <div class="next-match-info-admin">
+                                <div class="match-teams-big">${nextMatch.team1} vs ${nextMatch.team2}</div>
+                                <div class="match-time-big">
+                                    <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                                    <span class="countdown-admin">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt startbereit!'}</span>
+                                </div>
+                                <div class="match-details-admin">
+                                    <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
+                                    <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
+                                </div>
+                                ${nextMatch.referee ? `
+                                    <div class="referee-ready-admin">
+                                        <i class="fas fa-whistle"></i>
+                                        <strong>Schiedsrichter bereit:</strong> ${nextMatch.referee.team} (${nextMatch.referee.group})
+                                    </div>
+                                ` : ''}
+                            </div>
+                            
+                            <div class="next-match-actions">
+                                <button class="btn btn-success btn-large" onclick="startMatchDialog('${nextMatch.id}')">
+                                    <i class="fas fa-play"></i> Dieses Spiel jetzt starten
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // No scheduled matches
+                const allMatches = matches.filter(m => !m.completed);
+                const unscheduledMatches = allMatches.filter(m => !m.scheduled);
+                
+                if (unscheduledMatches.length > 0) {
+                    html += `
+                        <div class="no-live-match">
+                            <div class="no-scheduled-matches">
+                                <h3><i class="fas fa-calendar-times"></i> Keine geplanten Spiele</h3>
+                                <p>Es sind ${unscheduledMatches.length} Spiele vorhanden, aber noch nicht zeitlich geplant.</p>
+                                <div class="scheduling-actions">
+                                    <button class="btn btn-primary" onclick="switchToTab('matches')">
+                                        <i class="fas fa-calendar"></i> Spiele planen
+                                    </button>
+                                    <button class="btn btn-warning" onclick="scheduleAllMatches()">
+                                        <i class="fas fa-brain"></i> Alle automatisch planen
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="no-live-match">
+                            <div class="tournament-complete">
+                                <h3><i class="fas fa-flag-checkered"></i> Alle Spiele abgeschlossen</h3>
+                                <p>Das Turnier ist beendet. Alle Spiele wurden gespielt.</p>
+                                <div class="completion-actions">
+                                    <button class="btn btn-success" onclick="switchToTab('results')">
+                                        <i class="fas fa-trophy"></i> Endergebnisse anzeigen
+                                    </button>
+                                    <button class="btn btn-outline" onclick="exportTournamentData()">
+                                        <i class="fas fa-download"></i> Turnierdaten exportieren
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+        
+        liveControl.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading live control:', error);
+        const liveControl = document.getElementById('live-match-control');
+        liveControl.innerHTML = `
+            <div class="error-state">
+                <h3><i class="fas fa-exclamation-triangle"></i> Fehler beim Laden</h3>
+                <p>Live-Control konnte nicht geladen werden.</p>
+                <button class="btn btn-outline" onclick="autoRefreshCurrentTab()">
+                    <i class="fas fa-refresh"></i> Erneut versuchen
+                </button>
+            </div>
+        `;
+    }
+}
+
+// LIVE CONTROL TIMER UPDATES
+let liveControlInterval = null;
+
+function startLiveControlUpdates(liveMatch) {
+    console.log('Starting live control updates for admin...');
+    
+    // Clear existing interval
+    if (liveControlInterval) {
+        clearInterval(liveControlInterval);
+    }
+    
+    liveControlInterval = setInterval(async () => {
+        try {
+            // Fetch latest live match data
+            const response = await fetch('/api/live-match');
+            const data = await response.json();
+            
+            if (!data.liveMatch) {
+                // Match ended, reload live control completely
+                console.log('Match ended, reloading live control');
+                clearInterval(liveControlInterval);
+                liveControlInterval = null;
+                await loadLiveControl();
+                return;
+            }
+            
+            // Update timer and half info
+            const updatedMatch = data.liveMatch;
+            const timeInfo = calculateLiveTime(updatedMatch);
+            
+            const timerElement = document.getElementById('admin-live-timer');
+            const halfElement = document.getElementById('admin-live-half');
+            
+            if (timerElement) {
+                timerElement.textContent = timeInfo.displayTime;
+                console.log(`Updated admin timer: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
+            }
+            if (halfElement) halfElement.textContent = timeInfo.halfInfo;
+            
+            // Update scores (sync with any changes from other sources)
+            const score1Input = document.getElementById('live-score1');
+            const score2Input = document.getElementById('live-score2');
+            
+            if (score1Input && score1Input.value != updatedMatch.score1) {
+                score1Input.value = updatedMatch.score1;
+            }
+            if (score2Input && score2Input.value != updatedMatch.score2) {
+                score2Input.value = updatedMatch.score2;
+            }
+            
+        } catch (error) {
+            console.error('Live control update error:', error);
+        }
+    }, 1000);
+}
+
+// Live Time Calculation Function
+function calculateLiveTime(liveMatch) {
+    if (!liveMatch || !liveMatch.startTime) {
+        return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0, currentSecond: 0 };
+    }
+    
+    const now = new Date();
+    const startTime = new Date(liveMatch.startTime);
+    const halfTimeMinutes = liveMatch.halfTimeMinutes || 45;
+    
+    // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
+    if (liveMatch.isPaused && liveMatch.pauseStartTime) {
+        const pauseStartTime = new Date(liveMatch.pauseStartTime);
+        let elapsedTime = 0;
+        
+        if (liveMatch.currentHalf === 1) {
+            elapsedTime = pauseStartTime - startTime - (liveMatch.pausedTime || 0);
+        } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
+            const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
+            elapsedTime = pauseStartTime - secondHalfStart - (liveMatch.pausedTime || 0);
+        }
+        
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        const currentMinute = Math.floor(totalSeconds / 60);
+        const currentSecond = totalSeconds % 60;
+        
+        return {
+            displayTime: formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond)),
+            halfInfo: 'PAUSIERT',
+            currentMinute: Math.max(0, currentMinute),
+            currentSecond: Math.max(0, currentSecond)
+        };
+    }
+    
+    // Halbzeitpause
+    if (liveMatch.halfTimeBreak) {
+        return {
+            displayTime: formatTime(halfTimeMinutes, 0),
+            halfInfo: 'HALBZEIT',
+            currentMinute: halfTimeMinutes,
+            currentSecond: 0
+        };
+    }
+    
+    let elapsedTime = 0;
+    let currentMinute = 0;
+    let currentSecond = 0;
+    let halfInfo = '';
+    
+    if (liveMatch.currentHalf === 1) {
+        // Erste Halbzeit
+        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        if (currentMinute >= halfTimeMinutes) {
+            currentMinute = halfTimeMinutes;
+            currentSecond = 0;
+            halfInfo = '1. HALBZEIT ENDE';
+        } else {
+            halfInfo = '1. HALBZEIT';
+        }
+    } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
+        // Zweite Halbzeit
+        const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
+        elapsedTime = now - secondHalfStart - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        if (currentMinute >= halfTimeMinutes) {
+            currentMinute = halfTimeMinutes;
+            currentSecond = 0;
+            halfInfo = 'SPIEL ENDE';
+        } else {
+            halfInfo = '2. HALBZEIT';
+        }
+    }
+    
+    const displayTime = formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond));
+    
+    return { displayTime, halfInfo, currentMinute, currentSecond };
+}
+
+function formatTime(minutes, seconds) {
+    const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
+    const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+}
+
+// Live Match Control Functions
+async function updateLiveScore(matchId) {
+    const score1 = parseInt(document.getElementById('live-score1').value);
+    const score2 = parseInt(document.getElementById('live-score2').value);
+    
+    if (isNaN(score1) || isNaN(score2) || score1 < 0 || score2 < 0) {
+        showNotification('Ungültige Ergebnisse', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/admin/live-match/score', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                matchId,
+                score1,
+                score2
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Score aktualisiert');
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Aktualisieren des Scores', 'error');
+    }
+}
+
+async function pauseMatch(matchId) {
+    try {
+        const response = await fetch('/api/admin/pause-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel pausiert');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Pausieren', 'error');
+    }
+}
+
+async function resumeMatch(matchId) {
+    try {
+        const response = await fetch('/api/admin/resume-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel fortgesetzt');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Fortsetzen', 'error');
+    }
+}
+
+async function startHalfTime(matchId) {
+    try {
+        const response = await fetch('/api/admin/halftime-break', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Halbzeit eingeläutet');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Einläuten der Halbzeit', 'error');
+    }
+}
+
+async function startSecondHalf(matchId) {
+    try {
+        const response = await fetch('/api/admin/start-second-half', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('2. Halbzeit gestartet');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Starten der 2. Halbzeit', 'error');
+    }
+}
+
+async function endMatch(matchId) {
+    createModal('Spiel beenden', `
+        <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
+            <strong>Spiel regulär beenden:</strong> Das Ergebnis wird gespeichert und das Spiel als abgeschlossen markiert.
+        </div>
+        <p>Das Live-Spiel wird beendet und das aktuelle Ergebnis gespeichert.</p>
+    `, [
+        { text: 'Spiel beenden', class: 'btn-success', handler: (modalId) => executeEndMatch(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function executeEndMatch(matchId, modalId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/finish-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel erfolgreich beendet');
+            closeModal(modalId);
+            
+            // Clear live timer
+            if (liveControlInterval) {
+                clearInterval(liveControlInterval);
+                liveControlInterval = null;
+            }
+            
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Beenden des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function stopMatch(matchId) {
+    createModal('Spiel abbrechen (Notfall)', `
+        <div class="danger-box" style="background: #fef2f2; border: 2px solid #dc2626; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-exclamation-triangle" style="color: #dc2626;"></i>
+            <strong>ACHTUNG: Notfall-Abbruch!</strong> Das Spiel wird gestoppt, aber NICHT als abgeschlossen markiert.
+        </div>
+        <p>Das Spiel wird sofort gestoppt und kann später neu gestartet werden. Das aktuelle Ergebnis geht verloren.</p>
+        <p><strong>Verwende diese Funktion nur im Notfall!</strong></p>
+    `, [
+        { text: 'Spiel abbrechen', class: 'btn-danger', handler: (modalId) => executeStopMatch(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function executeStopMatch(matchId, modalId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/live-match/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword, matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Spiel abgebrochen');
+            closeModal(modalId);
+            
+            // Clear live timer
+            if (liveControlInterval) {
+                clearInterval(liveControlInterval);
+                liveControlInterval = null;
+            }
+            
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Abbrechen des Spiels', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Results Management
+function loadResults() {
+    const resultsInput = document.getElementById('results-input');
+    
+    if (!currentTournament) {
+        resultsInput.innerHTML = '<p>Kein Turnier vorhanden.</p>';
+        return;
+    }
+    
+    if (matches.length === 0) {
+        resultsInput.innerHTML = '<p>Keine Spiele vorhanden.</p>';
+        return;
+    }
+    
+    // Gruppiere Spiele nach Status
+    const completedMatches = matches.filter(m => m.completed);
+    const pendingMatches = matches.filter(m => !m.completed);
+    
+    let html = '';
+    
+    // Statistics
+    html += `
+        <div class="results-stats">
+            <div class="stat-item">
+                <strong>${completedMatches.length}</strong> abgeschlossen
+            </div>
+            <div class="stat-item">
+                <strong>${pendingMatches.length}</strong> ausstehend
+            </div>
+            <div class="stat-item">
+                <strong>${matches.length}</strong> gesamt
+            </div>
+        </div>
+    `;
+    
+    // Pending matches for result input
+    if (pendingMatches.length > 0) {
+        html += '<h4><i class="fas fa-clock"></i> Ergebnisse eintragen</h4>';
+        pendingMatches.forEach(match => {
+            html += `
+                <div class="result-input-card">
+                    <div class="match-header">
+                        <h5>${match.team1} vs ${match.team2}</h5>
+                        <small>${match.group} ${match.isPenaltyShootout ? '(Elfmeterschießen)' : ''}</small>
+                        ${match.scheduled ? `<small>Geplant: ${formatDateTime(match.scheduled.datetime)}</small>` : ''}
+                        ${match.referee ? `<small><i class="fas fa-whistle"></i> ${match.referee.team}</small>` : ''}
+                    </div>
+                    <div class="score-inputs" style="justify-content: center; margin: 1rem 0; display: flex; align-items: center; gap: 1rem;">
+                        <span class="team-name">${match.team1}</span>
+                        <input type="number" min="0" id="result-score1-${match.id}" placeholder="0" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
+                        <span class="score-vs">:</span>
+                        <input type="number" min="0" id="result-score2-${match.id}" placeholder="0" style="width: 80px; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
+                        <span class="team-name">${match.team2}</span>
+                    </div>
+                    <button class="btn btn-primary" onclick="submitResult('${match.id}')">
+                        <i class="fas fa-save"></i> Ergebnis speichern
+                    </button>
+                </div>
+            `;
+        });
+    }
+    
+    // Completed matches for editing
+    if (completedMatches.length > 0) {
+        html += '<h4><i class="fas fa-check-circle"></i> Abgeschlossene Spiele (bearbeitbar)</h4>';
+        completedMatches.forEach(match => {
+            html += `
+                <div class="completed-match-card">
+                    <div class="match-info">
+                        <h5>${match.team1} vs ${match.team2}</h5>
+                        <div class="final-score-display">${match.score1} : ${match.score2}${match.isPenaltyShootout ? ' (E)' : ''}</div>
+                        <small>${match.group}</small>
+                        ${match.referee ? `<small><i class="fas fa-whistle"></i> ${match.referee.team}</small>` : ''}
+                    </div>
+                    <div class="match-actions">
+                        <button class="btn btn-small btn-warning" onclick="editResult('${match.id}')">
+                            <i class="fas fa-edit"></i> <span class="btn-text">Korrigieren</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+    }
+    
+    resultsInput.innerHTML = html;
+}
+
+// Submit Result Function
+async function submitResult(matchId) {
+    const score1 = document.getElementById(`result-score1-${matchId}`).value;
+    const score2 = document.getElementById(`result-score2-${matchId}`).value;
+    
+    if (!score1 || !score2) {
+        showNotification('Bitte beide Ergebnisse eingeben', 'warning');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                matchId,
+                score1: parseInt(score1),
+                score2: parseInt(score2)
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Ergebnis erfolgreich gespeichert!');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Speichern des Ergebnisses', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Settings Management
+function loadSettings() {
+    const tournamentSettings = document.getElementById('tournament-settings');
+    
+    if (!currentTournament) {
+        tournamentSettings.innerHTML = `
+            <div class="status-card info">
+                <i class="fas fa-info-circle"></i>
+                <h4>Kein aktives Turnier</h4>
+                <p>Erstelle zuerst ein Turnier, um Einstellungen zu verwalten.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const settings = currentTournament.settings || {};
+    
+    tournamentSettings.innerHTML = `
+        <div class="settings-form">
+            <h4>Aktuelle Turnier-Einstellungen</h4>
+            
+            <div class="form-group">
+                <label for="tournament-format-setting">Turnier-Format:</label>
+                <select id="tournament-format-setting" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                    <option value="groups" ${settings.format === 'groups' ? 'selected' : ''}>Gruppensystem</option>
+                    <option value="swiss" ${settings.format === 'swiss' ? 'selected' : ''}>Champions League Format</option>
+                    <option value="league" ${settings.format === 'league' ? 'selected' : ''}>Liga-Modus</option>
+                </select>
+            </div>
+            
+            ${settings.format === 'groups' ? `
+                <div class="form-group">
+                    <label for="group-size-setting">Teams pro Gruppe:</label>
+                    <input type="number" id="group-size-setting" value="${settings.groupSize || 4}" min="3" max="6" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                </div>
+            ` : ''}
+            
+            ${settings.format === 'swiss' ? `
+                <div class="form-group">
+                    <label for="swiss-rounds-setting">Anzahl Runden:</label>
+                    <input type="number" id="swiss-rounds-setting" value="${settings.rounds || 5}" min="3" max="10" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+                </div>
+            ` : ''}
+            
+            <div class="form-group">
+                <label for="half-time-minutes">Standard Halbzeit-Dauer (Minuten):</label>
+                <input type="number" id="half-time-minutes" value="${settings.halfTimeMinutes || 45}" min="5" max="45" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            </div>
+            
+            <div class="settings-checkboxes">
+                <h5>K.O.-Phase Optionen:</h5>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-quarterfinals-setting" ${settings.enableQuarterfinals ? 'checked' : ''}> 
+                    Viertelfinale aktivieren
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-third-place-setting" ${settings.enableThirdPlace ? 'checked' : ''}> 
+                    Spiel um Platz 3
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-fifth-place-setting" ${settings.enableFifthPlace ? 'checked' : ''}> 
+                    Spiel um Platz 5
+                </label>
+                <label style="display: block; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="enable-seventh-place-setting" ${settings.enableSeventhPlace ? 'checked' : ''}> 
+                    Spiel um Platz 7
+                </label>
+            </div>
+            
+            <div class="settings-actions">
+                <button class="btn btn-primary" onclick="saveTournamentSettings()">
+                    <i class="fas fa-save"></i> Einstellungen speichern
+                </button>
+                <button class="btn btn-outline" onclick="resetTournamentSettings()">
+                    <i class="fas fa-undo"></i> Zurücksetzen
+                </button>
+            </div>
+        </div>
+        
+        <div class="tournament-info-card">
+            <h4>Turnier-Informationen</h4>
+            <div class="info-grid">
+                <div><strong>Jahr:</strong> ${currentTournament.year}</div>
+                <div><strong>Status:</strong> ${currentTournament.status}</div>
+                <div><strong>Teams:</strong> ${teams.length}</div>
+                <div><strong>Spiele:</strong> ${matches.length}</div>
+                <div><strong>Gruppen:</strong> ${currentTournament.groups ? currentTournament.groups.length : 0}</div>
+                <div><strong>Erstellt:</strong> ${new Date(currentTournament.createdAt).toLocaleDateString('de-DE')}</div>
+                ${currentTournament.registrationClosedAt ? `<div><strong>Anmeldung geschlossen:</strong> ${new Date(currentTournament.registrationClosedAt).toLocaleDateString('de-DE')}</div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+async function saveTournamentSettings() {
+    const format = document.getElementById('tournament-format-setting').value;
+    const halfTimeMinutes = parseInt(document.getElementById('half-time-minutes').value);
+    
+    let settings = {
+        format,
+        halfTimeMinutes,
+        enableQuarterfinals: document.getElementById('enable-quarterfinals-setting')?.checked || false,
+        enableThirdPlace: document.getElementById('enable-third-place-setting')?.checked || false,
+        enableFifthPlace: document.getElementById('enable-fifth-place-setting')?.checked || false,
+        enableSeventhPlace: document.getElementById('enable-seventh-place-setting')?.checked || false
+    };
+    
+    if (format === 'groups') {
+        settings.groupSize = parseInt(document.getElementById('group-size-setting').value);
+    } else if (format === 'swiss') {
+        settings.rounds = parseInt(document.getElementById('swiss-rounds-setting').value);
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/tournament/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                settings
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Einstellungen erfolgreich gespeichert');
+            await autoRefreshCurrentTab(); // AUTO-REFRESH
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Speichern der Einstellungen', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+function resetTournamentSettings() {
+    loadSettings();
+    showNotification('Einstellungen zurückgesetzt');
+}
+
+// Helper Functions
+function updateTeamCountDisplay() {
+    const teamCountDisplay = document.getElementById('team-count-display');
+    if (teamCountDisplay) {
+        teamCountDisplay.textContent = `${teams.length} Teams registriert`;
+    }
+}
+
+function refreshTeams() {
+    autoRefreshCurrentTab();
+    showNotification('Teams manuell aktualisiert');
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    checkAutoLogin();
+});
+
+// Page Unload - Clean up timers
+window.addEventListener('beforeunload', () => {
+    stopAutoRefresh();
+    if (liveControlInterval) {
+        clearInterval(liveControlInterval);
+    }
+});
