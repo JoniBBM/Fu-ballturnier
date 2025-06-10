@@ -13,7 +13,7 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
-const PORT = 5678;
+const PORT = process.env.PORT || 5678;
 
 // Middleware
 app.use(cors());

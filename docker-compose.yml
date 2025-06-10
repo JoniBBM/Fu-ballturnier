@@ -4,9 +4,10 @@ services:
   tournament-app:
     build: .
     ports:
-      - "5678:5678"
+      - "${PORT:-5678}:${PORT:-5678}"
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=${NODE_ENV:-development}
+      - PORT=${PORT:-5678}
     restart: unless-stopped
     volumes:
       # Persistente Datenspeicherung
