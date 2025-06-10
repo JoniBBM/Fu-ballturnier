@@ -273,6 +273,20 @@
                             </div>
                         </div>
                         
+                        <div class="knockout-generation-section" style="margin-bottom: 2rem;">
+                            <div class="info-banner" style="background: #fef3c7; border-left-color: #f59e0b;">
+                                <i class="fas fa-trophy" style="color: #f59e0b;"></i>
+                                <strong>K.O.-Phase Generierung:</strong>
+                                <p>Nach Abschluss der Gruppenphase werden automatisch die K.O.-Spiele generiert. Du kannst dies auch manuell auslösen.</p>
+                            </div>
+                            <div class="knockout-controls">
+                                <button id="generate-knockout-btn" class="btn btn-warning" onclick="openKnockoutConfigModal()">
+                                    <i class="fas fa-trophy"></i> K.O.-Spiele konfigurieren & generieren
+                                </button>
+                                <div id="knockout-status" style="margin-top: 1rem; font-size: 0.9rem;"></div>
+                            </div>
+                        </div>
+                        
                         <div id="matches-schedule-admin">
                             <!-- Spielplan wird hier geladen -->
                         </div>
@@ -372,6 +386,52 @@
                         
                         <div id="tournament-settings">
                             <!-- Einstellungen werden hier geladen -->
+                        </div>
+                        
+                        <!-- Contact Management Section -->
+                        <div class="management-section">
+                            <h4><i class="fas fa-envelope"></i> Kontaktdaten verwalten</h4>
+                            
+                            <div class="contact-management-card">
+                                <div class="info-banner">
+                                    <i class="fas fa-info-circle" style="color: #3b82f6;"></i>
+                                    <strong>Kontaktdaten bearbeiten:</strong>
+                                    <p>Diese Kontaktdaten werden auf der öffentlichen Website im Kontakt-Tab angezeigt. Änderungen werden automatisch übernommen.</p>
+                                </div>
+                                
+                                <form id="contact-form">
+                                    <div class="form-group">
+                                        <label for="contact-address">
+                                            <i class="fas fa-map-marker-alt"></i> Adresse
+                                        </label>
+                                        <textarea id="contact-address" rows="3" placeholder="CVJM Fellbach&#10;Stuttgarter Straße 75&#10;70734 Fellbach"></textarea>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label for="contact-nextcloud-group">
+                                            <i class="fas fa-cloud"></i> Nextcloud Gruppe Link
+                                        </label>
+                                        <input type="url" id="contact-nextcloud-group" placeholder="https://nextcloud.example.com/group/fussballturnier">
+                                        <small>Link zur Nextcloud Gruppe für Teilnehmer (kein Account erforderlich)</small>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label for="contact-additional">
+                                            <i class="fas fa-info-circle"></i> Zusätzliche Informationen
+                                        </label>
+                                        <textarea id="contact-additional" rows="2" placeholder="Weitere Informationen oder Hinweise für die Teilnehmer"></textarea>
+                                    </div>
+                                    
+                                    <div class="contact-actions">
+                                        <button type="button" class="btn btn-primary" onclick="saveContact()">
+                                            <i class="fas fa-save"></i> Kontaktdaten speichern
+                                        </button>
+                                        <button type="button" class="btn btn-outline" onclick="loadContactData()">
+                                            <i class="fas fa-refresh"></i> Neu laden
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
                         
                         <!-- Data Management Section -->

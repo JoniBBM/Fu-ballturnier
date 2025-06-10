@@ -18,6 +18,9 @@ let refreshTimeout = null;
 let isRefreshing = false;
 let pendingRefresh = false;
 
+// Tournament Info Caching
+let lastTournamentText = null;
+
 // DOM Elements
 const loginScreen = document.getElementById('login-screen');
 const adminContent = document.getElementById('admin-content');
@@ -163,9 +166,11 @@ function initializeWebSocket() {
         updateConnectionStatus();
         console.log('WebSocket connected');
         
-        // Initiale Daten anfordern
+        // Initiale Daten anfordern mit Delay für stabilere Verbindung
         if (isLoggedIn) {
-            loadInitialData();
+            setTimeout(() => {
+                loadInitialData();
+            }, 500); // 500ms Delay für stabilere Verbindung
         }
     });
 
@@ -219,17 +224,24 @@ function setupWebSocketEventListeners() {
     // Live Score Updates - only update UI, no refresh needed
     socket.on('live-score-update', (data) => {
         console.log('Live score update received:', data);
-        updateLiveScore(data);
+        updateLiveScoreDisplay(data);
         // Only refresh if not currently refreshing and on relevant tabs
         if (!isRefreshing && (currentActiveTab === 'dashboard')) {
             refreshCurrentTabContent();
         }
     });
 
-    // Match Started - refresh live tab
+    // Match Started - refresh live tab (but avoid race condition with executeStartMatch)
     socket.on('match-started', (data) => {
         console.log('Match started:', data);
         showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        
+        // Avoid race condition if we're in the middle of starting a match manually
+        if (window.isStartingMatch) {
+            console.log('Skipping immediate refresh due to manual match start in progress');
+            return;
+        }
+        
         if (!isRefreshing && (currentActiveTab === 'live' || currentActiveTab === 'dashboard')) {
             refreshCurrentTabContent();
         }
@@ -251,12 +263,22 @@ function setupWebSocketEventListeners() {
         updateMatchStatus(data.match, 'resumed');
     });
 
-    // Match Finished - important refresh
+    // Match Finished - important refresh and auto-load next match
     socket.on('match-finished', (data) => {
         console.log('Match finished:', data);
         showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
         if (!isRefreshing) {
             refreshCurrentTabContent();
+        }
+        
+        // If on live tab, automatically load next match after short delay
+        if (currentActiveTab === 'live') {
+            setTimeout(() => {
+                if (!isRefreshing) {
+                    console.log('Auto-loading next match after match finish');
+                    loadLiveControl();
+                }
+            }, 2000); // 2 second delay to show completion message
         }
     });
 
@@ -277,6 +299,30 @@ function setupWebSocketEventListeners() {
         }
     });
 
+    // Halftime Started
+    socket.on('halftime-started', (data) => {
+        console.log('Halftime started:', data);
+        showNotification(`Halbzeit eingeläutet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        if (!isRefreshing && currentActiveTab === 'live') {
+            // Sofortiges Neuladen für bessere UX
+            setTimeout(() => {
+                loadLiveControl();
+            }, 500);
+        }
+    });
+
+    // Second Half Started
+    socket.on('second-half-started', (data) => {
+        console.log('Second half started:', data);
+        showNotification(`2. Halbzeit gestartet: ${data.match.team1} vs ${data.match.team2}`, 'success');
+        if (!isRefreshing && currentActiveTab === 'live') {
+            // Sofortiges Neuladen für korrekte Button-Anzeige
+            setTimeout(() => {
+                loadLiveControl();
+            }, 500);
+        }
+    });
+
     // Data Imported Event
     socket.on('data-imported', (data) => {
         console.log('Data imported:', data);
@@ -284,6 +330,8 @@ function setupWebSocketEventListeners() {
         if (!isRefreshing) {
             refreshCurrentTabContent();
         }
+        // Update tournament info immediately after import
+        updateTournamentInfo();
     });
 }
 
@@ -332,18 +380,33 @@ function updatePauseResumeButtons(matchId, status) {
     }
 }
 
-// Helper function to update live scores in real-time
-function updateLiveScore(data) {
+// Helper function to update live scores in real-time (renamed to avoid conflict)
+function updateLiveScoreDisplay(data) {
     const { matchId, score1, score2, match } = data;
     
-    // Update live score inputs if visible
+    // Update live score inputs ONLY if they are not currently focused (prevents overwriting user input)
     const score1Input = document.querySelector(`input[data-match-id="${matchId}"][data-score="1"]`);
     const score2Input = document.querySelector(`input[data-match-id="${matchId}"][data-score="2"]`);
     
-    if (score1Input) score1Input.value = score1;
-    if (score2Input) score2Input.value = score2;
+    // Also check the live control inputs
+    const liveScore1Input = document.getElementById('live-score1');
+    const liveScore2Input = document.getElementById('live-score2');
+    
+    // Only update if not currently focused (user is not typing)
+    if (score1Input && document.activeElement !== score1Input) {
+        score1Input.value = score1;
+    }
+    if (score2Input && document.activeElement !== score2Input) {
+        score2Input.value = score2;
+    }
+    if (liveScore1Input && document.activeElement !== liveScore1Input) {
+        liveScore1Input.value = score1;
+    }
+    if (liveScore2Input && document.activeElement !== liveScore2Input) {
+        liveScore2Input.value = score2;
+    }
 
-    // Update match displays
+    // Update match displays (these are always safe to update)
     const matchElements = document.querySelectorAll(`[data-match-id="${matchId}"]`);
     matchElements.forEach(element => {
         const scoreDisplay = element.querySelector('.live-score');
@@ -415,7 +478,10 @@ async function performTabRefresh() {
                 break;
         }
         
-        updateTournamentInfo();
+        // Only update tournament info if we actually loaded new data and socket is stable
+        if (socket && socket.connected && !isRefreshing) {
+            updateTournamentInfo();
+        }
         console.log(`WebSocket refreshed tab: ${currentActiveTab}`);
     } catch (error) {
         console.error('Failed to refresh tab content:', error);
@@ -763,6 +829,8 @@ async function loadInitialData() {
 
 function updateTournamentInfo() {
     const tournamentInfo = document.getElementById('current-tournament-info');
+    let newText;
+    
     if (currentTournament) {
         const statusMap = {
             'registration': 'Anmeldung offen',
@@ -771,9 +839,15 @@ function updateTournamentInfo() {
             'finished': 'Beendet'
         };
         const status = statusMap[currentTournament.status] || 'Unbekannt';
-        tournamentInfo.textContent = `Turnier ${currentTournament.year} - ${status}`;
+        newText = `Turnier ${currentTournament.year} - ${status}`;
     } else {
-        tournamentInfo.textContent = 'Kein aktives Turnier';
+        newText = 'Kein aktives Turnier';
+    }
+    
+    // Nur updaten wenn sich der Text tatsächlich geändert hat
+    if (tournamentInfo && lastTournamentText !== newText) {
+        tournamentInfo.textContent = newText;
+        lastTournamentText = newText;
     }
 }
 
@@ -1759,6 +1833,420 @@ async function loadCurrentRules() {
     showNotification('Regeln neu geladen');
 }
 
+// Contact Management
+async function loadContactData() {
+    try {
+        const response = await fetch('/api/contact');
+        const data = await response.json();
+        
+        document.getElementById('contact-address').value = data.address || '';
+        document.getElementById('contact-nextcloud-group').value = data.nextcloudGroup || '';
+        document.getElementById('contact-additional').value = data.additional || '';
+    } catch (error) {
+        console.error('Fehler beim Laden der Kontaktdaten:', error);
+        showNotification('Fehler beim Laden der Kontaktdaten', 'error');
+    }
+}
+
+async function saveContact() {
+    const address = document.getElementById('contact-address').value;
+    const nextcloudGroup = document.getElementById('contact-nextcloud-group').value;
+    const additional = document.getElementById('contact-additional').value;
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                address: address,
+                nextcloudGroup: nextcloudGroup,
+                additional: additional
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('Kontaktdaten erfolgreich gespeichert!');
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Fehler beim Speichern der Kontaktdaten', 'error');
+        console.error('Save contact error:', error);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// K.O.-Konfiguration Modal öffnen
+async function openKnockoutConfigModal() {
+    const generateBtn = document.getElementById('generate-knockout-btn');
+    const statusDiv = document.getElementById('knockout-status');
+    
+    if (!currentTournament) {
+        statusDiv.innerHTML = '<span style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Kein aktives Turnier vorhanden</span>';
+        return;
+    }
+    
+    // Berechne finale Tabelle um Teamanzahl zu ermitteln
+    try {
+        const response = await fetch('/api/admin/get-final-table', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            statusDiv.innerHTML = `<span style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> ${data.error}</span>`;
+            return;
+        }
+        
+        const teamCount = data.finalTable.length;
+        console.log('Team count for KO config:', teamCount);
+        
+        // Erstelle Konfigurations-Modal
+        const canQuarterfinals = teamCount >= 8;
+        const canThirdPlace = teamCount >= 3;
+        const canFifthPlace = teamCount >= 6;
+        const canSeventhPlace = teamCount >= 8;
+        
+        createModal('K.O.-Phase Konfiguration', `
+            <div class="knockout-config-form">
+                <div class="form-group">
+                    <div class="info-banner" style="margin-bottom: 1.5rem;">
+                        <i class="fas fa-info-circle" style="color: #3b82f6;"></i>
+                        <strong>K.O.-Phase für ${teamCount} Teams konfigurieren</strong>
+                        <p>Wähle aus, welche K.O.-Spiele generiert werden sollen. Nur verfügbare Optionen können ausgewählt werden.</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label ${!canQuarterfinals ? 'disabled' : ''}">
+                        <input type="checkbox" id="enable-quarterfinals" ${!canQuarterfinals ? 'disabled' : ''} ${canQuarterfinals ? 'checked' : ''}>
+                        <span class="checkmark"></span>
+                        Viertelfinale (benötigt mindestens 8 Teams)
+                        ${!canQuarterfinals ? '<small style="color: #6b7280;"> - Nicht genügend Teams</small>' : ''}
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label ${!canThirdPlace ? 'disabled' : ''}">
+                        <input type="checkbox" id="enable-third-place" ${!canThirdPlace ? 'disabled' : ''} ${canThirdPlace ? 'checked' : ''}>
+                        <span class="checkmark"></span>
+                        Spiel um Platz 3 (benötigt mindestens 3 Teams)
+                        ${!canThirdPlace ? '<small style="color: #6b7280;"> - Nicht genügend Teams</small>' : ''}
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label ${!canFifthPlace ? 'disabled' : ''}">
+                        <input type="checkbox" id="enable-fifth-place" ${!canFifthPlace ? 'disabled' : ''}>
+                        <span class="checkmark"></span>
+                        Spiel um Platz 5 (benötigt mindestens 6 Teams)
+                        ${!canFifthPlace ? '<small style="color: #6b7280;"> - Nicht genügend Teams</small>' : ''}
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label ${!canSeventhPlace ? 'disabled' : ''}">
+                        <input type="checkbox" id="enable-seventh-place" ${!canSeventhPlace ? 'disabled' : ''}>
+                        <span class="checkmark"></span>
+                        Spiel um Platz 7 (benötigt mindestens 8 Teams)
+                        ${!canSeventhPlace ? '<small style="color: #6b7280;"> - Nicht genügend Teams</small>' : ''}
+                    </label>
+                </div>
+                
+                <div class="knockout-preview" id="knockout-preview" style="margin-top: 1.5rem; padding: 1rem; background: #f8fafc; border-radius: 0.5rem; border-left: 4px solid #3b82f6;">
+                    <h4><i class="fas fa-eye"></i> Vorschau der K.O.-Spiele:</h4>
+                    <div id="knockout-preview-content">
+                        <!-- Wird dynamisch befüllt -->
+                    </div>
+                </div>
+                
+                <div class="modal-actions" style="margin-top: 2rem; display: flex; gap: 1rem;">
+                    <button class="btn btn-success" onclick="generateKnockoutWithConfig()">
+                        <i class="fas fa-trophy"></i> K.O.-Spiele generieren
+                    </button>
+                    <button class="btn btn-outline" onclick="closeModal('modal')">
+                        <i class="fas fa-times"></i> Abbrechen
+                    </button>
+                </div>
+            </div>
+        `, 'knockout-config-modal');
+        
+        // Event Listeners für Live-Vorschau
+        document.querySelectorAll('#enable-quarterfinals, #enable-third-place, #enable-fifth-place, #enable-seventh-place').forEach(checkbox => {
+            checkbox.addEventListener('change', updateKnockoutPreview);
+        });
+        
+        // Initiale Vorschau
+        updateKnockoutPreview();
+        
+    } catch (error) {
+        console.error('Fehler beim Laden der finalen Tabelle:', error);
+        statusDiv.innerHTML = '<span style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Fehler beim Laden der Teamdaten</span>';
+    }
+}
+
+// Aktualisiert die Vorschau der K.O.-Spiele
+function updateKnockoutPreview() {
+    const enableQuarterfinals = document.getElementById('enable-quarterfinals')?.checked || false;
+    const enableThirdPlace = document.getElementById('enable-third-place')?.checked || false;
+    const enableFifthPlace = document.getElementById('enable-fifth-place')?.checked || false;
+    const enableSeventhPlace = document.getElementById('enable-seventh-place')?.checked || false;
+    
+    const previewContent = document.getElementById('knockout-preview-content');
+    if (!previewContent) return;
+    
+    let matches = [];
+    
+    if (enableQuarterfinals) {
+        matches.push('4 Viertelfinale (1. vs 8., 2. vs 7., 3. vs 6., 4. vs 5.)');
+        matches.push('2 Halbfinale (aus Viertelfinale-Siegern)');
+    } else {
+        matches.push('2 Halbfinale (1. vs 4., 2. vs 3.)');
+    }
+    
+    matches.push('1 Finale');
+    
+    if (enableThirdPlace) {
+        matches.push('1 Spiel um Platz 3');
+    }
+    
+    if (enableFifthPlace) {
+        matches.push('1 Spiel um Platz 5');
+    }
+    
+    if (enableSeventhPlace) {
+        matches.push('1 Spiel um Platz 7');
+    }
+    
+    const totalMatches = matches.length;
+    
+    previewContent.innerHTML = `
+        <ul style="margin: 0; padding-left: 1.5rem;">
+            ${matches.map(match => `<li>${match}</li>`).join('')}
+        </ul>
+        <div style="margin-top: 1rem; font-weight: bold; color: #3b82f6;">
+            Gesamt: ${totalMatches} Spiele werden generiert
+        </div>
+    `;
+}
+
+// K.O.-Spiele mit gewählter Konfiguration generieren
+async function generateKnockoutWithConfig() {
+    const enableQuarterfinals = document.getElementById('enable-quarterfinals')?.checked || false;
+    const enableThirdPlace = document.getElementById('enable-third-place')?.checked || false;
+    const enableFifthPlace = document.getElementById('enable-fifth-place')?.checked || false;
+    const enableSeventhPlace = document.getElementById('enable-seventh-place')?.checked || false;
+    
+    const config = {
+        enableQuarterfinals,
+        enableThirdPlace,
+        enableFifthPlace,
+        enableSeventhPlace
+    };
+    
+    console.log('Generating KO matches with config:', config);
+    
+    try {
+        const response = await fetch('/api/admin/generate-knockout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword,
+                config: config
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification('K.O.-Phase erfolgreich generiert!');
+            closeModal('knockout-config-modal');
+            
+            // Status aktualisieren
+            const statusDiv = document.getElementById('knockout-status');
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <span style="color: #16a34a;">
+                        <i class="fas fa-check-circle"></i> 
+                        K.O.-Spiele erfolgreich generiert! (${data.matchesGenerated} Spiele)
+                    </span>
+                `;
+            }
+            
+            // Daten neu laden
+            await loadAllData();
+            
+            // Button deaktivieren
+            const generateBtn = document.getElementById('generate-knockout-btn');
+            if (generateBtn) {
+                generateBtn.innerHTML = '<i class="fas fa-check"></i> K.O.-Spiele generiert';
+                generateBtn.disabled = true;
+                generateBtn.style.opacity = '0.6';
+            }
+            
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        console.error('Fehler beim Generieren der K.O.-Spiele:', error);
+        showNotification('Fehler beim Generieren der K.O.-Spiele', 'error');
+    }
+}
+
+// K.O.-Spiele manuell generieren (Legacy-Funktion)
+async function generateKnockoutMatches() {
+    const generateBtn = document.getElementById('generate-knockout-btn');
+    const statusDiv = document.getElementById('knockout-status');
+    
+    if (!currentTournament) {
+        statusDiv.innerHTML = '<span style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Kein aktives Turnier vorhanden</span>';
+        return;
+    }
+    
+    generateBtn.disabled = true;
+    generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generiere...';
+    statusDiv.innerHTML = '<span style="color: #3b82f6;"><i class="fas fa-clock"></i> K.O.-Spiele werden generiert...</span>';
+    
+    try {
+        const response = await fetch('/api/admin/generate-knockout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                password: adminPassword
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            statusDiv.innerHTML = `
+                <span style="color: #16a34a;">
+                    <i class="fas fa-check-circle"></i> 
+                    K.O.-Spiele erfolgreich generiert! (${data.matchesGenerated} Spiele)
+                </span>
+            `;
+            
+            showNotification('K.O.-Phase erfolgreich generiert!');
+            
+            // Lade Spielplan neu um K.O.-Spiele anzuzeigen
+            await loadAllData();
+            
+            // Deaktiviere Button dauerhaft
+            generateBtn.innerHTML = '<i class="fas fa-check"></i> K.O.-Spiele generiert';
+            generateBtn.disabled = true;
+            generateBtn.style.opacity = '0.6';
+            
+        } else {
+            let debugInfo = '';
+            if (data.debug) {
+                debugInfo = `<br><small>Debug: Status=${data.debug.tournamentStatus}, Format=${data.debug.format}, Gruppenspiele=${data.debug.groupMatches}, Offen=${data.debug.incompleteMatches}, Gruppen=${data.debug.groups}</small>`;
+            }
+            
+            statusDiv.innerHTML = `
+                <span style="color: #dc2626;">
+                    <i class="fas fa-exclamation-triangle"></i> 
+                    ${data.error}${debugInfo}
+                </span>
+            `;
+            showNotification(data.error, 'error');
+            
+            generateBtn.disabled = false;
+            generateBtn.innerHTML = '<i class="fas fa-trophy"></i> K.O.-Spiele generieren';
+        }
+    } catch (error) {
+        console.error('Fehler beim Generieren der K.O.-Spiele:', error);
+        statusDiv.innerHTML = `
+            <span style="color: #dc2626;">
+                <i class="fas fa-exclamation-triangle"></i> 
+                Fehler beim Generieren der K.O.-Spiele
+            </span>
+        `;
+        showNotification('Fehler beim Generieren der K.O.-Spiele', 'error');
+        
+        generateBtn.disabled = false;
+        generateBtn.innerHTML = '<i class="fas fa-trophy"></i> K.O.-Spiele generieren';
+    }
+}
+
+// Prüfe K.O.-Status beim Laden der Matches-Tab
+async function checkKnockoutStatus() {
+    const statusDiv = document.getElementById('knockout-status');
+    const generateBtn = document.getElementById('generate-knockout-btn');
+    
+    if (!statusDiv || !generateBtn) return;
+    
+    try {
+        // Prüfe ob bereits K.O.-Spiele existieren
+        const existingKoMatches = matches.filter(m => 
+            m.phase === 'quarterfinal' || 
+            m.phase === 'semifinal' || 
+            m.phase === 'final' ||
+            m.group?.toLowerCase().includes('finale') ||
+            m.group?.toLowerCase().includes('platz')
+        );
+        
+        if (existingKoMatches.length > 0) {
+            statusDiv.innerHTML = `
+                <span style="color: #16a34a;">
+                    <i class="fas fa-check-circle"></i> 
+                    K.O.-Spiele bereits vorhanden (${existingKoMatches.length} Spiele)
+                </span>
+            `;
+            generateBtn.innerHTML = '<i class="fas fa-check"></i> K.O.-Spiele bereits generiert';
+            generateBtn.disabled = true;
+            generateBtn.style.opacity = '0.6';
+            return;
+        }
+        
+        // Prüfe Gruppenphase-Status
+        if (!currentTournament || currentTournament.status !== 'active') {
+            statusDiv.innerHTML = '<span style="color: #6b7280;"><i class="fas fa-info-circle"></i> Turnier muss aktiv sein</span>';
+            generateBtn.disabled = true;
+            return;
+        }
+        
+        // Prüfe ob Gruppenspiele abgeschlossen sind
+        const incompleteGroupMatches = matches.filter(m => 
+            m.phase === 'group' && 
+            !m.completed && 
+            !m.isPenaltyShootout
+        );
+        
+        if (incompleteGroupMatches.length > 0) {
+            statusDiv.innerHTML = `
+                <span style="color: #f59e0b;">
+                    <i class="fas fa-clock"></i> 
+                    Noch ${incompleteGroupMatches.length} Gruppenspiele ausstehend
+                </span>
+            `;
+            generateBtn.disabled = true;
+        } else {
+            statusDiv.innerHTML = `
+                <span style="color: #16a34a;">
+                    <i class="fas fa-check-circle"></i> 
+                    Gruppenphase abgeschlossen - K.O.-Spiele können generiert werden
+                </span>
+            `;
+            generateBtn.disabled = false;
+        }
+        
+    } catch (error) {
+        console.error('Fehler beim Prüfen des K.O.-Status:', error);
+        statusDiv.innerHTML = '<span style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Fehler beim Status-Check</span>';
+    }
+}
+
 // Dashboard mit Schiedsrichter-Anzeige
 async function loadDashboard() {
     // Update stats
@@ -2308,6 +2796,9 @@ function loadMatches() {
     }
     
     matchesAdmin.innerHTML = html;
+    
+    // Prüfe K.O.-Status nach dem Laden der Matches
+    setTimeout(checkKnockoutStatus, 100);
 }
 
 // Ergebnis korrigieren/bearbeiten 
@@ -2815,9 +3306,20 @@ async function executeStartMatch(matchId, modalId) {
             showNotification('Spiel erfolgreich gestartet! Live-Timer läuft...');
             closeModal(modalId);
             
-            // AUTO-SWITCH TO LIVE TAB + AUTO-REFRESH
+            // Set flag to prevent race condition with WebSocket events
+            window.isStartingMatch = true;
+            
+            // AUTO-SWITCH TO LIVE TAB
             switchToTab('live');
-            await refreshCurrentTabContent();
+            
+            // Wait for potential WebSocket events to arrive before manual refresh
+            setTimeout(async () => {
+                window.isStartingMatch = false;
+                // Force a fresh load of live control after match start
+                if (currentActiveTab === 'live') {
+                    await loadLiveControl();
+                }
+            }, 1500); // Wait 1.5 seconds for server sync and WebSocket events
         } else {
             showNotification(data.error, 'error');
         }
@@ -2844,20 +3346,59 @@ async function loadLiveControl() {
     `;
     
     try {
-        // Load current live match and next match data
-        const [liveResponse, nextResponse] = await Promise.all([
-            fetch('/api/live-match'),
-            fetch('/api/next-match')
+        // Load current live match and next match data with better error handling
+        const [liveResult, nextResult] = await Promise.allSettled([
+            fetch('/api/live-match').then(r => r.json()),
+            fetch('/api/next-match').then(r => r.json())
         ]);
         
-        const liveData = await liveResponse.json();
-        const nextData = await nextResponse.json();
+        const liveData = liveResult.status === 'fulfilled' ? liveResult.value : { liveMatch: null };
+        const nextData = nextResult.status === 'fulfilled' ? nextResult.value : { nextMatch: null };
+        
+        // Log any failures but continue with partial data
+        if (liveResult.status === 'rejected') {
+            console.error('Failed to load live match:', liveResult.reason);
+        }
+        if (nextResult.status === 'rejected') {
+            console.error('Failed to load next match:', nextResult.reason);
+        }
+        
+        // If both API calls failed, show connection error instead of "tournament complete"
+        if (liveResult.status === 'rejected' && nextResult.status === 'rejected') {
+            throw new Error('Both live and next match API calls failed');
+        }
         
         let html = '';
         
         if (liveData.liveMatch) {
             // Live match is running
             const liveMatch = liveData.liveMatch;
+            
+            // Debug logging for halftime state
+            console.log('Live match state:', {
+                id: liveMatch.id,
+                currentHalf: liveMatch.currentHalf,
+                halfTimeBreak: liveMatch.halfTimeBreak,
+                isPaused: liveMatch.isPaused,
+                team1: liveMatch.team1,
+                team2: liveMatch.team2
+            });
+            
+            // Debug button visibility conditions
+            console.log('Live match detailed status:', {
+                currentHalf: liveMatch.currentHalf,
+                halfTimeBreak: liveMatch.halfTimeBreak,
+                isPaused: liveMatch.isPaused,
+                startTime: liveMatch.startTime,
+                firstHalfEndTime: liveMatch.firstHalfEndTime,
+                secondHalfStartTime: liveMatch.secondHalfStartTime
+            });
+            console.log('Button visibility conditions:', {
+                halftimeButton: liveMatch.currentHalf === 1 && !liveMatch.halfTimeBreak,
+                secondHalfButton: liveMatch.halfTimeBreak,
+                endMatchButton: liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak,
+                pauseResumeButton: liveMatch.isPaused ? 'resume' : 'pause'
+            });
             
             html += `
                 <div class="live-control-panel-improved">
@@ -2958,20 +3499,62 @@ async function loadLiveControl() {
                 </div>
             `;
             
-            // Nächster Schiedsrichter Anzeige während Live-Spiel
-            if (nextData.nextMatch && nextData.nextMatch.referee) {
+            // Nächstes Spiel Anzeige während Live-Spiel (immer anzeigen wenn verfügbar)
+            if (nextData.nextMatch) {
+                const nextMatch = nextData.nextMatch;
+                const nextTime = new Date(nextMatch.datetime);
+                const timeUntilMatch = nextTime - new Date();
+                const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+                
                 html += `
-                    <div class="next-referee-section-improved">
-                        <div class="next-referee-header">
-                            <i class="fas fa-whistle"></i>
-                            <h4>Nächster Schiedsrichter bereitmachen</h4>
+                    <div class="next-match-ready-section">
+                        <div class="next-match-header-live">
+                            <i class="fas fa-forward"></i>
+                            <h4>Nächstes Spiel bereit</h4>
                         </div>
-                        <div class="next-referee-card">
-                            <div class="referee-name-prominent">${nextData.nextMatch.referee.team}</div>
-                            <div class="referee-match-info">
-                                <strong>Nächstes Spiel:</strong> ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}<br>
-                                <strong>Gruppe:</strong> ${nextData.nextMatch.referee.group}<br>
-                                <strong>Geplant:</strong> ${new Date(nextData.nextMatch.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
+                        <div class="next-match-card-live">
+                            <div class="next-match-teams-live">
+                                ${nextMatch.team1} <span class="vs-live">vs</span> ${nextMatch.team2}
+                            </div>
+                            <div class="next-match-details-live">
+                                <div class="detail-row">
+                                    <i class="fas fa-layer-group"></i> 
+                                    <span>${nextMatch.group}</span>
+                                </div>
+                                <div class="detail-row">
+                                    <i class="fas fa-clock"></i> 
+                                    <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
+                                    ${minutesUntil > 0 ? `<span class="time-until">(in ${minutesUntil} Min.)</span>` : '<span class="time-until ready">Startbereit!</span>'}
+                                </div>
+                                ${nextMatch.field ? `
+                                    <div class="detail-row">
+                                        <i class="fas fa-map-marker-alt"></i> 
+                                        <span>${nextMatch.field}</span>
+                                    </div>
+                                ` : ''}
+                            </div>
+                            
+                            ${nextMatch.referee ? `
+                                <div class="next-referee-info-live">
+                                    <div class="referee-icon-live">
+                                        <i class="fas fa-whistle"></i>
+                                    </div>
+                                    <div class="referee-details-live">
+                                        <strong>Schiedsrichter:</strong><br>
+                                        ${nextMatch.referee.team} (${nextMatch.referee.group})
+                                    </div>
+                                </div>
+                            ` : `
+                                <div class="no-referee-info-live">
+                                    <i class="fas fa-user-question"></i>
+                                    <span>Kein Schiedsrichter zugewiesen</span>
+                                </div>
+                            `}
+                            
+                            <div class="next-match-actions-live">
+                                <button class="btn btn-success btn-large" onclick="startMatchDialog('${nextMatch.id}')">
+                                    <i class="fas fa-play"></i> Nächstes Spiel starten
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -3034,11 +3617,100 @@ async function loadLiveControl() {
                     </div>
                 `;
             } else {
-                // No scheduled matches
-                const allMatches = matches.filter(m => !m.completed);
-                const unscheduledMatches = allMatches.filter(m => !m.scheduled);
+                // No next match from API - check if there are still matches to play
+                // Use current matches data first, then fallback to fresh API call if needed
+                let latestMatches = matches || [];
                 
-                if (unscheduledMatches.length > 0) {
+                // If we don't have matches data or it seems stale, try to fetch fresh data
+                if (!latestMatches.length) {
+                    try {
+                        const matchesResponse = await fetch('/api/matches');
+                        if (matchesResponse.ok) {
+                            latestMatches = await matchesResponse.json();
+                        }
+                    } catch (matchError) {
+                        console.error('Error fetching latest matches:', matchError);
+                        // Use empty array as fallback
+                        latestMatches = [];
+                    }
+                }
+                
+                const allMatches = latestMatches.filter(m => !m.completed);
+                const unscheduledMatches = allMatches.filter(m => !m.scheduled);
+                const scheduledButNotCompleted = allMatches.filter(m => m.scheduled && !m.completed);
+                const liveMatches = allMatches.filter(m => m.liveScore && m.liveScore.isLive);
+                
+                console.log('Match analysis:', {
+                    total: latestMatches.length,
+                    completed: latestMatches.filter(m => m.completed).length,
+                    unscheduled: unscheduledMatches.length,
+                    scheduledNotCompleted: scheduledButNotCompleted.length,
+                    liveMatches: liveMatches.length
+                });
+                
+                // If there are live matches, something went wrong with the live-match API
+                if (liveMatches.length > 0) {
+                    html += `
+                        <div class="error-state-improved">
+                            <div class="error-icon">
+                                <i class="fas fa-sync"></i>
+                            </div>
+                            <h3>Live-Daten werden synchronisiert...</h3>
+                            <p>Ein Spiel läuft gerade. Lade aktuelle Daten...</p>
+                            <div class="auto-retry-indicator">
+                                <i class="fas fa-sync fa-spin"></i>
+                                <span>Automatische Aktualisierung in Kürze...</span>
+                            </div>
+                        </div>
+                    `;
+                    // Auto-retry after 2 seconds if live matches detected but live-match API failed
+                    setTimeout(() => {
+                        if (currentActiveTab === 'live') {
+                            console.log('Auto-retrying due to detected live matches...');
+                            loadLiveControl();
+                        }
+                    }, 2000);
+                } else if (scheduledButNotCompleted.length > 0) {
+                        // There are still scheduled matches that are not completed
+                        const nextScheduled = scheduledButNotCompleted
+                            .filter(m => new Date(m.datetime) > new Date())
+                            .sort((a, b) => new Date(a.datetime) - new Date(b.datetime))[0];
+                        
+                        if (nextScheduled) {
+                            html += `
+                                <div class="no-live-match-improved">
+                                    <div class="next-match-ready">
+                                        <div class="next-match-header">
+                                            <i class="fas fa-clock"></i>
+                                            <h3>Nächstes geplantes Spiel</h3>
+                                        </div>
+                                        
+                                        <div class="next-match-info-card">
+                                            <div class="match-teams-display">${nextScheduled.team1} <span class="vs">vs</span> ${nextScheduled.team2}</div>
+                                            <div class="match-time-display">
+                                                <strong>${new Date(nextScheduled.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                                                <span class="countdown-badge">Startbereit!</span>
+                                            </div>
+                                            <div class="match-details-grid">
+                                                <div class="detail-item">
+                                                    <i class="fas fa-layer-group"></i> ${nextScheduled.group}
+                                                </div>
+                                                <div class="detail-item">
+                                                    <i class="fas fa-map-marker-alt"></i> ${nextScheduled.field}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="start-match-action">
+                                            <button class="btn btn-success btn-large" onclick="startMatchDialog('${nextScheduled.id}')">
+                                                <i class="fas fa-play"></i> Dieses Spiel jetzt starten
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    } else if (unscheduledMatches.length > 0) {
                     html += `
                         <div class="no-live-match-improved">
                             <div class="no-scheduled-state">
@@ -3058,27 +3730,27 @@ async function loadLiveControl() {
                             </div>
                         </div>
                     `;
-                } else {
-                    html += `
-                        <div class="no-live-match-improved">
-                            <div class="tournament-complete-state">
-                                <div class="state-icon">
-                                    <i class="fas fa-trophy"></i>
-                                </div>
-                                <h3>Alle Spiele abgeschlossen</h3>
-                                <p>Das Turnier ist beendet. Alle Spiele wurden gespielt.</p>
-                                <div class="action-buttons">
-                                    <button class="btn btn-success btn-large" onclick="switchToTab('results')">
-                                        <i class="fas fa-trophy"></i> Endergebnisse anzeigen
-                                    </button>
-                                    <button class="btn btn-outline btn-large" onclick="exportTournamentData()">
-                                        <i class="fas fa-download"></i> Turnierdaten exportieren
-                                    </button>
+                    } else {
+                        html += `
+                            <div class="no-live-match-improved">
+                                <div class="tournament-complete-state">
+                                    <div class="state-icon">
+                                        <i class="fas fa-trophy"></i>
+                                    </div>
+                                    <h3>Alle Spiele abgeschlossen</h3>
+                                    <p>Das Turnier ist beendet. Alle Spiele wurden gespielt.</p>
+                                    <div class="action-buttons">
+                                        <button class="btn btn-success btn-large" onclick="switchToTab('results')">
+                                            <i class="fas fa-trophy"></i> Endergebnisse anzeigen
+                                        </button>
+                                        <button class="btn btn-outline btn-large" onclick="exportTournamentData()">
+                                            <i class="fas fa-download"></i> Turnierdaten exportieren
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    `;
-                }
+                        `;
+                    }
             }
         }
         
@@ -3093,12 +3765,21 @@ async function loadLiveControl() {
                     <i class="fas fa-wifi"></i>
                 </div>
                 <h3>Verbindungsproblem</h3>
-                <p>Live-Control konnte nicht geladen werden. Bitte überprüfe deine Internetverbindung.</p>
-                <button class="btn btn-outline btn-large" onclick="refreshCurrentTabContent()">
-                    <i class="fas fa-refresh"></i> Erneut versuchen
-                </button>
+                <p>Live-Control konnte nicht geladen werden. Automatische Wiederholung in Kürze...</p>
+                <div class="auto-retry-indicator">
+                    <i class="fas fa-sync fa-spin"></i>
+                    <span>Versuche erneut zu verbinden...</span>
+                </div>
             </div>
         `;
+        
+        // Automatisches Retry nach 3 Sekunden
+        setTimeout(() => {
+            if (currentActiveTab === 'live') {
+                console.log('Auto-retrying live control load...');
+                loadLiveControl();
+            }
+        }, 3000);
     }
 }
 
@@ -3126,8 +3807,28 @@ function startLiveControlUpdates(liveMatch) {
                 return;
             }
             
-            // Update timer and half info
+            // Check if halftime state changed - reload if so
             const updatedMatch = data.liveMatch;
+            const currentHalfTimeState = updatedMatch.halfTimeBreak;
+            const currentHalf = updatedMatch.currentHalf;
+            
+            // If halftime state or half changed, reload completely for button updates
+            if (typeof window.lastHalfTimeState !== 'undefined' && 
+                (window.lastHalfTimeState !== currentHalfTimeState || window.lastHalf !== currentHalf)) {
+                console.log('Halftime state changed, reloading live control');
+                window.lastHalfTimeState = currentHalfTimeState;
+                window.lastHalf = currentHalf;
+                clearInterval(liveControlInterval);
+                liveControlInterval = null;
+                await loadLiveControl();
+                return;
+            }
+            
+            // Store current state for next comparison
+            window.lastHalfTimeState = currentHalfTimeState;
+            window.lastHalf = currentHalf;
+            
+            // Update timer and half info
             const timeInfo = calculateLiveTime(updatedMatch);
             
             const timerElement = document.getElementById('admin-live-timer');
@@ -3139,14 +3840,14 @@ function startLiveControlUpdates(liveMatch) {
             }
             if (halfElement) halfElement.textContent = timeInfo.halfInfo;
             
-            // Update scores (sync with any changes from other sources)
+            // Update scores (sync with any changes from other sources) - but only if user is not typing
             const score1Input = document.getElementById('live-score1');
             const score2Input = document.getElementById('live-score2');
             
-            if (score1Input && score1Input.value != updatedMatch.score1) {
+            if (score1Input && score1Input.value != updatedMatch.score1 && document.activeElement !== score1Input) {
                 score1Input.value = updatedMatch.score1;
             }
-            if (score2Input && score2Input.value != updatedMatch.score2) {
+            if (score2Input && score2Input.value != updatedMatch.score2 && document.activeElement !== score2Input) {
                 score2Input.value = updatedMatch.score2;
             }
             
@@ -3258,8 +3959,8 @@ async function updateLiveScore(matchId) {
     }
     
     try {
-        const response = await fetch('/api/admin/live-match/score', {
-            method: 'PUT',
+        const response = await fetch('/api/admin/live-score', {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 password: adminPassword,
@@ -3335,7 +4036,10 @@ async function startHalfTime(matchId) {
         
         if (data.success) {
             showNotification('Halbzeit eingeläutet');
-            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
+            // Force immediate live control update
+            if (currentActiveTab === 'live') {
+                await loadLiveControl();
+            }
         } else {
             showNotification(data.error, 'error');
         }
@@ -3356,7 +4060,10 @@ async function startSecondHalf(matchId) {
         
         if (data.success) {
             showNotification('2. Halbzeit gestartet');
-            // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
+            // Force immediate live control update
+            if (currentActiveTab === 'live') {
+                await loadLiveControl();
+            }
         } else {
             showNotification(data.error, 'error');
         }
@@ -3587,6 +4294,9 @@ async function submitResult(matchId) {
 // Settings Management
 function loadSettings() {
     const tournamentSettings = document.getElementById('tournament-settings');
+    
+    // Load contact data when settings tab is opened
+    loadContactData();
     
     if (!currentTournament) {
         tournamentSettings.innerHTML = `

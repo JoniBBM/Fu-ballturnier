@@ -97,6 +97,12 @@ function loadTabContent(tab) {
         case 'tables':
             loadTables();
             break;
+        case 'knockout':
+            loadKnockoutMatches();
+            break;
+        case 'contact':
+            loadContact();
+            break;
         case 'rules':
             loadRules();
             break;
@@ -550,56 +556,108 @@ async function loadLiveMatch() {
             startLiveUpdates(liveMatch);
         }
         // VERBESSERUNG: Auch wenn kein Live-Spiel läuft, zeige das nächste Spiel
-        else if (nextData.nextMatch) {
-            const nextMatch = nextData.nextMatch;
-            const nextTime = new Date(nextMatch.datetime);
-            const timeUntilMatch = nextTime - new Date();
-            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+        else {
+            // Lade das nächste Spiel aus dem Spielplan
+            let nextMatch = nextData.nextMatch;
+            
+            // Falls kein nächstes Spiel von API, versuche es aus dem Spielplan zu finden
+            if (!nextMatch) {
+                nextMatch = await findNextScheduledMatch();
+            }
+            
+            // Update nextData with found match for later logic
+            if (nextMatch && !nextData.nextMatch) {
+                nextData.nextMatch = nextMatch;
+            }
+            
+            if (nextMatch) {
+                let nextTime = null;
+                let timeUntilMatch = 0;
+                let minutesUntil = 0;
+                
+                if (nextMatch.scheduled && nextMatch.scheduled.datetime) {
+                    nextTime = new Date(nextMatch.scheduled.datetime);
+                    timeUntilMatch = nextTime - new Date();
+                    minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+                } else if (nextMatch.datetime) {
+                    nextTime = new Date(nextMatch.datetime);
+                    timeUntilMatch = nextTime - new Date();
+                    minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+                }
             
             html += `
-                <div class="next-match-display">
-                    <div class="next-match-header">
-                        <h3><i class="fas fa-clock"></i> Nächstes Spiel</h3>
-                        <div class="countdown-big">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
+                <div class="next-match-display-improved">
+                    <div class="next-match-label">
+                        <h2><i class="fas fa-forward"></i> Nächstes Spiel:</h2>
                     </div>
                     
-                    <div class="next-match-teams">
-                        <div class="team-name">${nextMatch.team1}</div>
-                        <div class="vs-large">VS</div>
-                        <div class="team-name">${nextMatch.team2}</div>
-                    </div>
-                    
-                    <div class="next-match-details">
-                        <div class="match-time">
-                            <i class="fas fa-clock"></i>
-                            <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
+                    <div class="next-match-main-content">
+                        <div class="next-match-teams-improved">
+                            <div class="team-name-improved">${nextMatch.team1}</div>
+                            <div class="vs-large-improved">VS</div>
+                            <div class="team-name-improved">${nextMatch.team2}</div>
                         </div>
-                        <div class="match-group">
-                            <i class="fas fa-layer-group"></i>
-                            <span>${nextMatch.group}</span>
-                        </div>
-                        <div class="match-field">
-                            <i class="fas fa-map-marker-alt"></i>
-                            <span>${nextMatch.field}</span>
-                        </div>
-                    </div>
-                    
-                    ${nextMatch.referee ? `
-                        <div class="referee-display-prominent">
-                            <div class="referee-header">
-                                <i class="fas fa-whistle"></i>
-                                <span>SCHIEDSRICHTER</span>
+                        
+                        <div class="next-match-info-grid">
+                            ${nextTime ? `
+                                <div class="info-item">
+                                    <i class="fas fa-clock"></i>
+                                    <div class="info-content">
+                                        <div class="info-label">Zeit</div>
+                                        <div class="info-value">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</div>
+                                        <div class="countdown-display">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
+                                    </div>
+                                </div>
+                            ` : `
+                                <div class="info-item">
+                                    <i class="fas fa-clock"></i>
+                                    <div class="info-content">
+                                        <div class="info-label">Status</div>
+                                        <div class="info-value">Noch nicht geplant</div>
+                                    </div>
+                                </div>
+                            `}
+                            <div class="info-item">
+                                <i class="fas fa-layer-group"></i>
+                                <div class="info-content">
+                                    <div class="info-label">Gruppe</div>
+                                    <div class="info-value">${nextMatch.group}</div>
+                                </div>
                             </div>
-                            <div class="referee-name-big">${nextMatch.referee.team}</div>
-                            <div class="referee-group">${nextMatch.referee.group}</div>
+                            ${(nextMatch.scheduled && nextMatch.scheduled.field) || nextMatch.field ? `
+                                <div class="info-item">
+                                    <i class="fas fa-map-marker-alt"></i>
+                                    <div class="info-content">
+                                        <div class="info-label">Platz</div>
+                                        <div class="info-value">${(nextMatch.scheduled && nextMatch.scheduled.field) || nextMatch.field}</div>
+                                    </div>
+                                </div>
+                            ` : ''}
                         </div>
-                    ` : ''}
+                        
+                        ${nextMatch.referee ? `
+                            <div class="referee-display-super-prominent">
+                                <div class="referee-badge">
+                                    <i class="fas fa-whistle"></i>
+                                    <span>SCHIEDSRICHTER</span>
+                                </div>
+                                <div class="referee-name-super-big">${nextMatch.referee.team}</div>
+                                <div class="referee-group-info">${nextMatch.referee.group}</div>
+                            </div>
+                        ` : `
+                            <div class="no-referee-display">
+                                <i class="fas fa-user-question"></i>
+                                <span>Kein Schiedsrichter zugewiesen</span>
+                            </div>
+                        `}
+                    </div>
                 </div>
             `;
         }
+        }
         
         // Weitere kommende Spiele (falls vorhanden)
-        if (!liveData.liveMatch && nextData.nextMatch) {
+        if (nextData.nextMatch) {
             // Lade weitere Spiele
             try {
                 const matchesResponse = await fetch('/api/matches');
@@ -1082,15 +1140,53 @@ async function loadTables() {
             return;
         }
         
+        // Debug logging for troubleshooting
+        console.log('Tournament data for tables:', {
+            hasTournament: !!data.tournament,
+            status: data.tournament?.status,
+            hasGroups: !!(data.tournament?.groups),
+            groupsLength: data.tournament?.groups?.length || 0,
+            groups: data.tournament?.groups
+        });
+        
         if (!data.tournament.groups || data.tournament.groups.length === 0) {
-            tablesContent.innerHTML = `
-                <div class="empty-state">
-                    <i class="fas fa-table"></i>
-                    <h3>Keine Tabellen verfügbar</h3>
-                    <p>Die Gruppentabellen werden erstellt, sobald das Turnier startet.</p>
-                </div>
-            `;
-            return;
+            // Try to generate tables from existing matches if tournament is running
+            if (data.tournament.status === 'active' || data.tournament.status === 'running') {
+                // Fetch matches to generate table data
+                try {
+                    const matchesResponse = await fetch('/api/matches');
+                    const matches = await matchesResponse.json();
+                    
+                    if (matches && matches.length > 0) {
+                        console.log('Generating tables from matches data');
+                        // Generate groups from matches
+                        const groupsFromMatches = generateGroupsFromMatches(matches);
+                        if (groupsFromMatches.length > 0) {
+                            data.tournament.groups = groupsFromMatches;
+                        }
+                    }
+                } catch (matchError) {
+                    console.error('Error fetching matches for table generation:', matchError);
+                }
+            }
+            
+            // If still no groups, show appropriate message
+            if (!data.tournament.groups || data.tournament.groups.length === 0) {
+                tablesContent.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-table"></i>
+                        <h3>Keine Tabellen verfügbar</h3>
+                        <p>Die Gruppentabellen werden erstellt, sobald das Turnier startet und Spiele gespielt werden.</p>
+                        ${data.tournament.status !== 'active' ? `
+                            <div style="margin-top: 1rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem;">
+                                <strong>Turnier-Status:</strong> ${data.tournament.status}<br>
+                                <small>Tabellen werden angezeigt wenn Status "active" ist und Gruppen vorhanden sind.</small>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+                return;
+            }
         }
         
         let html = '';
@@ -1158,6 +1254,150 @@ async function loadTables() {
         tablesContent.innerHTML = html;
     } catch (error) {
         console.error('Fehler beim Laden der Tabellen:', error);
+        const tablesContent = document.getElementById('tables-content');
+        tablesContent.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Fehler beim Laden der Tabellen</h3>
+                <p>Die Tabellen konnten nicht geladen werden. Bitte versuche es später erneut.</p>
+            </div>
+        `;
+    }
+}
+
+// Helper function to generate groups from matches
+function generateGroupsFromMatches(matches) {
+    if (!matches || matches.length === 0) return [];
+    
+    // Group matches by their group property
+    const groupsMap = new Map();
+    
+    matches.forEach(match => {
+        if (match.group) {
+            if (!groupsMap.has(match.group)) {
+                groupsMap.set(match.group, {
+                    name: match.group,
+                    teams: new Set(),
+                    matches: []
+                });
+            }
+            
+            const group = groupsMap.get(match.group);
+            group.teams.add(match.team1);
+            group.teams.add(match.team2);
+            group.matches.push(match);
+        }
+    });
+    
+    // Convert to groups with table data
+    return Array.from(groupsMap.values()).map(group => {
+        const teams = Array.from(group.teams);
+        const table = generateTableForGroup(teams, group.matches);
+        
+        return {
+            name: group.name,
+            teams: teams,
+            table: table
+        };
+    });
+}
+
+// Helper function to generate table for a group
+function generateTableForGroup(teams, matches) {
+    const table = teams.map(team => ({
+        team: team,
+        games: 0,      // Changed from 'played' to 'games'
+        wins: 0,       // Changed from 'won' to 'wins'
+        draws: 0,      // Changed from 'drawn' to 'draws'
+        losses: 0,     // Changed from 'lost' to 'losses'
+        goalsFor: 0,
+        goalsAgainst: 0,
+        goalDiff: 0,   // Changed from 'goalDifference' to 'goalDiff'
+        points: 0
+    }));
+    
+    // Calculate stats from completed matches
+    matches.forEach(match => {
+        if (match.completed && match.score1 !== undefined && match.score2 !== undefined) {
+            const team1Stats = table.find(t => t.team === match.team1);
+            const team2Stats = table.find(t => t.team === match.team2);
+            
+            if (team1Stats && team2Stats) {
+                team1Stats.games++;
+                team2Stats.games++;
+                team1Stats.goalsFor += match.score1;
+                team1Stats.goalsAgainst += match.score2;
+                team2Stats.goalsFor += match.score2;
+                team2Stats.goalsAgainst += match.score1;
+                
+                if (match.score1 > match.score2) {
+                    team1Stats.wins++;
+                    team1Stats.points += 3;
+                    team2Stats.losses++;
+                } else if (match.score1 < match.score2) {
+                    team2Stats.wins++;
+                    team2Stats.points += 3;
+                    team1Stats.losses++;
+                } else {
+                    team1Stats.draws++;
+                    team2Stats.draws++;
+                    team1Stats.points += 1;
+                    team2Stats.points += 1;
+                }
+                
+                team1Stats.goalDiff = team1Stats.goalsFor - team1Stats.goalsAgainst;
+                team2Stats.goalDiff = team2Stats.goalsFor - team2Stats.goalsAgainst;
+            }
+        }
+    });
+    
+    // Sort by points, then goal difference, then goals for
+    table.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+        return b.goalsFor - a.goalsFor;
+    });
+    
+    return table;
+}
+
+// Function to find the next scheduled match from the schedule
+async function findNextScheduledMatch() {
+    try {
+        const response = await fetch('/api/matches');
+        const matches = await response.json();
+        
+        if (!matches || matches.length === 0) {
+            return null;
+        }
+        
+        const now = new Date();
+        
+        // Filter for matches that haven't started yet
+        const upcomingMatches = matches.filter(match => {
+            // If match has scheduled time, check if it's in the future
+            if (match.scheduled && match.scheduled.datetime) {
+                return !match.completed && 
+                       (!match.liveScore || !match.liveScore.isLive) &&
+                       new Date(match.scheduled.datetime) >= now;
+            }
+            // If no scheduled time, just check if it's not completed and not live
+            return !match.completed && (!match.liveScore || !match.liveScore.isLive);
+        });
+        
+        // Sort by datetime if available, otherwise keep original order
+        upcomingMatches.sort((a, b) => {
+            if (a.scheduled && a.scheduled.datetime && b.scheduled && b.scheduled.datetime) {
+                return new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime);
+            }
+            // If no scheduled times, keep original order
+            return 0;
+        });
+        return upcomingMatches[0] || null;
+        
+    } catch (error) {
+        console.error('Error finding next scheduled match:', error);
+        return null;
     }
 }
 
@@ -1278,6 +1518,352 @@ async function submitResult(matchId) {
         }
     } catch (error) {
         showNotification('Fehler beim Speichern des Ergebnisses', 'error');
+    }
+}
+
+// Load knockout matches function
+async function loadKnockoutMatches() {
+    try {
+        const response = await fetch('/api/matches');
+        const matches = await response.json();
+        
+        const knockoutContent = document.getElementById('knockout-content');
+        
+        if (!matches || matches.length === 0) {
+            knockoutContent.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-trophy"></i>
+                    <h3>Keine KO-Spiele verfügbar</h3>
+                    <p>Die KO-Spiele werden nach der Gruppenphase erstellt.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Filter KO matches (by phase or group name)
+        const koMatches = matches.filter(match => 
+            match.phase === 'quarterfinal' || 
+            match.phase === 'semifinal' || 
+            match.phase === 'final' ||
+            (match.group && (
+                match.group.toLowerCase().includes('halbfinale') ||
+                match.group.toLowerCase().includes('finale') ||
+                match.group.toLowerCase().includes('platz') ||
+                match.group.toLowerCase().includes('ko') ||
+                match.group.toLowerCase().includes('semifinal') ||
+                match.group.toLowerCase().includes('final') ||
+                match.group.toLowerCase().includes('viertelfinale')
+            ))
+        );
+        
+        if (koMatches.length === 0) {
+            knockoutContent.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-clock"></i>
+                    <h3>KO-Phase steht noch aus</h3>
+                    <p>Die KO-Spiele werden nach Abschluss der Gruppenphase erstellt.</p>
+                    <div style="margin-top: 1rem; padding: 1rem; background: #f0f9ff; border-radius: 0.5rem;">
+                        <strong>Ablauf:</strong><br>
+                        1. Halbfinale<br>
+                        2. Platzierungsspiele<br>
+                        3. Finale
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        
+        // Group KO matches by type (check phase first, then group name)
+        const quarterfinals = koMatches.filter(m => 
+            m.phase === 'quarterfinal' || 
+            (m.group && m.group.toLowerCase().includes('viertelfinale'))
+        );
+        const semifinals = koMatches.filter(m => 
+            m.phase === 'semifinal' || 
+            (m.group && (m.group.toLowerCase().includes('halbfinale') || m.group.toLowerCase().includes('semifinal')))
+        );
+        const thirdPlace = koMatches.filter(m => 
+            m.group && m.group.toLowerCase().includes('platz')
+        );
+        const finals = koMatches.filter(m => 
+            m.phase === 'final' || 
+            (m.group && m.group.toLowerCase().includes('finale') && !m.group.toLowerCase().includes('halbfinale'))
+        );
+        
+        let html = '';
+        
+        // Viertelfinale
+        if (quarterfinals.length > 0) {
+            html += `
+                <div class="ko-stage">
+                    <h3><i class="fas fa-medal"></i> Viertelfinale</h3>
+                    <div class="ko-matches-grid">
+            `;
+            
+            quarterfinals.forEach(match => {
+                const matchTime = match.scheduled ? new Date(match.scheduled.datetime) : null;
+                const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
+                
+                html += `
+                    <div class="ko-match-card ${statusClass}">
+                        <div class="ko-match-header">
+                            <span class="ko-match-type">${match.group}</span>
+                            ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
+                        </div>
+                        <div class="ko-match-teams">
+                            <div class="ko-team">${match.team1}</div>
+                            <div class="ko-match-score">
+                                ${match.completed ? `${match.score1}:${match.score2}` : 
+                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                            </div>
+                            <div class="ko-team">${match.team2}</div>
+                        </div>
+                        ${matchTime ? `
+                            <div class="ko-match-time">
+                                <i class="fas fa-clock"></i>
+                                ${matchTime.toLocaleString('de-DE', {
+                                    weekday: 'short',
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                })}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Halbfinale
+        if (semifinals.length > 0) {
+            html += `
+                <div class="ko-stage">
+                    <h3><i class="fas fa-medal"></i> Halbfinale</h3>
+                    <div class="ko-matches-grid">
+            `;
+            
+            semifinals.forEach(match => {
+                const matchTime = new Date(match.datetime);
+                const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
+                
+                html += `
+                    <div class="ko-match-card ${statusClass}">
+                        <div class="ko-match-header">
+                            <span class="ko-match-type">${match.group}</span>
+                            ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
+                        </div>
+                        <div class="ko-match-teams">
+                            <div class="ko-team">${match.team1}</div>
+                            <div class="ko-match-score">
+                                ${match.completed ? `${match.score1}:${match.score2}` : 
+                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                            </div>
+                            <div class="ko-team">${match.team2}</div>
+                        </div>
+                        <div class="ko-match-time">
+                            <i class="fas fa-clock"></i>
+                            ${matchTime.toLocaleString('de-DE', {
+                                weekday: 'short',
+                                day: '2-digit',
+                                month: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            })}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Platzierungsspiele
+        if (thirdPlace.length > 0) {
+            html += `
+                <div class="ko-stage">
+                    <h3><i class="fas fa-award"></i> Platzierungsspiele</h3>
+                    <div class="ko-matches-grid">
+            `;
+            
+            thirdPlace.forEach(match => {
+                const matchTime = new Date(match.datetime);
+                const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
+                
+                html += `
+                    <div class="ko-match-card ${statusClass}">
+                        <div class="ko-match-header">
+                            <span class="ko-match-type">${match.group}</span>
+                            ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
+                        </div>
+                        <div class="ko-match-teams">
+                            <div class="ko-team">${match.team1}</div>
+                            <div class="ko-match-score">
+                                ${match.completed ? `${match.score1}:${match.score2}` : 
+                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                            </div>
+                            <div class="ko-team">${match.team2}</div>
+                        </div>
+                        <div class="ko-match-time">
+                            <i class="fas fa-clock"></i>
+                            ${matchTime.toLocaleString('de-DE', {
+                                weekday: 'short',
+                                day: '2-digit',
+                                month: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            })}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Finale
+        if (finals.length > 0) {
+            html += `
+                <div class="ko-stage finale-stage">
+                    <h3><i class="fas fa-trophy"></i> Finale</h3>
+                    <div class="ko-matches-grid finale-grid">
+            `;
+            
+            finals.forEach(match => {
+                const matchTime = new Date(match.datetime);
+                const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
+                
+                html += `
+                    <div class="ko-match-card finale-match ${statusClass}">
+                        <div class="ko-match-header">
+                            <span class="ko-match-type finale-type">${match.group}</span>
+                            ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
+                        </div>
+                        <div class="ko-match-teams finale-teams">
+                            <div class="ko-team finale-team">${match.team1}</div>
+                            <div class="ko-match-score finale-score">
+                                ${match.completed ? `${match.score1}:${match.score2}` : 
+                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                            </div>
+                            <div class="ko-team finale-team">${match.team2}</div>
+                        </div>
+                        <div class="ko-match-time">
+                            <i class="fas fa-clock"></i>
+                            ${matchTime.toLocaleString('de-DE', {
+                                weekday: 'short',
+                                day: '2-digit',
+                                month: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            })}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        knockoutContent.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Fehler beim Laden der KO-Spiele:', error);
+        const knockoutContent = document.getElementById('knockout-content');
+        knockoutContent.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Fehler beim Laden der KO-Spiele</h3>
+                <p>Die KO-Spiele konnten nicht geladen werden. Bitte versuche es später erneut.</p>
+            </div>
+        `;
+    }
+}
+
+// Load contact function
+async function loadContact() {
+    try {
+        const response = await fetch('/api/contact');
+        const contactContent = document.getElementById('contact-content');
+        
+        if (!response.ok) {
+            // If contact API doesn't exist yet, show default contact
+            contactContent.innerHTML = `
+                <div class="contact-info">
+                    <div class="contact-section">
+                        <h3><i class="fas fa-map-marker-alt"></i> Adresse</h3>
+                        <p>
+                            CVJM Fellbach<br>
+                            Stuttgarter Straße 75<br>
+                            70734 Fellbach
+                        </p>
+                    </div>
+                    
+                    <div class="contact-section">
+                        <h3><i class="fas fa-cloud"></i> Nextcloud Gruppe</h3>
+                        <p>
+                            <a href="https://nextcloud.example.com/group/fussballturnier" target="_blank">Nextcloud Gruppe beitreten</a><br>
+                            <small>Hier findest du alle aktuellen Informationen und kannst dich mit anderen Teilnehmern austauschen.</small>
+                        </p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        
+        const data = await response.json();
+        
+        let html = '<div class="contact-info">';
+        
+        if (data.address) {
+            html += `
+                <div class="contact-section">
+                    <h3><i class="fas fa-map-marker-alt"></i> Adresse</h3>
+                    <p>${data.address.replace(/\n/g, '<br>')}</p>
+                </div>
+            `;
+        }
+        
+        if (data.nextcloudGroup) {
+            html += `
+                <div class="contact-section">
+                    <h3><i class="fas fa-cloud"></i> Nextcloud Gruppe</h3>
+                    <p><a href="${data.nextcloudGroup}" target="_blank">Nextcloud Gruppe beitreten</a><br>
+                    <small>Hier findest du alle aktuellen Informationen und kannst dich mit anderen Teilnehmern austauschen.</small></p>
+                </div>
+            `;
+        }
+        
+        if (data.additional) {
+            html += `
+                <div class="contact-section">
+                    <h3><i class="fas fa-info-circle"></i> Weitere Informationen</h3>
+                    <p>${data.additional.replace(/\n/g, '<br>')}</p>
+                </div>
+            `;
+        }
+        
+        html += '</div>';
+        
+        contactContent.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Fehler beim Laden der Kontaktdaten:', error);
+        // Fallback to default contact on error
+        loadContact();
     }
 }
 

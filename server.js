@@ -47,6 +47,13 @@ let teams = [];
 let matches = [];
 let currentTournament = null;
 let tournamentRules = "";
+let contactData = {
+    address: "CVJM Fellbach\nStuttgarter Straße 75\n70734 Fellbach",
+    email: "info@cvjm-fellbach.de",
+    phone: "+49 711 589 399 33",
+    website: "https://www.cvjm-fellbach.de",
+    additional: "Bei Fragen zum Turnier wende dich bitte an die oben genannten Kontakte."
+};
 
 // Verfügbare Trikotfarben
 const AVAILABLE_COLORS = [
@@ -75,6 +82,7 @@ function loadDataForYear(year) {
             matches = data.matches || [];
             currentTournament = data.currentTournament || null;
             tournamentRules = data.tournamentRules || "";
+            contactData = data.contactData || contactData;
             console.log(`Daten für ${year} geladen: ${teams.length} Teams, ${matches.length} Spiele`);
             return true;
         }
@@ -101,6 +109,7 @@ function saveData() {
             matches,
             currentTournament,
             tournamentRules,
+            contactData,
             lastUpdated: new Date().toISOString()
         };
         fs.writeFileSync(filename, JSON.stringify(data, null, 2));
@@ -916,6 +925,268 @@ function generateImprovedGroupMatches(groups, maxGamesPerTeam = null) {
     });
     
     return matches;
+}
+
+// Prüft ob alle Gruppenspiele abgeschlossen sind
+function checkGroupPhaseCompletion() {
+    console.log('=== Gruppenphase-Check ===');
+    console.log('Turnier vorhanden?', !!currentTournament);
+    console.log('Turnier-Status:', currentTournament?.status);
+    
+    if (!currentTournament || currentTournament.status !== 'active') {
+        console.log('Turnier nicht aktiv oder nicht vorhanden');
+        return false;
+    }
+    
+    // Für Champions League Format (Swiss System) - alle Teams in einer Liga
+    if (currentTournament.settings?.format === 'swiss') {
+        console.log('Swiss/Champions League Format erkannt');
+        const swissMatches = matches.filter(m => 
+            m.phase === 'group' && 
+            !m.completed && 
+            !m.isPenaltyShootout
+        );
+        console.log('Unabgeschlossene Swiss-Spiele:', swissMatches.length);
+        return swissMatches.length === 0; // Alle Liga-Spiele abgeschlossen
+    }
+    
+    // Für klassisches Gruppensystem ODER wenn Format undefined ist
+    console.log('Klassisches Gruppensystem (oder Format undefined)');
+    console.log('Anzahl Gruppen:', currentTournament.groups?.length || 0);
+    
+    // Fallback: Wenn keine Gruppen aber Matches existieren, prüfe alle Gruppenspiele
+    if (!currentTournament.groups || currentTournament.groups.length === 0) {
+        console.log('Keine Gruppen vorhanden - verwende Fallback-Methode');
+        
+        // Erst versuchen mit phase: 'group'
+        let allGroupMatches = matches.filter(m => 
+            m.phase === 'group' && 
+            !m.completed && 
+            !m.isPenaltyShootout
+        );
+        
+        // Fallback: Wenn keine Matches mit phase: 'group', dann alle non-KO Matches
+        if (allGroupMatches.length === 0) {
+            console.log('Keine Matches mit phase: "group" gefunden, verwende alle non-KO Matches');
+            allGroupMatches = matches.filter(m => 
+                !m.completed && 
+                !m.isPenaltyShootout &&
+                !(m.phase === 'quarterfinal' || m.phase === 'semifinal' || m.phase === 'final') &&
+                !(m.group?.toLowerCase().includes('finale')) &&
+                !(m.group?.toLowerCase().includes('halbfinale')) &&
+                !(m.group?.toLowerCase().includes('viertelfinale')) &&
+                !(m.group?.toLowerCase().includes('platz'))
+            );
+        }
+        
+        console.log('Unabgeschlossene Gruppenspiele (Fallback):', allGroupMatches.length);
+        return allGroupMatches.length === 0;
+    }
+    
+    // Prüfe jede Gruppe einzeln
+    for (const group of currentTournament.groups) {
+        const groupMatches = matches.filter(m => 
+            m.group === group.name && 
+            m.phase === 'group' && 
+            !m.completed && 
+            !m.isPenaltyShootout
+        );
+        
+        console.log(`Gruppe ${group.name}: ${groupMatches.length} unabgeschlossene Spiele`);
+        
+        if (groupMatches.length > 0) {
+            return false; // Noch unabgeschlossene Spiele in dieser Gruppe
+        }
+    }
+    
+    console.log('Alle Gruppenspiele abgeschlossen!');
+    return true; // Alle Gruppenspiele abgeschlossen
+}
+
+// Generiert automatisch K.O.-Spiele wenn Gruppenphase beendet ist
+function generateFinalTableAndKnockoutMatches(customConfig = null) {
+    console.log('=== K.O.-Generierung Start ===');
+    
+    const groupPhaseComplete = checkGroupPhaseCompletion();
+    console.log('Gruppenphase abgeschlossen?', groupPhaseComplete);
+    
+    if (!groupPhaseComplete) {
+        console.log('Gruppenphase noch nicht abgeschlossen');
+        return false;
+    }
+    
+    // Prüfe ob bereits K.O.-Spiele existieren
+    const existingKoMatches = matches.filter(m => 
+        m.phase === 'quarterfinal' || 
+        m.phase === 'semifinal' || 
+        m.phase === 'final' ||
+        m.group?.toLowerCase().includes('finale') ||
+        m.group?.toLowerCase().includes('platz')
+    );
+    
+    if (existingKoMatches.length > 0) {
+        console.log('K.O.-Spiele bereits generiert');
+        return false;
+    }
+    
+    let finalTable = [];
+    
+    // Erstelle finale Tabelle abhängig vom Format
+    if (currentTournament.settings?.format === 'swiss' || 
+        (!currentTournament.groups || currentTournament.groups.length === 0)) {
+        // Champions League: Alle Teams in einer Liga ODER Fallback für undefined format
+        console.log('Verwende Swiss-System oder Fallback-Modus für finale Tabelle');
+        const allTeams = new Set();
+        
+        // Erst versuchen mit phase: 'group'
+        let groupMatches = matches.filter(m => m.phase === 'group');
+        
+        // Fallback: Wenn keine Matches mit phase: 'group', dann alle non-KO Matches
+        if (groupMatches.length === 0) {
+            console.log('Keine Matches mit phase: "group", verwende alle non-KO Matches für Tabelle');
+            groupMatches = matches.filter(m => 
+                !(m.phase === 'quarterfinal' || m.phase === 'semifinal' || m.phase === 'final') &&
+                !(m.group?.toLowerCase().includes('finale')) &&
+                !(m.group?.toLowerCase().includes('halbfinale')) &&
+                !(m.group?.toLowerCase().includes('viertelfinale')) &&
+                !(m.group?.toLowerCase().includes('platz'))
+            );
+        }
+        
+        groupMatches.forEach(m => {
+            allTeams.add(m.team1);
+            allTeams.add(m.team2);
+        });
+        
+        console.log('Gefundene Teams:', Array.from(allTeams));
+        console.log('Verwendete Matches für Tabelle:', groupMatches.length);
+        
+        finalTable = Array.from(allTeams).map(teamName => {
+            const teamStats = {
+                team: teamName,
+                games: 0,
+                wins: 0,
+                draws: 0,
+                losses: 0,
+                goalsFor: 0,
+                goalsAgainst: 0,
+                goalDiff: 0,
+                points: 0,
+                penaltyWins: 0
+            };
+            
+            // Berechne Statistiken aus allen Spielen
+            groupMatches.filter(m => 
+                m.completed && 
+                !m.isPenaltyShootout &&
+                (m.team1 === teamName || m.team2 === teamName)
+            ).forEach(match => {
+                const isTeam1 = match.team1 === teamName;
+                const ownScore = isTeam1 ? match.score1 : match.score2;
+                const oppScore = isTeam1 ? match.score2 : match.score1;
+                
+                teamStats.games++;
+                teamStats.goalsFor += ownScore;
+                teamStats.goalsAgainst += oppScore;
+                teamStats.goalDiff = teamStats.goalsFor - teamStats.goalsAgainst;
+                
+                if (ownScore > oppScore) {
+                    teamStats.wins++;
+                    teamStats.points += 3;
+                } else if (ownScore === oppScore) {
+                    teamStats.draws++;
+                    teamStats.points += 1;
+                } else {
+                    teamStats.losses++;
+                }
+            });
+            
+            // Penalty-Siege zählen
+            groupMatches.filter(m => 
+                m.isPenaltyShootout && 
+                m.completed &&
+                (m.team1 === teamName || m.team2 === teamName)
+            ).forEach(penalty => {
+                const isTeam1 = penalty.team1 === teamName;
+                const ownScore = isTeam1 ? penalty.score1 : penalty.score2;
+                const oppScore = isTeam1 ? penalty.score2 : penalty.score1;
+                
+                if (ownScore > oppScore) {
+                    teamStats.penaltyWins++;
+                }
+            });
+            
+            return teamStats;
+        });
+    } else {
+        // Klassisches Gruppensystem: Gruppensieger und -zweite
+        for (const group of currentTournament.groups) {
+            if (group.table && group.table.length >= 2) {
+                // Sortiere Tabelle (sollte bereits sortiert sein)
+                const sortedTable = [...group.table].sort((a, b) => {
+                    if (b.points !== a.points) return b.points - a.points;
+                    if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+                    if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+                    return b.penaltyWins - a.penaltyWins;
+                });
+                
+                // Gruppensieger und -zweiter zur finalen Tabelle hinzufügen
+                finalTable.push({
+                    ...sortedTable[0],
+                    groupPosition: 1,
+                    groupName: group.name
+                });
+                
+                if (sortedTable.length >= 2) {
+                    finalTable.push({
+                        ...sortedTable[1],
+                        groupPosition: 2,
+                        groupName: group.name
+                    });
+                }
+            }
+        }
+        
+        // Sortiere finale Tabelle: Gruppensieger zuerst, dann Gruppenzweite
+        finalTable.sort((a, b) => {
+            if (a.groupPosition !== b.groupPosition) {
+                return a.groupPosition - b.groupPosition;
+            }
+            if (b.points !== a.points) return b.points - a.points;
+            if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+            if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+            return b.penaltyWins - a.penaltyWins;
+        });
+    }
+    
+    // Generiere K.O.-Spiele mit benutzerdefinierter oder Standard-Konfiguration
+    const knockoutConfig = customConfig || {
+        enableQuarterfinals: finalTable.length >= 8,
+        enableThirdPlace: true,
+        enableFifthPlace: finalTable.length >= 6,
+        enableSeventhPlace: finalTable.length >= 8
+    };
+    
+    console.log('Verwende K.O.-Konfiguration:', knockoutConfig);
+    
+    const koMatches = generateKnockoutMatches(finalTable, knockoutConfig);
+    
+    if (koMatches.length > 0) {
+        matches.push(...koMatches);
+        
+        // Speichere finale Tabelle im Turnier
+        if (!currentTournament.finalTable) {
+            currentTournament.finalTable = finalTable;
+        }
+        
+        console.log(`K.O.-Phase generiert: ${koMatches.length} Spiele erstellt`);
+        console.log('Finale Tabelle:', finalTable.map(t => `${t.team} (${t.points} Pkt.)`));
+        
+        autoSave();
+        return true;
+    }
+    
+    return false;
 }
 
 // K.O.-System Generierung
@@ -1813,6 +2084,12 @@ app.put('/api/admin/results/:matchId', (req, res) => {
     
     if (match.phase === 'group') {
         updateGroupTable(match.group, matches);
+        
+        // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
+        const koGenerated = generateFinalTableAndKnockoutMatches();
+        if (koGenerated) {
+            console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
+        }
     }
     
     autoSave();
@@ -1880,6 +2157,246 @@ app.put('/api/admin/tournament/status', (req, res) => {
     
     autoSave();
     res.json({ success: true, tournament: currentTournament });
+});
+
+// Admin: Finale Tabelle für K.O.-Konfiguration abrufen
+app.post('/api/admin/get-final-table', (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier' });
+    }
+    
+    try {
+        let finalTable = [];
+        
+        // Erstelle finale Tabelle abhängig vom Format (gleiche Logik wie in generateFinalTableAndKnockoutMatches)
+        if (currentTournament.settings?.format === 'swiss' || 
+            (!currentTournament.groups || currentTournament.groups.length === 0)) {
+            
+            const allTeams = new Set();
+            
+            // Erst versuchen mit phase: 'group'
+            let groupMatches = matches.filter(m => m.phase === 'group');
+            
+            // Fallback: Wenn keine Matches mit phase: 'group', dann alle non-KO Matches
+            if (groupMatches.length === 0) {
+                groupMatches = matches.filter(m => 
+                    !(m.phase === 'quarterfinal' || m.phase === 'semifinal' || m.phase === 'final') &&
+                    !(m.group?.toLowerCase().includes('finale')) &&
+                    !(m.group?.toLowerCase().includes('halbfinale')) &&
+                    !(m.group?.toLowerCase().includes('viertelfinale')) &&
+                    !(m.group?.toLowerCase().includes('platz'))
+                );
+            }
+            
+            groupMatches.forEach(m => {
+                allTeams.add(m.team1);
+                allTeams.add(m.team2);
+            });
+            
+            finalTable = Array.from(allTeams).map(teamName => {
+                const teamStats = {
+                    team: teamName,
+                    games: 0,
+                    wins: 0,
+                    draws: 0,
+                    losses: 0,
+                    goalsFor: 0,
+                    goalsAgainst: 0,
+                    goalDiff: 0,
+                    points: 0,
+                    penaltyWins: 0
+                };
+                
+                // Berechne Statistiken aus allen Spielen
+                groupMatches.filter(m => 
+                    m.completed && 
+                    !m.isPenaltyShootout &&
+                    (m.team1 === teamName || m.team2 === teamName)
+                ).forEach(match => {
+                    const isTeam1 = match.team1 === teamName;
+                    const ownScore = isTeam1 ? match.score1 : match.score2;
+                    const oppScore = isTeam1 ? match.score2 : match.score1;
+                    
+                    teamStats.games++;
+                    teamStats.goalsFor += ownScore;
+                    teamStats.goalsAgainst += oppScore;
+                    teamStats.goalDiff = teamStats.goalsFor - teamStats.goalsAgainst;
+                    
+                    if (ownScore > oppScore) {
+                        teamStats.wins++;
+                        teamStats.points += 3;
+                    } else if (ownScore === oppScore) {
+                        teamStats.draws++;
+                        teamStats.points += 1;
+                    } else {
+                        teamStats.losses++;
+                    }
+                });
+                
+                // Penalty-Siege zählen
+                groupMatches.filter(m => 
+                    m.isPenaltyShootout && 
+                    m.completed &&
+                    (m.team1 === teamName || m.team2 === teamName)
+                ).forEach(penalty => {
+                    const isTeam1 = penalty.team1 === teamName;
+                    const ownScore = isTeam1 ? penalty.score1 : penalty.score2;
+                    const oppScore = isTeam1 ? penalty.score2 : penalty.score1;
+                    
+                    if (ownScore > oppScore) {
+                        teamStats.penaltyWins++;
+                    }
+                });
+                
+                return teamStats;
+            });
+            
+            // Sortiere finale Tabelle
+            finalTable.sort((a, b) => {
+                if (b.points !== a.points) return b.points - a.points;
+                if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+                if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+                return b.penaltyWins - a.penaltyWins;
+            });
+            
+        } else {
+            // Klassisches Gruppensystem: Gruppensieger und -zweite
+            for (const group of currentTournament.groups) {
+                if (group.table && group.table.length >= 2) {
+                    const sortedTable = [...group.table].sort((a, b) => {
+                        if (b.points !== a.points) return b.points - a.points;
+                        if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+                        if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+                        return b.penaltyWins - a.penaltyWins;
+                    });
+                    
+                    // Gruppensieger und -zweiter zur finalen Tabelle hinzufügen
+                    finalTable.push({
+                        ...sortedTable[0],
+                        groupPosition: 1,
+                        groupName: group.name
+                    });
+                    
+                    if (sortedTable.length >= 2) {
+                        finalTable.push({
+                            ...sortedTable[1],
+                            groupPosition: 2,
+                            groupName: group.name
+                        });
+                    }
+                }
+            }
+            
+            // Sortiere finale Tabelle: Gruppensieger zuerst, dann Gruppenzweite
+            finalTable.sort((a, b) => {
+                if (a.groupPosition !== b.groupPosition) {
+                    return a.groupPosition - b.groupPosition;
+                }
+                if (b.points !== a.points) return b.points - a.points;
+                if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
+                if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+                return b.penaltyWins - a.penaltyWins;
+            });
+        }
+        
+        res.json({
+            success: true,
+            finalTable: finalTable
+        });
+        
+    } catch (error) {
+        console.error('Fehler beim Erstellen der finalen Tabelle:', error);
+        res.status(500).json({ 
+            error: 'Fehler beim Erstellen der finalen Tabelle',
+            details: error.message
+        });
+    }
+});
+
+// Admin: K.O.-Spiele manuell generieren
+app.post('/api/admin/generate-knockout', (req, res) => {
+    const { password, config } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier' });
+    }
+    
+    // Prüfe ob bereits K.O.-Spiele existieren
+    const existingKoMatches = matches.filter(m => 
+        m.phase === 'quarterfinal' || 
+        m.phase === 'semifinal' || 
+        m.phase === 'final' ||
+        m.group?.toLowerCase().includes('finale') ||
+        m.group?.toLowerCase().includes('platz')
+    );
+    
+    if (existingKoMatches.length > 0) {
+        return res.status(400).json({ 
+            error: 'K.O.-Spiele wurden bereits generiert',
+            existingMatches: existingKoMatches.length
+        });
+    }
+    
+    console.log('Versuche K.O.-Spiele zu generieren...');
+    console.log('Turnier-Status:', currentTournament?.status);
+    console.log('Turnier-Format:', currentTournament?.settings?.format);
+    console.log('Anzahl Matches:', matches.length);
+    
+    // Debug: Zeige alle vorhandenen Matches
+    console.log('Alle Matches:');
+    matches.forEach((match, index) => {
+        console.log(`  ${index + 1}. ${match.team1} vs ${match.team2} - Phase: ${match.phase || 'undefined'} - Gruppe: ${match.group || 'undefined'} - Abgeschlossen: ${match.completed}`);
+    });
+    
+    const koGenerated = generateFinalTableAndKnockoutMatches(config);
+    
+    if (koGenerated) {
+        const newKoMatches = matches.filter(m => 
+            m.phase === 'quarterfinal' || 
+            m.phase === 'semifinal' || 
+            m.phase === 'final' ||
+            m.group?.toLowerCase().includes('finale') ||
+            m.group?.toLowerCase().includes('platz')
+        );
+        
+        res.json({ 
+            success: true, 
+            message: 'K.O.-Spiele erfolgreich generiert',
+            matchesGenerated: newKoMatches.length,
+            finalTable: currentTournament.finalTable
+        });
+    } else {
+        // Debugging-Informationen hinzufügen
+        const groupMatches = matches.filter(m => m.phase === 'group');
+        const incompleteGroupMatches = groupMatches.filter(m => !m.completed && !m.isPenaltyShootout);
+        
+        console.log('K.O.-Generierung fehlgeschlagen:');
+        console.log('- Anzahl Gruppenspiele:', groupMatches.length);
+        console.log('- Unabgeschlossene Gruppenspiele:', incompleteGroupMatches.length);
+        console.log('- Gruppen:', currentTournament?.groups?.length || 0);
+        
+        res.status(400).json({ 
+            error: 'K.O.-Spiele konnten nicht generiert werden',
+            reason: 'Gruppenphase noch nicht abgeschlossen oder unzureichende Daten',
+            debug: {
+                tournamentStatus: currentTournament?.status,
+                groupMatches: groupMatches.length,
+                incompleteMatches: incompleteGroupMatches.length,
+                groups: currentTournament?.groups?.length || 0,
+                format: currentTournament?.settings?.format
+            }
+        });
+    }
 });
 
 // Admin: Turnier komplett zurücksetzen
@@ -2029,6 +2546,102 @@ app.post('/api/admin/matches/reset-schedule', (req, res) => {
     });
 });
 
+// Admin: Alle Spiele automatisch planen
+app.post('/api/admin/matches/schedule-all', (req, res) => {
+    const { password, startTime, matchDuration, field } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament) {
+        return res.status(404).json({ error: 'Kein aktives Turnier' });
+    }
+    
+    // Validierung der Parameter
+    if (!startTime || !matchDuration || !field) {
+        return res.status(400).json({ 
+            error: 'Startzeit, Spieldauer und Platz sind erforderlich' 
+        });
+    }
+    
+    try {
+        // Finde alle ungeplanten Spiele (ohne K.O.-Spiele)
+        const unscheduledMatches = matches.filter(match => 
+            !match.scheduled && 
+            !match.completed &&
+            !(match.phase === 'quarterfinal' || match.phase === 'semifinal' || match.phase === 'final') &&
+            !(match.group?.toLowerCase().includes('finale')) &&
+            !(match.group?.toLowerCase().includes('halbfinale')) &&
+            !(match.group?.toLowerCase().includes('viertelfinale')) &&
+            !(match.group?.toLowerCase().includes('platz'))
+        );
+        
+        if (unscheduledMatches.length === 0) {
+            return res.json({
+                success: true,
+                message: 'Alle Spiele sind bereits geplant',
+                scheduledCount: 0
+            });
+        }
+        
+        // Parse Startzeit
+        const [startHour, startMinute] = startTime.split(':').map(Number);
+        if (isNaN(startHour) || isNaN(startMinute)) {
+            return res.status(400).json({ error: 'Ungültige Startzeit (Format: HH:MM)' });
+        }
+        
+        // Parse Spieldauer
+        const duration = parseInt(matchDuration);
+        if (isNaN(duration) || duration <= 0) {
+            return res.status(400).json({ error: 'Ungültige Spieldauer' });
+        }
+        
+        // Erstelle Zeitplan für heute
+        const today = new Date();
+        let currentDateTime = new Date(today);
+        currentDateTime.setHours(startHour, startMinute, 0, 0);
+        
+        console.log(`Plane ${unscheduledMatches.length} Spiele ab ${currentDateTime.toLocaleString()}`);
+        
+        // Plane jedes Spiel
+        unscheduledMatches.forEach((match, index) => {
+            match.scheduled = {
+                datetime: new Date(currentDateTime).toISOString(),
+                field: field
+            };
+            
+            console.log(`Spiel ${index + 1}: ${match.team1} vs ${match.team2} um ${currentDateTime.toLocaleTimeString()}`);
+            
+            // Nächste Zeit berechnen (Spieldauer + 5 Min Pause)
+            currentDateTime.setMinutes(currentDateTime.getMinutes() + duration + 5);
+        });
+        
+        // Turnier-Timestamp aktualisieren
+        if (currentTournament) {
+            currentTournament.lastUpdated = new Date().toISOString();
+        }
+        
+        autoSave();
+        
+        res.json({
+            success: true,
+            message: `${unscheduledMatches.length} Spiele erfolgreich geplant`,
+            scheduledCount: unscheduledMatches.length,
+            startTime: startTime,
+            field: field,
+            duration: duration
+        });
+        
+    } catch (error) {
+        console.error('Fehler beim Planen der Spiele:', error);
+        res.status(500).json({ 
+            error: 'Fehler beim Planen der Spiele',
+            details: error.message
+        });
+    }
+});
+
 // Admin: Daten exportieren
 app.get('/api/admin/export/:year?', (req, res) => {
     const year = req.params.year || (currentTournament ? currentTournament.year : new Date().getFullYear());
@@ -2052,6 +2665,11 @@ app.get('/api/rules', (req, res) => {
     res.json({ rules: tournamentRules });
 });
 
+// Kontaktdaten abrufen
+app.get('/api/contact', (req, res) => {
+    res.json(contactData);
+});
+
 // Admin: Regeln speichern
 app.post('/api/admin/rules', (req, res) => {
     const { password, rules } = req.body;
@@ -2063,6 +2681,24 @@ app.post('/api/admin/rules', (req, res) => {
     tournamentRules = rules || "";
     autoSave();
     res.json({ success: true, rules: tournamentRules });
+});
+
+// Admin: Kontaktdaten bearbeiten
+app.post('/api/admin/contact', (req, res) => {
+    const { password, address, nextcloudGroup, additional } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    contactData = {
+        address: address || "",
+        nextcloudGroup: nextcloudGroup || "",
+        additional: additional || ""
+    };
+    
+    autoSave();
+    res.json({ success: true, contact: contactData });
 });
 
 // Admin: Turnier erstellen
@@ -2385,6 +3021,7 @@ app.post('/api/admin/halftime-break', (req, res) => {
         match.liveScore.isPaused = false;
         
         autoSave();
+        broadcastUpdate('halftime-started', { matchId, match });
         res.json({ success: true, message: 'Halbzeitpause gestartet' });
     } else {
         res.status(400).json({ error: 'Halbzeit nur nach der ersten Halbzeit möglich' });
@@ -2411,6 +3048,7 @@ app.post('/api/admin/start-second-half', (req, res) => {
         match.liveScore.isPaused = false;
         
         autoSave();
+        broadcastUpdate('second-half-started', { matchId, match });
         res.json({ success: true, message: 'Zweite Halbzeit gestartet' });
     } else {
         res.status(400).json({ error: 'Zweite Halbzeit kann nur nach Halbzeitpause gestartet werden' });
@@ -2438,6 +3076,12 @@ app.post('/api/admin/finish-match', (req, res) => {
     
     if (match.phase === 'group') {
         updateGroupTable(match.group, matches);
+        
+        // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
+        const koGenerated = generateFinalTableAndKnockoutMatches();
+        if (koGenerated) {
+            console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
+        }
     }
     
     if (currentTournament && currentTournament.currentMatch === matchId) {
@@ -2481,6 +3125,12 @@ app.post('/api/admin/result', (req, res) => {
     
     if (match.phase === 'group') {
         updateGroupTable(match.group, matches);
+        
+        // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
+        const koGenerated = generateFinalTableAndKnockoutMatches();
+        if (koGenerated) {
+            console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
+        }
     }
     
     autoSave();
