@@ -54,11 +54,6 @@
                     <i class="fas fa-sign-out-alt"></i>
                     <span class="btn-text">Abmelden</span>
                 </button>
-                <div class="version-info">
-                    <strong>Version 2.1</strong><br>
-                    <small>Erweiterte Schiedsrichter-Verwaltung</small><br>
-                    <small>Verbesserte Auto-Refresh Funktionen</small>
-                </div>
             </div>
         </nav>
 
@@ -105,16 +100,6 @@
                             <i class="fas fa-sign-in-alt"></i> Anmelden
                         </button>
                     </form>
-                    <div class="feature-info">
-                        <h4 style="color: #3b82f6; margin-bottom: 0.5rem;">✨ Neu in Version 2.1:</h4>
-                        <ul style="margin: 0; color: #1e40af; list-style-position: inside;">
-                            <li>Automatische Schiedsrichter-Anzeige</li>
-                            <li>Verbesserte Live-Match Übergänge</li>
-                            <li>Erweiterte Ergebnis-Korrektur</li>
-                            <li>Intelligente Spielplan-Verwaltung</li>
-                            <li>Optimierte Auto-Refresh Funktionen</li>
-                        </ul>
-                    </div>
                 </div>
             </div>
 
@@ -199,19 +184,19 @@
                         </div>
                         
                         <div class="dashboard-card">
-                            <h3><i class="fas fa-lightbulb"></i> Neue Features</h3>
+                            <h3><i class="fas fa-info-circle"></i> Turnier-Info</h3>
                             <div class="features-list">
                                 <div class="feature-item">
-                                    <strong style="color: #dc2626;">🎯 Smart Referee System</strong><br>
-                                    <small>Automatische Anzeige des nächsten Schiedsrichters</small>
+                                    <strong style="color: #dc2626;">⚽ Live-Timer</strong><br>
+                                    <small>Präzise Zeitmessung und Live-Übertragung</small>
                                 </div>
                                 <div class="feature-item">
-                                    <strong style="color: #16a34a;">⚡ Auto-Transitions</strong><br>
-                                    <small>Nahtlose Übergänge zwischen Spielen</small>
+                                    <strong style="color: #16a34a;">📊 Auto-Tabellen</strong><br>
+                                    <small>Automatische Tabellenberechnung</small>
                                 </div>
                                 <div class="feature-item">
-                                    <strong style="color: #3b82f6;">🛠️ Enhanced Controls</strong><br>
-                                    <small>Erweiterte Spielplan- und Ergebnis-Verwaltung</small>
+                                    <strong style="color: #3b82f6;">🏆 Flexible Formate</strong><br>
+                                    <small>Gruppen- und Champions League System</small>
                                 </div>
                             </div>
                         </div>
@@ -230,8 +215,9 @@
                         <div id="tournament-creation" style="display: none;">
                             <h4>Neues Turnier erstellen</h4>
                             <div class="info-banner">
-                                <h5 style="color: #f59e0b; margin-bottom: 0.5rem;">🆕 Erweiterte Features verfügbar!</h5>
-                                <p style="margin: 0; color: #92400e;">Nach der Erstellung kannst du zwischen verschiedenen Formaten wählen: Gruppensystem, Champions League Format oder Liga-Modus.</p>
+                                <i class="fas fa-info-circle" style="color: #3b82f6;"></i>
+                                <strong>Turnier erstellen:</strong>
+                                <p>Nach der Erstellung kannst du zwischen verschiedenen Formaten wählen: Gruppensystem oder Champions League Format.</p>
                             </div>
                             <form id="tournament-creation-form">
                                 <div class="form-group">
@@ -286,16 +272,8 @@
                         <div class="matches-management-info">
                             <div class="info-banner">
                                 <i class="fas fa-info-circle" style="color: #3b82f6;"></i>
-                                <strong>Intelligente Spielplan-Verwaltung:</strong>
-                                <p>Nutze die erweiterten Funktionen für optimale Zeitplanung und faire Schiedsrichter-Verteilung. Das System berücksichtigt automatisch Pausen zwischen Spielen für jedes Team.</p>
-                                <div class="feature-badges">
-                                    <span class="feature-badge ai">
-                                        <i class="fas fa-brain"></i> KI-Unterstützt
-                                    </span>
-                                    <span class="feature-badge auto">
-                                        <i class="fas fa-sync"></i> Auto-Update
-                                    </span>
-                                </div>
+                                <strong>Spielplan-Verwaltung:</strong>
+                                <p>Nutze die Funktionen für optimale Zeitplanung und faire Schiedsrichter-Verteilung. Das System berücksichtigt automatisch Pausen zwischen Spielen für jedes Team.</p>
                             </div>
                         </div>
                         
@@ -315,17 +293,6 @@
                                 <i class="fas fa-broadcast-tower" style="color: #f59e0b;"></i>
                                 <strong>Echtzeit Live-Spiel Verwaltung:</strong>
                                 <p>Starte Spiele mit präzisem Timer, verwalte Live-Scores, Pausen und Halbzeiten. Das System zeigt automatisch den nächsten Schiedsrichter an und wechselt nahtlos zum nächsten Spiel.</p>
-                                <div class="feature-badges">
-                                    <span class="feature-badge timer">
-                                        <i class="fas fa-stopwatch"></i> Präzisions-Timer
-                                    </span>
-                                    <span class="feature-badge live">
-                                        <i class="fas fa-satellite-dish"></i> Live-Sync
-                                    </span>
-                                    <span class="feature-badge referee">
-                                        <i class="fas fa-whistle"></i> Smart-Referee
-                                    </span>
-                                </div>
                             </div>
                         </div>
                         
@@ -343,19 +310,8 @@
                         <div class="results-management-info">
                             <div class="info-banner">
                                 <i class="fas fa-chart-bar" style="color: #16a34a;"></i>
-                                <strong>Intelligente Ergebnis-Verwaltung:</strong>
+                                <strong>Ergebnis-Verwaltung:</strong>
                                 <p>Trage Spielergebnisse ein oder bearbeite bereits eingetragene Ergebnisse nachträglich. Die Tabellen werden automatisch berechnet und aktualisiert. Das System unterstützt alle Turnier-Formate.</p>
-                                <div class="feature-badges">
-                                    <span class="feature-badge calc">
-                                        <i class="fas fa-calculator"></i> Auto-Berechnung
-                                    </span>
-                                    <span class="feature-badge format">
-                                        <i class="fas fa-table"></i> Multi-Format
-                                    </span>
-                                    <span class="feature-badge edit">
-                                        <i class="fas fa-edit"></i> Nachträglich bearbeitbar
-                                    </span>
-                                </div>
                             </div>
                         </div>
                         
@@ -382,14 +338,6 @@
                                 <i class="fas fa-book" style="color: #dc2626;"></i>
                                 <strong>Regeln bearbeiten:</strong>
                                 <p>Diese Regeln werden auf der öffentlichen Website im Regeln-Tab angezeigt. Verwende einfache Textformatierung. Änderungen werden automatisch auf der Website aktualisiert.</p>
-                                <div class="feature-badges">
-                                    <span class="feature-badge publish">
-                                        <i class="fas fa-globe"></i> Live-Publikation
-                                    </span>
-                                    <span class="feature-badge text">
-                                        <i class="fas fa-edit"></i> Rich-Text
-                                    </span>
-                                </div>
                             </div>
                         </div>
                         
@@ -421,16 +369,8 @@
                         <div class="settings-management-info">
                             <div class="info-banner">
                                 <i class="fas fa-cog" style="color: #64748b;"></i>
-                                <strong>Erweiterte Einstellungen & Management:</strong>
-                                <p>Hier finden Sie alle wichtigen Verwaltungsoptionen, Einstellungen und Notfall-Funktionen für das Turnier. Alle Aktionen werden protokolliert und gesichert.</p>
-                                <div class="feature-badges">
-                                    <span class="feature-badge secure">
-                                        <i class="fas fa-shield-alt"></i> Sicher
-                                    </span>
-                                    <span class="feature-badge logged">
-                                        <i class="fas fa-history"></i> Protokolliert
-                                    </span>
-                                </div>
+                                <strong>Einstellungen & Management:</strong>
+                                <p>Hier finden Sie alle wichtigen Verwaltungsoptionen, Einstellungen und Funktionen für das Turnier. Alle Aktionen werden protokolliert und gesichert.</p>
                             </div>
                         </div>
                         
@@ -438,21 +378,36 @@
                             <!-- Einstellungen werden hier geladen -->
                         </div>
                         
-                        <!-- Management Actions -->
+                        <!-- Data Management Section -->
                         <div class="management-section">
-                            <h4><i class="fas fa-tools"></i> Erweiterte Verwaltung</h4>
+                            <h4><i class="fas fa-database"></i> Daten-Verwaltung</h4>
                             
                             <div class="management-grid">
                                 
-                                <!-- Data Management -->
+                                <!-- Export -->
                                 <div class="management-card data">
                                     <h5>
-                                        <i class="fas fa-database"></i> Daten-Management
+                                        <i class="fas fa-download"></i> Export
                                     </h5>
-                                    <p>Export und Backup von Turnierdaten mit vollständiger Historie</p>
+                                    <p>Export von Turnierdaten mit vollständiger Historie</p>
                                     <button class="btn btn-outline" onclick="exportTournamentData()">
                                         <i class="fas fa-download"></i> Turnierdaten exportieren
                                     </button>
+                                </div>
+                                
+                                <!-- Import -->
+                                <div class="management-card data">
+                                    <h5>
+                                        <i class="fas fa-upload"></i> Import
+                                    </h5>
+                                    <p>Import von Turnierdaten aus JSON-Datei</p>
+                                    <div class="import-section">
+                                        <input type="file" id="import-file" accept=".json" style="display: none;" onchange="handleFileImport(this)">
+                                        <button class="btn btn-outline" onclick="document.getElementById('import-file').click()">
+                                            <i class="fas fa-upload"></i> Datei auswählen
+                                        </button>
+                                        <div id="import-status" style="margin-top: 1rem; display: none;"></div>
+                                    </div>
                                 </div>
                                 
                                 <!-- Schedule Management -->
@@ -460,7 +415,7 @@
                                     <h5>
                                         <i class="fas fa-calendar-times"></i> Zeitplan-Management
                                     </h5>
-                                    <p>Intelligente Zurücksetzung aller Zeitplanungen</p>
+                                    <p>Zurücksetzung aller Zeitplanungen</p>
                                     <button class="btn btn-warning" onclick="resetAllSchedules()">
                                         <i class="fas fa-undo"></i> Zeitpläne zurücksetzen
                                     </button>
@@ -471,7 +426,7 @@
                                     <h5>
                                         <i class="fas fa-users-cog"></i> Gruppen-Management
                                     </h5>
-                                    <p>Teams mit verbessertem Algorithmus neu aufteilen</p>
+                                    <p>Teams neu aufteilen</p>
                                     <button class="btn btn-success" onclick="reorganizeGroups()">
                                         <i class="fas fa-refresh"></i> Gruppen neu organisieren
                                     </button>
@@ -482,9 +437,20 @@
                                     <h5>
                                         <i class="fas fa-edit"></i> Status-Management
                                     </h5>
-                                    <p>Turnier-Status mit Validierung ändern</p>
+                                    <p>Turnier-Status ändern</p>
                                     <button class="btn btn-purple" onclick="changeTournamentStatus()">
                                         <i class="fas fa-exchange-alt"></i> Status ändern
+                                    </button>
+                                </div>
+                                
+                                <!-- Swiss System Configuration -->
+                                <div class="management-card format" id="swiss-config-card" style="display: none;">
+                                    <h5>
+                                        <i class="fas fa-trophy"></i> Champions League Konfiguration
+                                    </h5>
+                                    <p>Rundenzahl nachträglich anpassen</p>
+                                    <button class="btn btn-primary" onclick="configureSwissSystem()">
+                                        <i class="fas fa-cog"></i> Konfiguration ändern
                                     </button>
                                 </div>
                             </div>
