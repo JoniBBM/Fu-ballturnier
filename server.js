@@ -48,7 +48,7 @@ let matches = [];
 let currentTournament = null;
 let tournamentRules = "";
 let contactData = {
-    address: "CVJM Fellbach\nStuttgarter Straße 75\n70734 Fellbach",
+    address: "CVJM Fellbach\nGerhart-Hauptmann-Straße 32\n70734 Fellbach",
     email: "info@cvjm-fellbach.de",
     phone: "+49 711 589 399 33",
     website: "https://www.cvjm-fellbach.de",
@@ -1566,7 +1566,21 @@ function assignReferees(matches, groups) {
 function intelligentScheduling(matches, groups, startTime, matchDuration, field) {
     const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
     const today = new Date();
-    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+    
+    // Berechne Berlin Offset dynamisch
+    const summerDate = new Date(today.getFullYear(), 6, 1); // Juli
+    const winterDate = new Date(today.getFullYear(), 0, 1); // Januar
+    const isSummer = Math.min(summerDate.getTimezoneOffset(), winterDate.getTimezoneOffset()) === today.getTimezoneOffset();
+    const berlinOffset = isSummer ? 2 : 1; // CEST = UTC+2, CET = UTC+1
+    
+    // Setze die Zeit als UTC, aber korrigiert für Berlin
+    let currentTime = new Date();
+    currentTime.setUTCHours(hours - berlinOffset, minutes, 0, 0);
+    
+    // Falls das Datum in die Vergangenheit fällt, nimm morgen
+    if (currentTime < new Date()) {
+        currentTime.setUTCDate(currentTime.getUTCDate() + 1);
+    }
     
     const lastPlayTime = {};
     const allTeams = teams.map(t => t.name);
@@ -2149,6 +2163,64 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
     res.json({ success: true, match });
 });
 
+// Endpunkt: Spiel zeitlich planen
+app.put('/api/admin/matches/:matchId/schedule', (req, res) => {
+    const { password, datetime, field } = req.body;
+    const { matchId } = req.params;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Admin-Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match) {
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
+    }
+    
+    if (!datetime) {
+        return res.status(400).json({ error: 'Datum und Uhrzeit sind erforderlich' });
+    }
+    
+    // Zeitplanung setzen oder aktualisieren
+    if (!match.scheduled) match.scheduled = {};
+    match.scheduled.datetime = new Date(datetime);
+    match.scheduled.field = field || 'Hauptplatz';
+    
+    // Turnier-Timestamp aktualisieren
+    if (currentTournament) {
+        currentTournament.lastUpdated = new Date().toISOString();
+    }
+    
+    autoSave();
+    res.json({ success: true, match });
+});
+
+// Endpunkt: Zeitplanung entfernen
+app.delete('/api/admin/matches/:matchId/schedule', (req, res) => {
+    const { password } = req.body;
+    const { matchId } = req.params;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Admin-Passwort' });
+    }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match) {
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
+    }
+    
+    // Zeitplanung entfernen
+    delete match.scheduled;
+    
+    // Turnier-Timestamp aktualisieren
+    if (currentTournament) {
+        currentTournament.lastUpdated = new Date().toISOString();
+    }
+    
+    autoSave();
+    res.json({ success: true, match });
+});
+
 // Funktion zum Aktualisieren abhängiger K.O.-Spiele
 function updateDependentKnockoutMatches(completedMatchId) {
     const completedMatch = matches.find(m => m.id === completedMatchId);
@@ -2676,7 +2748,7 @@ app.post('/api/admin/matches/reset-schedule', (req, res) => {
 
 // Admin: Alle Spiele automatisch planen
 app.post('/api/admin/matches/schedule-all', (req, res) => {
-    const { password, startTime, matchDuration, field } = req.body;
+    const { password, startTime, matchDuration, breakDuration, field } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -2719,6 +2791,8 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
             return res.status(400).json({ error: 'Ungültige Startzeit (Format: HH:MM)' });
         }
         
+        console.log(`Server erhalten - startTime: ${startTime}, startHour: ${startHour}, startMinute: ${startMinute}`);
+        
         // Parse Spieldauer
         const duration = parseInt(matchDuration);
         if (isNaN(duration) || duration <= 0) {
@@ -2726,11 +2800,30 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
         }
         
         // Erstelle Zeitplan für heute
+        // WICHTIG: Server läuft in UTC, Eingabe ist in Berlin-Zeit
         const today = new Date();
-        let currentDateTime = new Date(today);
-        currentDateTime.setHours(startHour, startMinute, 0, 0);
         
-        console.log(`Plane ${unscheduledMatches.length} Spiele ab ${currentDateTime.toLocaleString()}`);
+        // Berechne Berlin Offset dynamisch
+        const summerDate = new Date(today.getFullYear(), 6, 1); // Juli
+        const winterDate = new Date(today.getFullYear(), 0, 1); // Januar
+        const isSummer = Math.min(summerDate.getTimezoneOffset(), winterDate.getTimezoneOffset()) === today.getTimezoneOffset();
+        const berlinOffset = isSummer ? 2 : 1; // CEST = UTC+2, CET = UTC+1
+        
+        // Setze die Zeit als UTC, aber korrigiert für Berlin
+        let currentDateTime = new Date();
+        currentDateTime.setUTCHours(startHour - berlinOffset, startMinute, 0, 0);
+        
+        // Falls das Datum in die Vergangenheit fällt, nimm morgen
+        if (currentDateTime < new Date()) {
+            currentDateTime.setUTCDate(currentDateTime.getUTCDate() + 1);
+        }
+        
+        console.log(`Server - Eingegebene Zeit: ${startHour}:${startMinute}`);
+        console.log(`Server - UTC Zeit nach Korrektur: ${currentDateTime.toISOString()}`);
+        console.log(`Server - Berlin Zeit: ${currentDateTime.toLocaleString('de-DE', {timeZone: 'Europe/Berlin'})}`);
+        console.log(`Server - Timezone Offset: ${currentDateTime.getTimezoneOffset()} Minuten`);
+        
+        console.log(`Plane ${unscheduledMatches.length} Spiele ab ${currentDateTime.toLocaleString('de-DE', {timeZone: 'Europe/Berlin'})}`);
         
         // Plane jedes Spiel
         unscheduledMatches.forEach((match, index) => {
@@ -2739,10 +2832,11 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
                 field: field
             };
             
-            console.log(`Spiel ${index + 1}: ${match.team1} vs ${match.team2} um ${currentDateTime.toLocaleTimeString()}`);
+            console.log(`Spiel ${index + 1}: ${match.team1} vs ${match.team2} um ${currentDateTime.toLocaleTimeString('de-DE', {timeZone: 'Europe/Berlin'})} (ISO: ${match.scheduled.datetime})`);
             
-            // Nächste Zeit berechnen (Spieldauer + 5 Min Pause)
-            currentDateTime.setMinutes(currentDateTime.getMinutes() + duration + 5);
+            // Nächste Zeit berechnen (Spieldauer + Pausendauer)
+            const pauseDuration = parseInt(breakDuration) || 5;
+            currentDateTime.setMinutes(currentDateTime.getMinutes() + duration + pauseDuration);
         });
         
         // Turnier-Timestamp aktualisieren

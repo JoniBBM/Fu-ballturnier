@@ -604,7 +604,7 @@ async function loadLiveMatch() {
                                     <i class="fas fa-clock"></i>
                                     <div class="info-content">
                                         <div class="info-label">Zeit</div>
-                                        <div class="info-value">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</div>
+                                        <div class="info-value">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</div>
                                         <div class="countdown-display">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
                                     </div>
                                 </div>
@@ -680,7 +680,7 @@ async function loadLiveMatch() {
                         const matchTime = new Date(match.scheduled.datetime);
                         html += `
                             <div class="upcoming-match-item">
-                                <div class="match-time">${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</div>
+                                <div class="match-time">${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</div>
                                 <div class="match-teams">${match.team1} vs ${match.team2}</div>
                                 <div class="match-info">${match.group} • ${match.scheduled.field}</div>
                                 ${match.referee ? `
@@ -1028,7 +1028,7 @@ async function loadSchedule() {
                     <div class="match-card chronological ${isCompleted ? 'completed' : ''} ${isLive ? 'live' : ''}">
                         <div class="match-time">
                             <i class="fas fa-clock"></i>
-                            <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                            <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
                             <div class="match-field">${match.scheduled.field}</div>
                         </div>
                         
@@ -1626,7 +1626,8 @@ async function loadKnockoutMatches() {
                                     day: '2-digit',
                                     month: '2-digit',
                                     hour: '2-digit',
-                                    minute: '2-digit'
+                                    minute: '2-digit',
+                                    timeZone: 'Europe/Berlin'
                                 })}
                             </div>
                         ` : ''}

@@ -69,7 +69,66 @@ function showRefreshIndicator(show = true) {
 
 function formatDateTime(date) {
     if (!date) return 'Nicht geplant';
-    return new Date(date).toLocaleString('de-DE');
+    const dateObj = new Date(date);
+    const berlinTime = dateObj.toLocaleString('de-DE', {
+        timeZone: 'Europe/Berlin',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+    
+    // Debug: Check if there's a timezone issue
+    const localTime = dateObj.toLocaleString('de-DE', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+    
+    if (berlinTime !== localTime) {
+        console.log('Zeitzonenunterschied gefunden!', {
+            iso: date,
+            berlinTime: berlinTime,
+            localTime: localTime,
+            offset: dateObj.getTimezoneOffset()
+        });
+    }
+    
+    return berlinTime;
+}
+
+// Convert datetime-local input to ISO string
+function dateTimeLocalToISO(dateTimeLocal) {
+    if (!dateTimeLocal) return null;
+    
+    // The datetime-local value is in the browser's local timezone
+    // We simply convert it to ISO format
+    const date = new Date(dateTimeLocal);
+    
+    console.log('dateTimeLocalToISO - Input:', dateTimeLocal, 'Output:', date.toISOString());
+    
+    return date.toISOString();
+}
+
+// Convert ISO string to datetime-local format for input fields
+function isoToDateTimeLocal(isoString) {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    
+    // Get local date components (browser automatically uses local timezone)
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    
+    console.log('isoToDateTimeLocal - Input:', isoString, 'Output:', `${year}-${month}-${day}T${hours}:${minutes}`);
+    
+    // Format for datetime-local input (YYYY-MM-DDTHH:mm)
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 // Session Management Functions
@@ -2330,7 +2389,7 @@ async function loadUpcomingMatches() {
                             Für: ${nextData.nextMatch.team1} vs ${nextData.nextMatch.team2}
                         </div>
                         <small style="color: #92400e; margin-top: 0.5rem; display: block;">
-                            ${nextData.nextMatch.referee.group} • ${new Date(nextData.nextMatch.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
+                            ${nextData.nextMatch.referee.group} • ${new Date(nextData.nextMatch.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}
                         </small>
                     </div>
                 ` : ''}
@@ -2346,7 +2405,7 @@ async function loadUpcomingMatches() {
             upcomingMatches.innerHTML = `
                 <div class="next-match-admin">
                     <div class="next-match-time">
-                        <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                        <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
                         <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
                     </div>
                     <div class="next-match-info">
@@ -2674,7 +2733,7 @@ function loadMatches() {
             html += `
                 <div class="match-admin-card ${match.liveScore?.isLive ? 'live' : ''} chronological-admin">
                     <div class="match-time-admin">
-                        <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                        <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
                         <small>${match.scheduled.field}</small>
                     </div>
                     
@@ -2715,7 +2774,7 @@ function loadMatches() {
                             </button>
                         ` : ''}
                         <button class="btn btn-small" onclick="scheduleMatch('${match.id}')">
-                            <i class="fas fa-calendar"></i> <span class="btn-text">Zeit ändern</span>
+                            <i class="fas fa-clock"></i> <span class="btn-text">Uhrzeit ändern</span>
                         </button>
                         ${!match.completed && !match.liveScore?.isLive ? `
                             <button class="btn btn-small btn-success" onclick="startMatchDialog('${match.id}')">
@@ -2984,7 +3043,7 @@ async function editMatch(matchId) {
         currentTournament.groups.map(g => `<option value="${g.name}" ${g.name === match.group ? 'selected' : ''}>${g.name}</option>`).join('') :
         `<option value="${match.group}" selected>${match.group}</option>`;
     
-    const scheduledTime = match.scheduled ? new Date(match.scheduled.datetime).toISOString().slice(0, 16) : '';
+    const scheduledTime = match.scheduled && match.scheduled.datetime ? isoToDateTimeLocal(match.scheduled.datetime) : '';
     
     const content = `
         <div class="form-group">
@@ -3117,36 +3176,69 @@ async function scheduleMatch(matchId) {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
     
-    const scheduledTime = match.scheduled ? new Date(match.scheduled.datetime).toISOString().slice(0, 16) : '';
+    let scheduledTime = '';
+    let scheduledDate = '';
+    if (match.scheduled && match.scheduled.datetime) {
+        const date = new Date(match.scheduled.datetime);
+        // Use isoToDateTimeLocal to get the correct local time
+        const localDateTime = isoToDateTimeLocal(match.scheduled.datetime);
+        if (localDateTime) {
+            const [_, timePart] = localDateTime.split('T');
+            scheduledTime = timePart;
+        }
+        scheduledDate = date.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin'});
+    }
     
-    createModal('Spiel zeitlich planen', `
+    createModal('Spielzeit ändern', `
         <div class="form-group">
             <h4>${match.team1} vs ${match.team2}</h4>
-            <p><small>${match.group || 'Kein Gruppe'}</small></p>
+            <p><small>${match.group || 'Keine Gruppe'}</small></p>
+            ${scheduledDate ? `<p><small>Datum: ${scheduledDate}</small></p>` : ''}
         </div>
         <div class="form-group">
-            <label for="schedule-datetime">Datum und Uhrzeit:</label>
-            <input type="datetime-local" id="schedule-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            <label for="schedule-time">Uhrzeit:</label>
+            <input type="time" id="schedule-time" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
         <div class="form-group">
             <label for="schedule-field">Spielfeld:</label>
             <input type="text" id="schedule-field" value="${match.scheduled?.field || 'Hauptplatz'}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
     `, [
-        { text: 'Zeit planen', handler: (modalId) => saveMatchSchedule(matchId, modalId) },
+        { text: 'Speichern', handler: (modalId) => saveMatchSchedule(matchId, modalId) },
         { text: 'Zeit entfernen', class: 'btn-warning', handler: (modalId) => removeMatchSchedule(matchId, modalId) },
         { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
 }
 
 async function saveMatchSchedule(matchId, modalId) {
-    const datetime = document.getElementById('schedule-datetime').value;
+    const time = document.getElementById('schedule-time').value;
     const field = document.getElementById('schedule-field').value;
     
-    if (!datetime) {
-        showNotification('Datum und Uhrzeit sind erforderlich', 'error');
+    console.log('saveMatchSchedule - Eingabe Zeit:', time);
+    
+    if (!time) {
+        showNotification('Uhrzeit ist erforderlich', 'error');
         return;
     }
+    
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    // Behalte das existierende Datum oder verwende heute
+    let datetime;
+    if (match.scheduled && match.scheduled.datetime) {
+        // Behalte das existierende Datum, ändere nur die Uhrzeit
+        const existingDate = new Date(match.scheduled.datetime);
+        const dateStr = existingDate.toLocaleDateString('en-CA'); // YYYY-MM-DD format
+        datetime = dateTimeLocalToISO(`${dateStr}T${time}`);
+    } else {
+        // Neues Spiel: verwende heutiges Datum mit der angegebenen Uhrzeit
+        const today = new Date();
+        const dateStr = today.toLocaleDateString('en-CA'); // YYYY-MM-DD format
+        datetime = dateTimeLocalToISO(`${dateStr}T${time}`);
+    }
+    
+    console.log('saveMatchSchedule - Konvertierte Zeit:', datetime);
     
     showLoading(true);
     
@@ -3164,14 +3256,14 @@ async function saveMatchSchedule(matchId, modalId) {
         const data = await response.json();
         
         if (data.success) {
-            showNotification('Spiel erfolgreich geplant');
+            showNotification('Spielzeit erfolgreich geändert');
             closeModal(modalId);
             await refreshCurrentTabContent();
         } else {
             showNotification(data.error, 'error');
         }
     } catch (error) {
-        showNotification('Fehler beim Planen des Spiels', 'error');
+        showNotification('Fehler beim Ändern der Spielzeit', 'error');
     } finally {
         showLoading(false);
     }
@@ -3207,29 +3299,99 @@ async function removeMatchSchedule(matchId, modalId) {
 async function scheduleAllMatches() {
     const unscheduledCount = matches.filter(m => !m.scheduled).length;
     
-    if (!confirm(`Alle ${unscheduledCount} ungeplanten Spiele planen?\n\nDas System wird optimale Zeiten unter Berücksichtigung von Pausen zwischen den Spielen für jedes Team vergeben.`)) {
+    if (unscheduledCount === 0) {
+        showNotification('Keine ungeplanten Spiele vorhanden', 'warning');
+        return;
+    }
+    
+    createModal('Spielplan automatisch erstellen', `
+        <div class="form-group">
+            <p>Es werden <strong>${unscheduledCount} ungeplante Spiele</strong> automatisch geplant.</p>
+            <p>Das System berücksichtigt Pausen zwischen den Spielen für jedes Team.</p>
+        </div>
+        <div class="form-group">
+            <label for="schedule-start-time">Startzeit erstes Spiel:</label>
+            <input type="time" id="schedule-start-time" value="10:00" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="schedule-halftime-duration">Dauer einer Halbzeit (Minuten):</label>
+            <input type="number" id="schedule-halftime-duration" value="10" min="5" max="45" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="schedule-break-duration">Pause zwischen Spielen (Minuten):</label>
+            <input type="number" id="schedule-break-duration" value="5" min="0" max="30" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="schedule-field">Spielfeld:</label>
+            <input type="text" id="schedule-field" value="Hauptplatz" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+    `, [
+        { text: 'Spielplan erstellen', handler: (modalId) => executeScheduleAllMatches(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function executeScheduleAllMatches(modalId) {
+    const startTime = document.getElementById('schedule-start-time').value;
+    const halftimeDuration = parseInt(document.getElementById('schedule-halftime-duration').value);
+    const breakDuration = parseInt(document.getElementById('schedule-break-duration').value);
+    const field = document.getElementById('schedule-field').value;
+    
+    console.log('Eingabe Startzeit:', startTime);
+    
+    if (!startTime) {
+        showNotification('Startzeit ist erforderlich', 'error');
+        return;
+    }
+    
+    if (isNaN(halftimeDuration) || halftimeDuration < 5 || halftimeDuration > 45) {
+        showNotification('Ungültige Halbzeitdauer (5-45 Minuten)', 'error');
+        return;
+    }
+    
+    if (isNaN(breakDuration) || breakDuration < 0 || breakDuration > 30) {
+        showNotification('Ungültige Pausendauer (0-30 Minuten)', 'error');
         return;
     }
     
     showLoading(true);
+    closeModal(modalId);
     
     try {
+        // Berechne Gesamtspieldauer: 2 Halbzeiten + 1 Minute Halbzeitpause
+        const matchDuration = (halftimeDuration * 2) + 1;
+        
         const response = await fetch('/api/admin/matches/schedule-all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 password: adminPassword,
-                startTime: '09:00',
-                matchDuration: 30,
-                field: 'Hauptplatz'
+                startTime: startTime,
+                matchDuration: matchDuration,
+                breakDuration: breakDuration,
+                field: field || 'Hauptplatz'
             })
         });
         
         const data = await response.json();
         
         if (data.success) {
+            console.log('Spielplan erfolgreich erstellt:', data);
             showNotification(data.message);
             await refreshCurrentTabContent();
+            
+            // Debug: Check first few scheduled matches
+            setTimeout(() => {
+                const scheduledMatches = matches.filter(m => m.scheduled).slice(0, 3);
+                console.log('Erste geplante Spiele nach Erstellung:');
+                scheduledMatches.forEach(match => {
+                    console.log(`${match.team1} vs ${match.team2}:`, {
+                        iso: match.scheduled.datetime,
+                        formatted: formatDateTime(match.scheduled.datetime),
+                        local: new Date(match.scheduled.datetime).toLocaleTimeString('de-DE')
+                    });
+                });
+            }, 1000);
         } else {
             showNotification(data.error, 'error');
         }
@@ -3523,7 +3685,7 @@ async function loadLiveControl() {
                                 </div>
                                 <div class="detail-row">
                                     <i class="fas fa-clock"></i> 
-                                    <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>
+                                    <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</span>
                                     ${minutesUntil > 0 ? `<span class="time-until">(in ${minutesUntil} Min.)</span>` : '<span class="time-until ready">Startbereit!</span>'}
                                 </div>
                                 ${nextMatch.field ? `
@@ -3583,7 +3745,7 @@ async function loadLiveControl() {
                             <div class="next-match-info-card">
                                 <div class="match-teams-display">${nextMatch.team1} <span class="vs">vs</span> ${nextMatch.team2}</div>
                                 <div class="match-time-display">
-                                    <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                                    <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
                                     <span class="countdown-badge">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt startbereit!'}</span>
                                 </div>
                                 <div class="match-details-grid">
@@ -3688,7 +3850,7 @@ async function loadLiveControl() {
                                         <div class="next-match-info-card">
                                             <div class="match-teams-display">${nextScheduled.team1} <span class="vs">vs</span> ${nextScheduled.team2}</div>
                                             <div class="match-time-display">
-                                                <strong>${new Date(nextScheduled.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</strong>
+                                                <strong>${new Date(nextScheduled.datetime).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
                                                 <span class="countdown-badge">Startbereit!</span>
                                             </div>
                                             <div class="match-details-grid">
