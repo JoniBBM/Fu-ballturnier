@@ -1563,7 +1563,7 @@ function assignReferees(matches, groups) {
     return matches;
 }
 
-function intelligentScheduling(matches, groups, startTime, matchDuration, field) {
+function intelligentScheduling(matches, groups, startTime, matchDuration) {
     const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
     const today = new Date();
     
@@ -1651,8 +1651,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
             const match = bestMatch.match;
             
             match.scheduled = {
-                datetime: new Date(currentTime),
-                field: field || 'Hauptplatz'
+                datetime: new Date(currentTime)
             };
             
             lastPlayTime[match.team1] = new Date(currentTime);
@@ -1681,8 +1680,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration, field)
             const matchIndex = unscheduledMatches.indexOf(match);
             
             match.scheduled = {
-                datetime: new Date(currentTime),
-                field: field || 'Hauptplatz'
+                datetime: new Date(currentTime)
             };
             
             lastPlayTime[match.team1] = new Date(currentTime);
@@ -2125,7 +2123,7 @@ app.delete('/api/admin/matches/:matchId', (req, res) => {
 
 // Admin: Match bearbeiten
 app.put('/api/admin/matches/:matchId', (req, res) => {
-    const { password, team1, team2, group, referee, datetime, field } = req.body;
+    const { password, team1, team2, group, referee, datetime } = req.body;
     const matchId = req.params.matchId;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2149,10 +2147,9 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
         }
     }
     
-    if (datetime || field) {
+    if (datetime) {
         if (!match.scheduled) match.scheduled = {};
-        if (datetime) match.scheduled.datetime = new Date(datetime);
-        if (field) match.scheduled.field = field;
+        match.scheduled.datetime = new Date(datetime);
     }
     
     if (match.completed && match.phase === 'group') {
@@ -2165,7 +2162,7 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
 
 // Endpunkt: Spiel zeitlich planen
 app.put('/api/admin/matches/:matchId/schedule', (req, res) => {
-    const { password, datetime, field } = req.body;
+    const { password, datetime } = req.body;
     const { matchId } = req.params;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2184,7 +2181,6 @@ app.put('/api/admin/matches/:matchId/schedule', (req, res) => {
     // Zeitplanung setzen oder aktualisieren
     if (!match.scheduled) match.scheduled = {};
     match.scheduled.datetime = new Date(datetime);
-    match.scheduled.field = field || 'Hauptplatz';
     
     // Turnier-Timestamp aktualisieren
     if (currentTournament) {
@@ -2298,7 +2294,7 @@ app.put('/api/admin/results/:matchId', (req, res) => {
 
 // Admin: Neues Match hinzufügen
 app.post('/api/admin/matches', (req, res) => {
-    const { password, team1, team2, group, phase, referee, datetime, field } = req.body;
+    const { password, team1, team2, group, phase, referee, datetime } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -2323,10 +2319,9 @@ app.post('/api/admin/matches', (req, res) => {
         newMatch.referee = referee;
     }
     
-    if (datetime || field) {
+    if (datetime) {
         newMatch.scheduled = {};
-        if (datetime) newMatch.scheduled.datetime = new Date(datetime);
-        if (field) newMatch.scheduled.field = field;
+        newMatch.scheduled.datetime = new Date(datetime);
     }
     
     matches.push(newMatch);
@@ -2748,7 +2743,7 @@ app.post('/api/admin/matches/reset-schedule', (req, res) => {
 
 // Admin: Alle Spiele automatisch planen
 app.post('/api/admin/matches/schedule-all', (req, res) => {
-    const { password, startTime, matchDuration, breakDuration, field } = req.body;
+    const { password, startTime, matchDuration, halftimeDuration, halftimeBreak, breakDuration } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -2759,9 +2754,9 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
     }
     
     // Validierung der Parameter
-    if (!startTime || !matchDuration || !field) {
+    if (!startTime || !matchDuration || !halftimeDuration || !halftimeBreak) {
         return res.status(400).json({ 
-            error: 'Startzeit, Spieldauer und Platz sind erforderlich' 
+            error: 'Startzeit, Halbzeitdauer und Halbzeitpause sind erforderlich' 
         });
     }
     
@@ -2829,7 +2824,8 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
         unscheduledMatches.forEach((match, index) => {
             match.scheduled = {
                 datetime: new Date(currentDateTime).toISOString(),
-                field: field
+                halftimeDuration: parseInt(halftimeDuration),
+                halftimeBreak: parseInt(halftimeBreak)
             };
             
             console.log(`Spiel ${index + 1}: ${match.team1} vs ${match.team2} um ${currentDateTime.toLocaleTimeString('de-DE', {timeZone: 'Europe/Berlin'})} (ISO: ${match.scheduled.datetime})`);
@@ -2966,7 +2962,7 @@ app.post('/api/admin/tournament', (req, res) => {
 
 // Admin: Spielzeit setzen
 app.post('/api/admin/schedule', (req, res) => {
-    const { password, matchId, datetime, field } = req.body;
+    const { password, matchId, datetime } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -2978,8 +2974,7 @@ app.post('/api/admin/schedule', (req, res) => {
     }
     
     match.scheduled = {
-        datetime: new Date(datetime),
-        field: field || 'Hauptplatz'
+        datetime: new Date(datetime)
     };
     
     autoSave();
@@ -2989,7 +2984,7 @@ app.post('/api/admin/schedule', (req, res) => {
 // Admin: Alle Spiele automatisch planen (intelligenter Algorithmus)
 // Admin: K.O.-Spiele intelligent planen
 app.post('/api/admin/schedule-knockout', (req, res) => {
-    const { password, startTime, matchDuration, field, breakBetweenRounds } = req.body;
+    const { password, startTime, matchDuration, breakBetweenRounds } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -3026,8 +3021,7 @@ app.post('/api/admin/schedule-knockout', (req, res) => {
         }
         
         match.scheduled = {
-            datetime: new Date(currentTime),
-            field: field || 'Hauptplatz'
+            datetime: new Date(currentTime)
         };
         
         currentTime = new Date(currentTime.getTime() + parseInt(matchDuration) * 60000);
@@ -3048,7 +3042,7 @@ app.post('/api/admin/schedule-knockout', (req, res) => {
 });
 
 app.post('/api/admin/schedule-all', (req, res) => {
-    const { password, startTime, matchDuration, field } = req.body;
+    const { password, startTime, matchDuration } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -3070,8 +3064,7 @@ app.post('/api/admin/schedule-all', (req, res) => {
             unscheduledMatches, 
             currentTournament.groups, 
             startTime, 
-            parseInt(matchDuration), 
-            field
+            parseInt(matchDuration)
         );
         
         scheduledMatches.forEach(scheduledMatch => {
@@ -3141,6 +3134,7 @@ app.get('/api/live-match', (req, res) => {
             score2: liveMatch.liveScore.score2,
             startTime: liveMatch.liveScore.startTime,
             halfTimeMinutes: liveMatch.liveScore.halfTimeMinutes,
+            halftimeBreakMinutes: liveMatch.liveScore.halftimeBreakMinutes || 1,
             currentHalf: liveMatch.liveScore.currentHalf,
             halfTimeBreak: liveMatch.liveScore.halfTimeBreak,
             isPaused: liveMatch.liveScore.isPaused,
@@ -3195,7 +3189,7 @@ app.post('/api/admin/live-score', (req, res) => {
 
 // Admin: Spiel mit Halbzeitlänge starten
 app.post('/api/admin/start-match', (req, res) => {
-    const { password, matchId, halfTimeMinutes } = req.body;
+    const { password, matchId, halfTimeMinutes, halftimeBreakMinutes } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
@@ -3219,7 +3213,8 @@ app.post('/api/admin/start-match', (req, res) => {
         isPaused: false,
         startTime: startTime,
         pausedTime: 0,
-        halfTimeMinutes: parseInt(halfTimeMinutes) || 45,
+        halfTimeMinutes: parseInt(halfTimeMinutes) || 5,
+        halftimeBreakMinutes: parseInt(halftimeBreakMinutes) || 1,
         currentHalf: 1,
         halfTimeBreak: false,
         firstHalfEndTime: null,

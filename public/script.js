@@ -423,6 +423,29 @@ function calculateLiveTime(liveMatch) {
     
     // Halbzeitpause
     if (liveMatch.halfTimeBreak) {
+        const halftimeBreakMinutes = liveMatch.halftimeBreakMinutes || 1;
+        
+        // Berechne verbleibende Halbzeitpause
+        if (liveMatch.firstHalfEndTime) {
+            const firstHalfEnd = new Date(liveMatch.firstHalfEndTime);
+            const halftimeElapsed = Math.floor((now - firstHalfEnd) / 1000);
+            const halftimeTotal = halftimeBreakMinutes * 60;
+            const halftimeRemaining = Math.max(0, halftimeTotal - halftimeElapsed);
+            
+            const remainingMinutes = Math.floor(halftimeRemaining / 60);
+            const remainingSeconds = halftimeRemaining % 60;
+            
+            if (halftimeRemaining > 0) {
+                return {
+                    displayTime: formatTime(remainingMinutes, remainingSeconds),
+                    halfInfo: 'HALBZEITPAUSE',
+                    currentMinute: remainingMinutes,
+                    currentSecond: remainingSeconds
+                };
+            }
+        }
+        
+        // Fallback für alte Version
         return {
             displayTime: formatTime(halfTimeMinutes, 0),
             halfInfo: 'HALBZEIT',
@@ -624,15 +647,6 @@ async function loadLiveMatch() {
                                     <div class="info-value">${nextMatch.group}</div>
                                 </div>
                             </div>
-                            ${(nextMatch.scheduled && nextMatch.scheduled.field) || nextMatch.field ? `
-                                <div class="info-item">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <div class="info-content">
-                                        <div class="info-label">Platz</div>
-                                        <div class="info-value">${(nextMatch.scheduled && nextMatch.scheduled.field) || nextMatch.field}</div>
-                                    </div>
-                                </div>
-                            ` : ''}
                         </div>
                         
                         ${nextMatch.referee ? `
@@ -682,7 +696,7 @@ async function loadLiveMatch() {
                             <div class="upcoming-match-item">
                                 <div class="match-time">${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</div>
                                 <div class="match-teams">${match.team1} vs ${match.team2}</div>
-                                <div class="match-info">${match.group} • ${match.scheduled.field}</div>
+                                <div class="match-info">${match.group}</div>
                                 ${match.referee ? `
                                     <div class="match-referee">
                                         <i class="fas fa-whistle"></i> ${match.referee.team}
@@ -1029,7 +1043,6 @@ async function loadSchedule() {
                         <div class="match-time">
                             <i class="fas fa-clock"></i>
                             <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
-                            <div class="match-field">${match.scheduled.field}</div>
                         </div>
                         
                         <div class="match-info">

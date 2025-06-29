@@ -2412,7 +2412,6 @@ async function loadUpcomingMatches() {
                         <strong>${nextMatch.team1} vs ${nextMatch.team2}</strong>
                         <div class="match-details">
                             <span><i class="fas fa-layer-group"></i> ${nextMatch.group}</span>
-                            <span><i class="fas fa-map-marker-alt"></i> ${nextMatch.field}</span>
                         </div>
                     </div>
                     <div class="next-match-actions">
@@ -2734,7 +2733,6 @@ function loadMatches() {
                 <div class="match-admin-card ${match.liveScore?.isLive ? 'live' : ''} chronological-admin">
                     <div class="match-time-admin">
                         <strong>${matchTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
-                        <small>${match.scheduled.field}</small>
                     </div>
                     
                     <div class="match-info-admin">
@@ -2968,10 +2966,6 @@ async function addNewMatch() {
             <label for="new-match-datetime">Datum/Zeit (optional):</label>
             <input type="datetime-local" id="new-match-datetime" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
-        <div class="form-group">
-            <label for="new-match-field">Spielfeld (optional):</label>
-            <input type="text" id="new-match-field" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
     `, [
         { text: 'Spiel hinzufügen', handler: (modalId) => saveNewMatch(modalId) },
         { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
@@ -2985,7 +2979,6 @@ async function saveNewMatch(modalId) {
     const phase = document.getElementById('new-match-phase').value;
     const isPenalty = document.getElementById('new-match-penalty').checked;
     const datetime = document.getElementById('new-match-datetime').value;
-    const field = document.getElementById('new-match-field').value;
     
     if (!team1 || !team2) {
         showNotification('Beide Teams müssen ausgewählt werden', 'error');
@@ -3006,8 +2999,7 @@ async function saveNewMatch(modalId) {
             team2,
             group,
             phase: isPenalty ? 'penalty' : phase,
-            datetime: datetime || null,
-            field: field || null
+            datetime: datetime || null
         };
         
         const response = await fetch('/api/admin/matches', {
@@ -3075,10 +3067,6 @@ async function editMatch(matchId) {
             <label for="edit-match-datetime">Datum/Zeit:</label>
             <input type="datetime-local" id="edit-match-datetime" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
-        <div class="form-group">
-            <label for="edit-match-field">Spielfeld:</label>
-            <input type="text" id="edit-match-field" value="${match.scheduled?.field || ''}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
     `;
     
     createModal('Spiel bearbeiten', content, [
@@ -3093,7 +3081,6 @@ async function saveMatchEdit(matchId, modalId) {
     const group = document.getElementById('edit-match-group').value;
     const isPenalty = document.getElementById('edit-match-penalty').checked;
     const datetime = document.getElementById('edit-match-datetime').value;
-    const field = document.getElementById('edit-match-field').value;
     
     if (!team1 || !team2) {
         showNotification('Beide Teams müssen ausgewählt werden', 'error');
@@ -3117,8 +3104,7 @@ async function saveMatchEdit(matchId, modalId) {
                 team2,
                 group,
                 isPenaltyShootout: isPenalty,
-                datetime: datetime || null,
-                field: field || null
+                datetime: datetime || null
             })
         });
         
@@ -3199,10 +3185,6 @@ async function scheduleMatch(matchId) {
             <label for="schedule-time">Uhrzeit:</label>
             <input type="time" id="schedule-time" value="${scheduledTime}" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
-        <div class="form-group">
-            <label for="schedule-field">Spielfeld:</label>
-            <input type="text" id="schedule-field" value="${match.scheduled?.field || 'Hauptplatz'}" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
     `, [
         { text: 'Speichern', handler: (modalId) => saveMatchSchedule(matchId, modalId) },
         { text: 'Zeit entfernen', class: 'btn-warning', handler: (modalId) => removeMatchSchedule(matchId, modalId) },
@@ -3212,7 +3194,6 @@ async function scheduleMatch(matchId) {
 
 async function saveMatchSchedule(matchId, modalId) {
     const time = document.getElementById('schedule-time').value;
-    const field = document.getElementById('schedule-field').value;
     
     console.log('saveMatchSchedule - Eingabe Zeit:', time);
     
@@ -3248,8 +3229,7 @@ async function saveMatchSchedule(matchId, modalId) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 password: adminPassword,
-                datetime,
-                field: field || 'Hauptplatz'
+                datetime
             })
         });
         
@@ -3315,15 +3295,15 @@ async function scheduleAllMatches() {
         </div>
         <div class="form-group">
             <label for="schedule-halftime-duration">Dauer einer Halbzeit (Minuten):</label>
-            <input type="number" id="schedule-halftime-duration" value="10" min="5" max="45" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            <input type="number" id="schedule-halftime-duration" value="10" min="1" max="99" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+        </div>
+        <div class="form-group">
+            <label for="schedule-halftime-break">Halbzeitpause (Minuten):</label>
+            <input type="number" id="schedule-halftime-break" value="1" min="1" max="10" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
         <div class="form-group">
             <label for="schedule-break-duration">Pause zwischen Spielen (Minuten):</label>
             <input type="number" id="schedule-break-duration" value="5" min="0" max="30" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
-        </div>
-        <div class="form-group">
-            <label for="schedule-field">Spielfeld:</label>
-            <input type="text" id="schedule-field" value="Hauptplatz" placeholder="Hauptplatz" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
         </div>
     `, [
         { text: 'Spielplan erstellen', handler: (modalId) => executeScheduleAllMatches(modalId) },
@@ -3334,8 +3314,8 @@ async function scheduleAllMatches() {
 async function executeScheduleAllMatches(modalId) {
     const startTime = document.getElementById('schedule-start-time').value;
     const halftimeDuration = parseInt(document.getElementById('schedule-halftime-duration').value);
+    const halftimeBreak = parseInt(document.getElementById('schedule-halftime-break').value);
     const breakDuration = parseInt(document.getElementById('schedule-break-duration').value);
-    const field = document.getElementById('schedule-field').value;
     
     console.log('Eingabe Startzeit:', startTime);
     
@@ -3344,8 +3324,13 @@ async function executeScheduleAllMatches(modalId) {
         return;
     }
     
-    if (isNaN(halftimeDuration) || halftimeDuration < 5 || halftimeDuration > 45) {
-        showNotification('Ungültige Halbzeitdauer (5-45 Minuten)', 'error');
+    if (isNaN(halftimeDuration) || halftimeDuration < 1 || halftimeDuration > 99) {
+        showNotification('Ungültige Halbzeitdauer (1-99 Minuten)', 'error');
+        return;
+    }
+    
+    if (isNaN(halftimeBreak) || halftimeBreak < 1 || halftimeBreak > 10) {
+        showNotification('Ungültige Halbzeitpause (1-10 Minuten)', 'error');
         return;
     }
     
@@ -3358,8 +3343,8 @@ async function executeScheduleAllMatches(modalId) {
     closeModal(modalId);
     
     try {
-        // Berechne Gesamtspieldauer: 2 Halbzeiten + 1 Minute Halbzeitpause
-        const matchDuration = (halftimeDuration * 2) + 1;
+        // Berechne Gesamtspieldauer: 2 Halbzeiten + Halbzeitpause
+        const matchDuration = (halftimeDuration * 2) + halftimeBreak;
         
         const response = await fetch('/api/admin/matches/schedule-all', {
             method: 'POST',
@@ -3368,8 +3353,9 @@ async function executeScheduleAllMatches(modalId) {
                 password: adminPassword,
                 startTime: startTime,
                 matchDuration: matchDuration,
-                breakDuration: breakDuration,
-                field: field || 'Hauptplatz'
+                halftimeDuration: halftimeDuration,
+                halftimeBreak: halftimeBreak,
+                breakDuration: breakDuration
             })
         });
         
@@ -3413,7 +3399,6 @@ async function startMatchDialog(matchId) {
             <p><strong>Gruppe:</strong> ${match.group}</p>
             ${match.scheduled ? `
                 <p><strong>Geplante Zeit:</strong> ${formatDateTime(match.scheduled.datetime)}</p>
-                <p><strong>Spielfeld:</strong> ${match.scheduled.field}</p>
             ` : ''}
             ${match.referee ? `
                 <p><strong>Schiedsrichter:</strong> ${match.referee.team} (${match.referee.group})</p>
@@ -3423,10 +3408,18 @@ async function startMatchDialog(matchId) {
         <div class="start-match-options">
             <div class="form-group">
                 <label for="half-time-duration">Halbzeit-Dauer (Minuten):</label>
-                <input type="number" id="half-time-duration" value="5" min="1" max="45" 
+                <input type="number" id="half-time-duration" value="5" min="1" max="99" 
                        style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
                 <small style="color: #666; margin-top: 0.5rem; display: block;">
-                    Standard: 5 Minuten pro Halbzeit. Du kannst jeden Wert zwischen 1-45 Minuten eingeben.
+                    Standard: 5 Minuten pro Halbzeit. Du kannst jeden Wert zwischen 1-99 Minuten eingeben.
+                </small>
+            </div>
+            <div class="form-group">
+                <label for="halftime-break-duration">Halbzeitpause (Minuten):</label>
+                <input type="number" id="halftime-break-duration" value="1" min="1" max="10" 
+                       style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
+                <small style="color: #666; margin-top: 0.5rem; display: block;">
+                    Standard: 1 Minute Halbzeitpause.
                 </small>
             </div>
         </div>
@@ -3443,9 +3436,15 @@ async function startMatchDialog(matchId) {
 
 async function executeStartMatch(matchId, modalId) {
     const halfTimeDuration = parseInt(document.getElementById('half-time-duration').value);
+    const halftimeBreakDuration = parseInt(document.getElementById('halftime-break-duration').value);
     
-    if (isNaN(halfTimeDuration) || halfTimeDuration < 1 || halfTimeDuration > 45) {
-        showNotification('Bitte eine gültige Halbzeitdauer zwischen 1-45 Minuten eingeben', 'error');
+    if (isNaN(halfTimeDuration) || halfTimeDuration < 1 || halfTimeDuration > 99) {
+        showNotification('Bitte eine gültige Halbzeitdauer zwischen 1-99 Minuten eingeben', 'error');
+        return;
+    }
+    
+    if (isNaN(halftimeBreakDuration) || halftimeBreakDuration < 1 || halftimeBreakDuration > 10) {
+        showNotification('Bitte eine gültige Halbzeitpause zwischen 1-10 Minuten eingeben', 'error');
         return;
     }
     
@@ -3458,7 +3457,8 @@ async function executeStartMatch(matchId, modalId) {
             body: JSON.stringify({
                 password: adminPassword,
                 matchId: matchId,
-                halfTimeMinutes: halfTimeDuration
+                halfTimeMinutes: halfTimeDuration,
+                halftimeBreakMinutes: halftimeBreakDuration
             })
         });
         
@@ -3688,12 +3688,6 @@ async function loadLiveControl() {
                                     <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</span>
                                     ${minutesUntil > 0 ? `<span class="time-until">(in ${minutesUntil} Min.)</span>` : '<span class="time-until ready">Startbereit!</span>'}
                                 </div>
-                                ${nextMatch.field ? `
-                                    <div class="detail-row">
-                                        <i class="fas fa-map-marker-alt"></i> 
-                                        <span>${nextMatch.field}</span>
-                                    </div>
-                                ` : ''}
                             </div>
                             
                             ${nextMatch.referee ? `
@@ -3751,9 +3745,6 @@ async function loadLiveControl() {
                                 <div class="match-details-grid">
                                     <div class="detail-item">
                                         <i class="fas fa-layer-group"></i> ${nextMatch.group}
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-map-marker-alt"></i> ${nextMatch.field}
                                     </div>
                                 </div>
                                 
@@ -3856,9 +3847,6 @@ async function loadLiveControl() {
                                             <div class="match-details-grid">
                                                 <div class="detail-item">
                                                     <i class="fas fa-layer-group"></i> ${nextScheduled.group}
-                                                </div>
-                                                <div class="detail-item">
-                                                    <i class="fas fa-map-marker-alt"></i> ${nextScheduled.field}
                                                 </div>
                                             </div>
                                         </div>
@@ -4055,6 +4043,29 @@ function calculateLiveTime(liveMatch) {
     
     // Halbzeitpause
     if (liveMatch.halfTimeBreak) {
+        const halftimeBreakMinutes = liveMatch.halftimeBreakMinutes || 1;
+        
+        // Berechne verbleibende Halbzeitpause
+        if (liveMatch.firstHalfEndTime) {
+            const firstHalfEnd = new Date(liveMatch.firstHalfEndTime);
+            const halftimeElapsed = Math.floor((now - firstHalfEnd) / 1000);
+            const halftimeTotal = halftimeBreakMinutes * 60;
+            const halftimeRemaining = Math.max(0, halftimeTotal - halftimeElapsed);
+            
+            const remainingMinutes = Math.floor(halftimeRemaining / 60);
+            const remainingSeconds = halftimeRemaining % 60;
+            
+            if (halftimeRemaining > 0) {
+                return {
+                    displayTime: formatTime(remainingMinutes, remainingSeconds),
+                    halfInfo: 'HALBZEITPAUSE',
+                    currentMinute: remainingMinutes,
+                    currentSecond: remainingSeconds
+                };
+            }
+        }
+        
+        // Fallback für alte Version
         return {
             displayTime: formatTime(halfTimeMinutes, 0),
             halfInfo: 'HALBZEIT',
