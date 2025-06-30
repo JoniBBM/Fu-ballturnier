@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  tournament-app:
+    build: .
+    ports:
+      - "${PORT:-5678}:${PORT:-5678}"
+    environment:
+      - NODE_ENV=production
+      - PORT=${PORT:-5678}
+    restart: unless-stopped
+    volumes:
+      # Nur persistente Daten, KEINE Code-Volumes
+      - ./saves:/app/saves
+    networks:
+      - tournament-network
+    # Production: npm start (node, nicht nodemon)
+    command: npm start
+
+networks:
+  tournament-network:
+    driver: bridge

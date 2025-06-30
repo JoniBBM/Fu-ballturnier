@@ -355,6 +355,15 @@ function debouncedUpdateConnectionStatus() {
 }
 
 function setupWebSocketEventListeners() {
+    // Initial data from server
+    socket.on('initial-data', (data) => {
+        console.log('Received initial data from server:', data);
+        // This can help sync state but we don't want to overwrite current operations
+        if (!isRefreshing && !window.isStartingMatch) {
+            // Optionally update some cached data here if needed
+        }
+    });
+    
     // Live Score Updates - only update UI, no refresh needed
     socket.on('live-score-update', (data) => {
         console.log('Live score update received:', data);
@@ -471,6 +480,79 @@ function setupWebSocketEventListeners() {
         }
         // Update tournament info immediately after import
         debouncedUpdateTournamentInfo();
+    });
+
+    // Tournament Reset Event
+    socket.on('tournament-reset', (data) => {
+        console.log('Tournament reset received:', data);
+        showNotification(`${data.message}`, 'warning');
+        
+        // Clear any cached data and reload the tournament management
+        if (!isRefreshing) {
+            setTimeout(() => {
+                // Force a complete reload of the tournament management
+                if (typeof loadTournamentManagement === 'function') {
+                    loadTournamentManagement();
+                } else {
+                    // Fallback: reload the current tab
+                    refreshCurrentTabContent();
+                }
+            }, 1000);
+        }
+    });
+
+    // Tournament Status Changed - refresh all relevant tabs
+    socket.on('tournament-status-changed', (data) => {
+        console.log('Tournament status changed:', data);
+        showNotification(`Turnier-Status geändert zu: ${data.newStatus}`, 'info');
+        
+        // Update global tournament data
+        if (data.tournament) {
+            currentTournament = data.tournament;
+        }
+        
+        // Refresh current tab to show new status
+        if (!isRefreshing) {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 500);
+        }
+    });
+
+    // Team Registered - refresh teams and dashboard
+    socket.on('team-registered', (data) => {
+        console.log('Team registered:', data);
+        showNotification(`Neues Team angemeldet: ${data.team.name}`, 'success');
+        
+        // Refresh relevant tabs
+        if (!isRefreshing && (currentActiveTab === 'teams' || currentActiveTab === 'dashboard' || currentActiveTab === 'tournament')) {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 500);
+        }
+    });
+
+    // Matches Generated - refresh matches and related tabs
+    socket.on('matches-generated', (data) => {
+        console.log('Matches generated:', data);
+        showNotification(`Spielplan erstellt: ${data.totalMatches} Spiele generiert`, 'success');
+        
+        // Update global tournament data
+        if (data.tournament) {
+            currentTournament = data.tournament;
+        }
+        
+        // Refresh all tabs that show match data
+        if (!isRefreshing) {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 500);
+        }
+    });
+
+    // Matches Scheduled - refresh matches tab when games are scheduled
+    socket.on('matches-scheduled', (data) => {
+        console.log('Matches scheduled:', data);
+        showNotification(`${data.scheduledCount} Spiele geplant ab ${data.startTime}`, 'success');
+        
+        // Refresh matches tab and live tab
+        if (!isRefreshing && (currentActiveTab === 'matches' || currentActiveTab === 'live' || currentActiveTab === 'dashboard')) {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 500);
+        }
     });
 }
 
@@ -601,7 +683,7 @@ async function performTabRefresh() {
             await loadInitialData();
         }
         
-        // Refresh current tab
+        // Refresh current tab - für Tabs mit Datenabhängigkeit forceReload
         switch(currentActiveTab) {
             case 'dashboard':
                 await loadDashboard();
@@ -610,9 +692,11 @@ async function performTabRefresh() {
                 loadTournamentManagement();
                 break;
             case 'teams':
+                await loadInitialData(true); // Force reload für Teams
                 loadTeams();
                 break;
             case 'matches':
+                await loadInitialData(true); // Force reload für Matches  
                 loadMatches();
                 break;
             case 'live':
@@ -735,7 +819,8 @@ async function handleTournamentCreation(e) {
         if (data.success) {
             currentTournament = data.tournament;
             showNotification('Turnier erfolgreich erstellt! Teams können sich jetzt anmelden.');
-            await refreshCurrentTabContent();
+            // Direkt die UI aktualisieren ohne Verzögerung
+            loadTournamentManagement();
         } else {
             showNotification(data.error, 'error');
         }
@@ -937,9 +1022,9 @@ async function checkAutoLogin() {
 }
 
 // Load Initial Data
-async function loadInitialData() {
-    // Verhindere mehrfache gleichzeitige Aufrufe
-    if (isRefreshing) {
+async function loadInitialData(forceReload = false) {
+    // Verhindere mehrfache gleichzeitige Aufrufe, außer bei forceReload
+    if (isRefreshing && !forceReload) {
         console.log('loadInitialData bereits in Bearbeitung, überspringe');
         return;
     }
@@ -3815,17 +3900,23 @@ async function loadLiveControl() {
                                 </button>
                             `}
                             
-                            ${liveMatch.currentHalf === 1 && !liveMatch.halfTimeBreak ? `
-                                <button class="btn btn-info btn-large" onclick="startHalfTime('${liveMatch.id}')">
-                                    <i class="fas fa-clock"></i> Halbzeit einläuten
-                                </button>
-                            ` : ''}
-                            
-                            ${liveMatch.halfTimeBreak ? `
-                                <button class="btn btn-success btn-large" onclick="startSecondHalf('${liveMatch.id}')">
-                                    <i class="fas fa-play"></i> 2. Halbzeit starten
-                                </button>
-                            ` : ''}
+                            ${(() => {
+                                // Prüfe ob erste Halbzeit abgelaufen ist
+                                const timeInfo = calculateMatchTime(liveMatch);
+                                const isFirstHalfExpired = liveMatch.currentHalf === 1 && 
+                                                          timeInfo.currentMinute >= (liveMatch.halfTimeMinutes || 45);
+                                
+                                if (liveMatch.currentHalf === 1 && !liveMatch.halfTimeBreak && !isFirstHalfExpired) {
+                                    return `<button class="btn btn-info btn-large" onclick="startHalfTime('${liveMatch.id}')">
+                                        <i class="fas fa-clock"></i> Halbzeit einläuten
+                                    </button>`;
+                                } else if (liveMatch.halfTimeBreak || isFirstHalfExpired) {
+                                    return `<button class="btn btn-success btn-large" onclick="startSecondHalf('${liveMatch.id}')">
+                                        <i class="fas fa-play"></i> 2. Halbzeit starten
+                                    </button>`;
+                                }
+                                return '';
+                            })()}
                             
                             ${liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak ? `
                                 <button class="btn btn-primary btn-large" onclick="endMatch('${liveMatch.id}')">

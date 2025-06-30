@@ -11,7 +11,11 @@ const io = new Server(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ['websocket', 'polling'],
+    allowEIO3: true
 });
 const PORT = process.env.PORT || 5678;
 
@@ -72,11 +76,11 @@ const AVAILABLE_COLORS = [
 ];
 
 // Daten für bestimmtes Jahr laden
-function loadDataForYear(year) {
+async function loadDataForYear(year) {
     const filename = path.join(SAVES_DIR, `${year}.json`);
     try {
         if (fs.existsSync(filename)) {
-            const data = JSON.parse(fs.readFileSync(filename, 'utf8'));
+            const data = JSON.parse(await fs.promises.readFile(filename, 'utf8'));
             tournaments = data.tournaments || [];
             teams = data.teams || [];
             matches = data.matches || [];
@@ -93,7 +97,7 @@ function loadDataForYear(year) {
 }
 
 // Daten für aktuelles Jahr speichern
-function saveData() {
+async function saveData() {
     if (!currentTournament) {
         console.log('Keine aktuellen Turnierdaten zum Speichern');
         return;
@@ -112,22 +116,35 @@ function saveData() {
             contactData,
             lastUpdated: new Date().toISOString()
         };
-        fs.writeFileSync(filename, JSON.stringify(data, null, 2));
+        await fs.promises.writeFile(filename, JSON.stringify(data, null, 2));
         console.log(`Daten für ${year} gespeichert in:`, filename);
     } catch (error) {
         console.error(`Fehler beim Speichern der Daten für ${year}:`, error);
     }
 }
 
-// Automatisches Speichern bei Änderungen
-function autoSave() {
-    saveData();
+// Automatisches Speichern bei Änderungen mit Debouncing
+let autoSaveTimeout = null;
+async function autoSave() {
+    // Debounce autoSave to prevent rapid file writes that trigger nodemon
+    if (autoSaveTimeout) {
+        clearTimeout(autoSaveTimeout);
+    }
+    
+    autoSaveTimeout = setTimeout(async () => {
+        try {
+            await saveData();
+        } catch (error) {
+            console.error('Error in autoSave:', error);
+        }
+        autoSaveTimeout = null;
+    }, 500); // 500ms delay to group rapid saves
 }
 
 // Beim Start das aktuelle Jahr laden
-function loadCurrentYearData() {
+async function loadCurrentYearData() {
     const currentYear = new Date().getFullYear();
-    if (!loadDataForYear(currentYear)) {
+    if (!(await loadDataForYear(currentYear))) {
         console.log(`Keine gespeicherten Daten für ${currentYear} gefunden - Start mit leerer Datenbank`);
         tournaments = [];
         teams = [];
@@ -1004,7 +1021,7 @@ function checkGroupPhaseCompletion() {
 }
 
 // Generiert automatisch K.O.-Spiele wenn Gruppenphase beendet ist
-function generateFinalTableAndKnockoutMatches(customConfig = null) {
+async function generateFinalTableAndKnockoutMatches(customConfig = null) {
     console.log('=== K.O.-Generierung Start ===');
     
     const groupPhaseComplete = checkGroupPhaseCompletion();
@@ -1182,7 +1199,7 @@ function generateFinalTableAndKnockoutMatches(customConfig = null) {
         console.log(`K.O.-Phase generiert: ${koMatches.length} Spiele erstellt`);
         console.log('Finale Tabelle:', finalTable.map(t => `${t.team} (${t.points} Pkt.)`));
         
-        autoSave();
+        await autoSave();
         return true;
     }
     
@@ -1729,7 +1746,7 @@ app.get('/api/jersey-colors', (req, res) => {
 });
 
 // Teams registrieren (erweitert mit Trikotfarbe)
-app.post('/api/teams', (req, res) => {
+app.post('/api/teams', async (req, res) => {
     const { teamName, contactName, contactInfo, jerseyColor } = req.body;
     
     if (!teamName || !contactName || !contactInfo || !jerseyColor) {
@@ -1767,7 +1784,15 @@ app.post('/api/teams', (req, res) => {
     };
     
     teams.push(team);
-    autoSave();
+    await autoSave();
+    
+    // Broadcast Team-Anmeldung an alle Clients
+    broadcastUpdate('team-registered', {
+        team: team,
+        totalTeams: teams.length,
+        timestamp: new Date().toISOString()
+    });
+    
     res.json({ success: true, team });
 });
 
@@ -1813,7 +1838,7 @@ app.post('/api/admin/analyze-tournament-config', (req, res) => {
 });
 
 // ========= VERBESSERTE ROUTE: Anmeldung schließen (nur Gruppen + Swiss System) ==========
-app.post('/api/admin/close-registration', (req, res) => {
+app.post('/api/admin/close-registration', async (req, res) => {
     const { 
         password, 
         format, // 'groups', 'swiss'
@@ -1912,7 +1937,16 @@ app.post('/api/admin/close-registration', (req, res) => {
         currentTournament.status = 'active';
         currentTournament.phase = currentTournament.format === 'groups' ? 'group' : currentTournament.format;
         
-        autoSave();
+        await autoSave();
+        
+        // Broadcast Spielplan-Generierung an alle Clients
+        broadcastUpdate('matches-generated', {
+            tournament: currentTournament,
+            matches: matches,
+            totalMatches: matches.length,
+            format: format,
+            timestamp: new Date().toISOString()
+        });
         
         console.log(`✅ Turnier aktiviert mit ${format}: ${teams.length} Teams, ${matches.length} Spiele generiert`);
         
@@ -1959,7 +1993,7 @@ app.post('/api/admin/close-registration', (req, res) => {
 });
 
 // Elfmeterschießen generieren
-app.post('/api/admin/generate-penalties', (req, res) => {
+app.post('/api/admin/generate-penalties', async (req, res) => {
     const { password } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -1984,7 +2018,7 @@ app.post('/api/admin/generate-penalties', (req, res) => {
         // Füge Elfmeterschießen zu den Matches hinzu
         matches.push(...penaltyMatches);
         
-        autoSave();
+        await autoSave();
         
         res.json({
             success: true,
@@ -2000,7 +2034,7 @@ app.post('/api/admin/generate-penalties', (req, res) => {
 });
 
 // Admin: Team löschen
-app.delete('/api/admin/teams/:teamId', (req, res) => {
+app.delete('/api/admin/teams/:teamId', async (req, res) => {
     const { password } = req.body;
     const teamId = parseInt(req.params.teamId);
     
@@ -2032,13 +2066,13 @@ app.delete('/api/admin/teams/:teamId', (req, res) => {
     }
     
     teams.splice(teamIndex, 1);
-    autoSave();
+    await autoSave();
     
     res.json({ success: true, message: `Team "${teamName}" erfolgreich gelöscht` });
 });
 
 // Admin: Team bearbeiten
-app.put('/api/admin/teams/:teamId', (req, res) => {
+app.put('/api/admin/teams/:teamId', async (req, res) => {
     const { password, teamName, contactName, contactInfo, jerseyColor } = req.body;
     const teamId = parseInt(req.params.teamId);
     
@@ -2089,12 +2123,12 @@ app.put('/api/admin/teams/:teamId', (req, res) => {
         }
     }
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, team });
 });
 
 // Admin: Match löschen
-app.delete('/api/admin/matches/:matchId', (req, res) => {
+app.delete('/api/admin/matches/:matchId', async (req, res) => {
     const { password } = req.body;
     const matchId = req.params.matchId;
     
@@ -2116,13 +2150,13 @@ app.delete('/api/admin/matches/:matchId', (req, res) => {
     }
     
     matches.splice(matchIndex, 1);
-    autoSave();
+    await autoSave();
     
     res.json({ success: true, message: `Spiel "${match.team1} vs ${match.team2}" erfolgreich gelöscht` });
 });
 
 // Admin: Match bearbeiten
-app.put('/api/admin/matches/:matchId', (req, res) => {
+app.put('/api/admin/matches/:matchId', async (req, res) => {
     const { password, team1, team2, group, referee, datetime } = req.body;
     const matchId = req.params.matchId;
     
@@ -2156,12 +2190,12 @@ app.put('/api/admin/matches/:matchId', (req, res) => {
         updateGroupTable(match.group, matches);
     }
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, match });
 });
 
 // Endpunkt: Spiel zeitlich planen
-app.put('/api/admin/matches/:matchId/schedule', (req, res) => {
+app.put('/api/admin/matches/:matchId/schedule', async (req, res) => {
     const { password, datetime } = req.body;
     const { matchId } = req.params;
     
@@ -2187,12 +2221,12 @@ app.put('/api/admin/matches/:matchId/schedule', (req, res) => {
         currentTournament.lastUpdated = new Date().toISOString();
     }
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, match });
 });
 
 // Endpunkt: Zeitplanung entfernen
-app.delete('/api/admin/matches/:matchId/schedule', (req, res) => {
+app.delete('/api/admin/matches/:matchId/schedule', async (req, res) => {
     const { password } = req.body;
     const { matchId } = req.params;
     
@@ -2213,7 +2247,7 @@ app.delete('/api/admin/matches/:matchId/schedule', (req, res) => {
         currentTournament.lastUpdated = new Date().toISOString();
     }
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, match });
 });
 
@@ -2258,7 +2292,7 @@ function updateDependentKnockoutMatches(completedMatchId) {
 }
 
 // Admin: Ergebnis bearbeiten
-app.put('/api/admin/results/:matchId', (req, res) => {
+app.put('/api/admin/results/:matchId', async (req, res) => {
     const { password, score1, score2 } = req.body;
     const matchId = req.params.matchId;
     
@@ -2279,7 +2313,7 @@ app.put('/api/admin/results/:matchId', (req, res) => {
         updateGroupTable(match.group, matches);
         
         // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
-        const koGenerated = generateFinalTableAndKnockoutMatches();
+        const koGenerated = await generateFinalTableAndKnockoutMatches();
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
@@ -2291,12 +2325,12 @@ app.put('/api/admin/results/:matchId', (req, res) => {
         updateDependentKnockoutMatches(matchId);
     }
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, match });
 });
 
 // Admin: Neues Match hinzufügen
-app.post('/api/admin/matches', (req, res) => {
+app.post('/api/admin/matches', async (req, res) => {
     const { password, team1, team2, group, phase, referee, datetime } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2328,13 +2362,13 @@ app.post('/api/admin/matches', (req, res) => {
     }
     
     matches.push(newMatch);
-    autoSave();
+    await autoSave();
     
     res.json({ success: true, match: newMatch });
 });
 
 // Admin: Turnier-Status ändern
-app.put('/api/admin/tournament/status', (req, res) => {
+app.put('/api/admin/tournament/status', async (req, res) => {
     const { password, status } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2353,7 +2387,15 @@ app.put('/api/admin/tournament/status', (req, res) => {
     currentTournament.status = status;
     currentTournament.lastUpdated = new Date().toISOString();
     
-    autoSave();
+    await autoSave();
+    
+    // Broadcast Status-Änderung an alle Clients
+    broadcastUpdate('tournament-status-changed', {
+        tournament: currentTournament,
+        newStatus: status,
+        timestamp: new Date().toISOString()
+    });
+    
     res.json({ success: true, tournament: currentTournament });
 });
 
@@ -2518,7 +2560,7 @@ app.post('/api/admin/get-final-table', (req, res) => {
 });
 
 // Admin: K.O.-Spiele manuell generieren
-app.post('/api/admin/generate-knockout', (req, res) => {
+app.post('/api/admin/generate-knockout', async (req, res) => {
     const { password, config } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2556,7 +2598,7 @@ app.post('/api/admin/generate-knockout', (req, res) => {
         console.log(`  ${index + 1}. ${match.team1} vs ${match.team2} - Phase: ${match.phase || 'undefined'} - Gruppe: ${match.group || 'undefined'} - Abgeschlossen: ${match.completed}`);
     });
     
-    const koGenerated = generateFinalTableAndKnockoutMatches(config);
+    const koGenerated = await generateFinalTableAndKnockoutMatches(config);
     
     if (koGenerated) {
         const newKoMatches = matches.filter(m => 
@@ -2598,7 +2640,7 @@ app.post('/api/admin/generate-knockout', (req, res) => {
 });
 
 // Admin: Turnier komplett zurücksetzen
-app.delete('/api/admin/tournament/reset', (req, res) => {
+app.delete('/api/admin/tournament/reset', async (req, res) => {
     const { password, confirmText } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2624,7 +2666,7 @@ app.delete('/api/admin/tournament/reset', (req, res) => {
     const filename = path.join(SAVES_DIR, `${year}.json`);
     try {
         if (fs.existsSync(filename)) {
-            fs.unlinkSync(filename);
+            await fs.promises.unlink(filename);
             console.log(`Turnierdatei ${filename} gelöscht`);
         }
     } catch (error) {
@@ -2633,6 +2675,13 @@ app.delete('/api/admin/tournament/reset', (req, res) => {
     
     console.log(`Turnier ${year} komplett zurückgesetzt`);
     
+    // Benachrichtige alle WebSocket-Clients über das Tournament-Reset
+    broadcastUpdate('tournament-reset', {
+        message: `Turnier ${year} wurde komplett zurückgesetzt`,
+        year: year,
+        timestamp: new Date().toISOString()
+    });
+    
     res.json({ 
         success: true, 
         message: `Turnier ${year} wurde komplett zurückgesetzt. Alle Teams, Spiele und Einstellungen wurden gelöscht.` 
@@ -2640,7 +2689,7 @@ app.delete('/api/admin/tournament/reset', (req, res) => {
 });
 
 // Admin: Gruppen neu organisieren
-app.post('/api/admin/tournament/reorganize-groups', (req, res) => {
+app.post('/api/admin/tournament/reorganize-groups', async (req, res) => {
     const { password, groupSize } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2667,7 +2716,7 @@ app.post('/api/admin/tournament/reorganize-groups', (req, res) => {
     matches = [...matches, ...matchesWithReferees];
     
     currentTournament.lastUpdated = new Date().toISOString();
-    autoSave();
+    await autoSave();
     
     res.json({ 
         success: true, 
@@ -2678,7 +2727,7 @@ app.post('/api/admin/tournament/reorganize-groups', (req, res) => {
 });
 
 // Admin: Alle Matches zurücksetzen (Ergebnisse löschen)
-app.post('/api/admin/matches/reset-results', (req, res) => {
+app.post('/api/admin/matches/reset-results', async (req, res) => {
     const { password } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2714,7 +2763,7 @@ app.post('/api/admin/matches/reset-results', (req, res) => {
         });
     }
     
-    autoSave();
+    await autoSave();
     res.json({ 
         success: true, 
         message: `${resetCount} Spielergebnisse zurückgesetzt und Tabellen geleert` 
@@ -2722,7 +2771,7 @@ app.post('/api/admin/matches/reset-results', (req, res) => {
 });
 
 // Admin: Alle Zeitplanungen zurücksetzen
-app.post('/api/admin/matches/reset-schedule', (req, res) => {
+app.post('/api/admin/matches/reset-schedule', async (req, res) => {
     const { password } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2737,7 +2786,7 @@ app.post('/api/admin/matches/reset-schedule', (req, res) => {
         }
     });
     
-    autoSave();
+    await autoSave();
     res.json({ 
         success: true, 
         message: `${resetCount} Zeitplanungen zurückgesetzt` 
@@ -2745,7 +2794,7 @@ app.post('/api/admin/matches/reset-schedule', (req, res) => {
 });
 
 // Admin: Alle Spiele automatisch planen
-app.post('/api/admin/matches/schedule-all', (req, res) => {
+app.post('/api/admin/matches/schedule-all', async (req, res) => {
     const { password, startTime, matchDuration, halftimeDuration, halftimeBreak, breakDuration } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2843,7 +2892,16 @@ app.post('/api/admin/matches/schedule-all', (req, res) => {
             currentTournament.lastUpdated = new Date().toISOString();
         }
         
-        autoSave();
+        await autoSave();
+        
+        // Broadcast Spielplan-Update an alle Clients
+        broadcastUpdate('matches-scheduled', {
+            scheduledMatches: unscheduledMatches,
+            scheduledCount: unscheduledMatches.length,
+            startTime: startTime,
+            totalMatches: matches.length,
+            timestamp: new Date().toISOString()
+        });
         
         res.json({
             success: true,
@@ -2892,7 +2950,7 @@ app.get('/api/contact', (req, res) => {
 });
 
 // Admin: Regeln speichern
-app.post('/api/admin/rules', (req, res) => {
+app.post('/api/admin/rules', async (req, res) => {
     const { password, rules } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2900,12 +2958,12 @@ app.post('/api/admin/rules', (req, res) => {
     }
     
     tournamentRules = rules || "";
-    autoSave();
+    await autoSave();
     res.json({ success: true, rules: tournamentRules });
 });
 
 // Admin: Kontaktdaten bearbeiten
-app.post('/api/admin/contact', (req, res) => {
+app.post('/api/admin/contact', async (req, res) => {
     const { password, address, nextcloudGroup, additional } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2918,12 +2976,12 @@ app.post('/api/admin/contact', (req, res) => {
         additional: additional || ""
     };
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, contact: contactData });
 });
 
 // Admin: Turnier erstellen
-app.post('/api/admin/tournament', (req, res) => {
+app.post('/api/admin/tournament', async (req, res) => {
     const { password, year } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2932,7 +2990,7 @@ app.post('/api/admin/tournament', (req, res) => {
     
     const tournamentYear = year || new Date().getFullYear();
     
-    loadDataForYear(tournamentYear);
+    await loadDataForYear(tournamentYear);
     
     if (currentTournament && currentTournament.year === tournamentYear) {
         return res.status(400).json({ error: `Für ${tournamentYear} existiert bereits ein Turnier` });
@@ -2958,13 +3016,13 @@ app.post('/api/admin/tournament', (req, res) => {
     matches = [];
     tournaments = [currentTournament];
     
-    autoSave();
+    await autoSave();
     
     res.json({ success: true, tournament: currentTournament });
 });
 
 // Admin: Spielzeit setzen
-app.post('/api/admin/schedule', (req, res) => {
+app.post('/api/admin/schedule', async (req, res) => {
     const { password, matchId, datetime } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -2980,13 +3038,13 @@ app.post('/api/admin/schedule', (req, res) => {
         datetime: new Date(datetime)
     };
     
-    autoSave();
+    await autoSave();
     res.json({ success: true, match });
 });
 
 // Admin: Alle Spiele automatisch planen (intelligenter Algorithmus)
 // Admin: K.O.-Spiele intelligent planen
-app.post('/api/admin/schedule-knockout', (req, res) => {
+app.post('/api/admin/schedule-knockout', async (req, res) => {
     const { password, startTime, matchDuration, breakBetweenRounds } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3036,7 +3094,7 @@ app.post('/api/admin/schedule-knockout', (req, res) => {
         currentTournament.lastUpdated = new Date().toISOString();
     }
     
-    autoSave();
+    await autoSave();
     res.json({ 
         success: true, 
         scheduledMatches: scheduledCount,
@@ -3044,7 +3102,7 @@ app.post('/api/admin/schedule-knockout', (req, res) => {
     });
 });
 
-app.post('/api/admin/schedule-all', (req, res) => {
+app.post('/api/admin/schedule-all', async (req, res) => {
     const { password, startTime, matchDuration } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3081,7 +3139,7 @@ app.post('/api/admin/schedule-all', (req, res) => {
             currentTournament.lastUpdated = new Date().toISOString();
         }
         
-        autoSave();
+        await autoSave();
         res.json({ 
             success: true, 
             scheduledMatches: scheduledMatches.length,
@@ -3094,12 +3152,13 @@ app.post('/api/admin/schedule-all', (req, res) => {
     }
 });
 
-// API: Nächstes geplantes Spiel abrufen
+// API: Nächstes geplantes Spiel abrufen (auch überfällige)
 app.get('/api/next-match', (req, res) => {
     const now = new Date();
     
+    // Finde das nächste noch nicht abgeschlossene Spiel (auch überfällige)
     const upcomingMatches = matches
-        .filter(m => m.scheduled && !m.completed && new Date(m.scheduled.datetime) > now)
+        .filter(m => m.scheduled && !m.completed)
         .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime));
     
     if (upcomingMatches.length > 0) {
@@ -3152,7 +3211,7 @@ app.get('/api/live-match', (req, res) => {
 });
 
 // Admin: Aktuelles Spiel setzen
-app.post('/api/admin/current-match', (req, res) => {
+app.post('/api/admin/current-match', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3161,7 +3220,7 @@ app.post('/api/admin/current-match', (req, res) => {
     
     if (currentTournament) {
         currentTournament.currentMatch = matchId;
-        autoSave();
+        await autoSave();
         broadcastUpdate('current-match-changed', { matchId, currentMatch: matchId });
     }
     
@@ -3169,7 +3228,7 @@ app.post('/api/admin/current-match', (req, res) => {
 });
 
 // Admin: Live-Score aktualisieren
-app.post('/api/admin/live-score', (req, res) => {
+app.post('/api/admin/live-score', async (req, res) => {
     const { password, matchId, score1, score2 } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3185,13 +3244,13 @@ app.post('/api/admin/live-score', (req, res) => {
     match.liveScore.score2 = parseInt(score2) || 0;
     match.liveScore.lastScoreUpdate = new Date();
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('live-score-update', { matchId, score1: match.liveScore.score1, score2: match.liveScore.score2, match });
     res.json({ success: true, match });
 });
 
 // Admin: Spiel mit Halbzeitlänge starten
-app.post('/api/admin/start-match', (req, res) => {
+app.post('/api/admin/start-match', async (req, res) => {
     const { password, matchId, halfTimeMinutes, halftimeBreakMinutes } = req.body;
     
     console.log(`Start match request: matchId=${matchId}, halfTime=${halfTimeMinutes}min, break=${halftimeBreakMinutes}min`);
@@ -3231,7 +3290,7 @@ app.post('/api/admin/start-match', (req, res) => {
         lastScoreUpdate: startTime
     };
     
-    autoSave();
+    await autoSave();
     console.log(`Match ${matchId} started successfully, broadcasting update`);
     broadcastUpdate('match-started', { matchId, match, currentMatch: matchId });
     console.log(`Sending success response for match ${matchId}`);
@@ -3239,7 +3298,7 @@ app.post('/api/admin/start-match', (req, res) => {
 });
 
 // Admin: Spiel pausieren
-app.post('/api/admin/pause-match', (req, res) => {
+app.post('/api/admin/pause-match', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3255,7 +3314,7 @@ app.post('/api/admin/pause-match', (req, res) => {
         match.liveScore.isPaused = true;
         match.liveScore.pauseStartTime = new Date();
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('match-paused', { matchId, match });
         res.json({ success: true, message: 'Spiel pausiert' });
     } else {
@@ -3264,7 +3323,7 @@ app.post('/api/admin/pause-match', (req, res) => {
 });
 
 // Admin: Spiel fortsetzen
-app.post('/api/admin/resume-match', (req, res) => {
+app.post('/api/admin/resume-match', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3282,7 +3341,7 @@ app.post('/api/admin/resume-match', (req, res) => {
         match.liveScore.isPaused = false;
         delete match.liveScore.pauseStartTime;
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('match-resumed', { matchId, match });
         res.json({ success: true, message: 'Spiel fortgesetzt' });
     } else {
@@ -3291,7 +3350,7 @@ app.post('/api/admin/resume-match', (req, res) => {
 });
 
 // Admin: Halbzeit starten
-app.post('/api/admin/halftime-break', (req, res) => {
+app.post('/api/admin/halftime-break', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3308,7 +3367,7 @@ app.post('/api/admin/halftime-break', (req, res) => {
         match.liveScore.firstHalfEndTime = new Date();
         match.liveScore.isPaused = false;
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('halftime-started', { matchId, match });
         res.json({ success: true, message: 'Halbzeitpause gestartet' });
     } else {
@@ -3317,7 +3376,7 @@ app.post('/api/admin/halftime-break', (req, res) => {
 });
 
 // Admin: Zweite Halbzeit starten
-app.post('/api/admin/start-second-half', (req, res) => {
+app.post('/api/admin/start-second-half', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3335,7 +3394,7 @@ app.post('/api/admin/start-second-half', (req, res) => {
         match.liveScore.secondHalfStartTime = new Date();
         match.liveScore.isPaused = false;
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('second-half-started', { matchId, match });
         res.json({ success: true, message: 'Zweite Halbzeit gestartet' });
     } else {
@@ -3344,7 +3403,7 @@ app.post('/api/admin/start-second-half', (req, res) => {
 });
 
 // Admin: Spiel abschließen
-app.post('/api/admin/finish-match', (req, res) => {
+app.post('/api/admin/finish-match', async (req, res) => {
     const { password, matchId } = req.body;
     
     console.log(`Finish match request: matchId=${matchId}`);
@@ -3439,7 +3498,7 @@ app.post('/api/admin/finish-match', (req, res) => {
         updateGroupTable(match.group, matches);
         
         // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
-        const koGenerated = generateFinalTableAndKnockoutMatches();
+        const koGenerated = await generateFinalTableAndKnockoutMatches();
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
         }
@@ -3456,13 +3515,13 @@ app.post('/api/admin/finish-match', (req, res) => {
         currentTournament.currentMatch = null;
     }
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('match-finished', { matchId, match });
     res.json({ success: true, match });
 });
 
 // Admin: Verlängerung starten
-app.post('/api/admin/start-overtime', (req, res) => {
+app.post('/api/admin/start-overtime', async (req, res) => {
     const { password, matchId, overtimeDuration } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3496,13 +3555,13 @@ app.post('/api/admin/start-overtime', (req, res) => {
     match.liveScore.currentHalf = 3; // Kennzeichnet Verlängerung
     match.liveScore.isPaused = false;
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('overtime-started', { matchId, match });
     res.json({ success: true, message: 'Verlängerung gestartet' });
 });
 
 // Admin: Verlängerung Halbzeit
-app.post('/api/admin/overtime-halftime', (req, res) => {
+app.post('/api/admin/overtime-halftime', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3518,7 +3577,7 @@ app.post('/api/admin/overtime-halftime', (req, res) => {
         match.liveScore.overtime.halfTimeBreak = true;
         match.liveScore.isPaused = true;
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('overtime-halftime', { matchId, match });
         res.json({ success: true, message: 'Verlängerung Halbzeitpause' });
     } else {
@@ -3527,7 +3586,7 @@ app.post('/api/admin/overtime-halftime', (req, res) => {
 });
 
 // Admin: Verlängerung zweite Halbzeit
-app.post('/api/admin/overtime-second-half', (req, res) => {
+app.post('/api/admin/overtime-second-half', async (req, res) => {
     const { password, matchId } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3545,7 +3604,7 @@ app.post('/api/admin/overtime-second-half', (req, res) => {
         match.liveScore.currentHalf = 4; // Zweite Halbzeit Verlängerung
         match.liveScore.isPaused = false;
         
-        autoSave();
+        await autoSave();
         broadcastUpdate('overtime-second-half', { matchId, match });
         res.json({ success: true, message: 'Verlängerung zweite Halbzeit gestartet' });
     } else {
@@ -3554,7 +3613,7 @@ app.post('/api/admin/overtime-second-half', (req, res) => {
 });
 
 // Admin: Elfmeterschießen starten
-app.post('/api/admin/start-penalty-shootout', (req, res) => {
+app.post('/api/admin/start-penalty-shootout', async (req, res) => {
     const { password, matchId, shootersPerTeam } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3594,13 +3653,13 @@ app.post('/api/admin/start-penalty-shootout', (req, res) => {
     
     match.liveScore.currentHalf = 5; // Kennzeichnet Elfmeterschießen
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('penalty-shootout-started', { matchId, match });
     res.json({ success: true, message: 'Elfmeterschießen gestartet' });
 });
 
 // Admin: Elfmeter Ergebnis
-app.post('/api/admin/penalty-result', (req, res) => {
+app.post('/api/admin/penalty-result', async (req, res) => {
     const { password, matchId, scored } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3647,7 +3706,7 @@ app.post('/api/admin/penalty-result', (req, res) => {
         // Bei weiterem Unentschieden: Sudden Death (wird automatisch fortgesetzt)
     }
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('penalty-result', { matchId, match, scored: isScored });
     res.json({ success: true, penalty });
 });
@@ -3666,7 +3725,7 @@ app.get('/api/matches', (req, res) => {
 });
 
 // Admin: Ergebnis eintragen
-app.post('/api/admin/result', (req, res) => {
+app.post('/api/admin/result', async (req, res) => {
     const { password, matchId, score1, score2 } = req.body;
     
     if (password !== ADMIN_PASSWORD) {
@@ -3686,7 +3745,7 @@ app.post('/api/admin/result', (req, res) => {
         updateGroupTable(match.group, matches);
         
         // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
-        const koGenerated = generateFinalTableAndKnockoutMatches();
+        const koGenerated = await generateFinalTableAndKnockoutMatches();
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
@@ -3698,7 +3757,7 @@ app.post('/api/admin/result', (req, res) => {
         updateDependentKnockoutMatches(matchId);
     }
     
-    autoSave();
+    await autoSave();
     broadcastUpdate('match-result-added', { matchId, match, score1, score2 });
     res.json({ success: true, match });
 });
@@ -3724,7 +3783,7 @@ app.post('/api/admin/login', (req, res) => {
 });
 
 // Admin: Import von Turnierdaten
-app.post('/api/admin/import', (req, res) => {
+app.post('/api/admin/import', async (req, res) => {
     try {
         const { password, data } = req.body;
         
@@ -3783,7 +3842,7 @@ app.post('/api/admin/import', (req, res) => {
         }
         
         // Save imported data
-        autoSave();
+        await autoSave();
         
         // Broadcast update to all connected clients
         broadcastUpdate('data-imported', {
@@ -3816,30 +3875,74 @@ app.post('/api/admin/import', (req, res) => {
 });
 
 // Daten beim Start laden
-loadCurrentYearData();
+(async () => {
+    await loadCurrentYearData();
+})();
 
 // WebSocket Connection Handler
 io.on('connection', (socket) => {
     console.log('Admin client connected:', socket.id);
     
-    // Send initial data to newly connected admin
-    socket.emit('initial-data', {
-        tournaments,
-        teams,
-        matches,
-        currentTournament,
-        tournamentRules
+    // Send initial data in smaller chunks to prevent connection issues
+    setTimeout(() => {
+        try {
+            socket.emit('initial-data', {
+                tournaments: tournaments || [],
+                teams: teams || [],
+                matches: (matches || []).slice(0, 100), // Limit initial matches
+                currentTournament: currentTournament || null,
+                tournamentRules: tournamentRules || ""
+            });
+        } catch (error) {
+            console.error('Error sending initial data:', error);
+        }
+    }, 100);
+    
+    socket.on('disconnect', (reason) => {
+        console.log('Admin client disconnected:', socket.id, 'Reason:', reason);
     });
     
-    socket.on('disconnect', () => {
-        console.log('Admin client disconnected:', socket.id);
+    socket.on('error', (error) => {
+        console.error('Socket error:', error);
     });
 });
 
-// Broadcast function for real-time updates
+// Broadcast function for real-time updates with throttling
+let lastBroadcast = {};
 function broadcastUpdate(event, data) {
-    io.emit(event, data);
+    const now = Date.now();
+    const key = event;
+    
+    // Throttle broadcasts to prevent overwhelming clients
+    if (lastBroadcast[key] && now - lastBroadcast[key] < 100) {
+        return; // Skip if less than 100ms since last broadcast of this type
+    }
+    
+    lastBroadcast[key] = now;
+    
+    try {
+        io.emit(event, data);
+    } catch (error) {
+        console.error('Error broadcasting update:', error);
+    }
 }
+
+// Graceful shutdown handler
+process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received: closing HTTP server');
+    server.close(() => {
+        console.log('HTTP server closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT signal received: closing HTTP server');
+    server.close(() => {
+        console.log('HTTP server closed');
+        process.exit(0);
+    });
+});
 
 // Server starten
 server.listen(PORT, '0.0.0.0', () => {

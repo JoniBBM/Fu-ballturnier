@@ -1,0 +1,11 @@
+saves/
+saves/*.json
+*.json
+.git/
+node_modules/
+logs/
+*.log
+.env
+public/*.js
+public/*.css
+public/*.html
