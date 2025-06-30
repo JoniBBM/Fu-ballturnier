@@ -67,6 +67,33 @@ body {
     align-items: center;
 }
 
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--white);
+    transition: all 0.3s ease;
+}
+
+.connection-status i {
+    font-size: 0.75rem;
+}
+
+.connection-status:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
 .header h1 {
     font-size: 1.875rem;
     font-weight: 700;

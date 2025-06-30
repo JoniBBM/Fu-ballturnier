@@ -13,9 +13,15 @@
         <header class="header">
             <div class="header-content">
                 <h1><i class="fas fa-futbol"></i> CVJM Fellbach Fußballturnier</h1>
-                <button id="admin-btn" class="admin-btn">
-                    <i class="fas fa-user-shield"></i> Admin
-                </button>
+                <div class="header-right">
+                    <div class="connection-status" id="connection-status" title="Verbindungsstatus">
+                        <i class="fas fa-circle" style="color: #dc2626;"></i>
+                        <span>Offline</span>
+                    </div>
+                    <button id="admin-btn" class="admin-btn">
+                        <i class="fas fa-user-shield"></i> Admin
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -260,6 +266,7 @@
     <!-- Notification -->
     <div id="notification" class="notification"></div>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

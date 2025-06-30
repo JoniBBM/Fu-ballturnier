@@ -4,6 +4,21 @@ let isAdminLoggedIn = false;
 let adminPassword = '';
 let availableColors = [];
 
+// WebSocket Connection
+let socket = null;
+let isConnected = false;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+const reconnectDelay = 3000;
+
+// Connection stability tracking
+let connectionStability = {
+    consecutiveDisconnects: 0,
+    lastConnectionTime: null,
+    shouldUseFallback: false,
+    fallbackStartTime: null
+};
+
 // DOM Elements
 const navBtns = document.querySelectorAll('.nav-btn');
 const tabContents = document.querySelectorAll('.tab-content');
@@ -18,7 +33,18 @@ const notification = document.getElementById('notification');
 // Auto-refresh state
 let lastScheduleUpdate = null;
 let scheduleRefreshInterval = null;
+let liveUpdateInterval = null;
 let currentActiveTab = 'home';
+
+// Local Live Timer Management
+let localLiveTimerInterval = null;
+let currentLiveMatch = null;
+
+// Smart Update Management
+let updateTimeout = null;
+let isUpdating = false;
+let pendingUpdate = false;
+let lastWebSocketUpdate = 0;
 
 // Utility Functions
 function showNotification(message, type = 'success') {
@@ -53,10 +79,382 @@ function updateStats() {
         });
 }
 
+// Smart Update Functions
+function coordinatedUpdate(callback, minInterval = 1000) {
+    const now = Date.now();
+    if (now - lastWebSocketUpdate < minInterval) {
+        // Too frequent, skip this update
+        return false;
+    }
+    lastWebSocketUpdate = now;
+    callback();
+    return true;
+}
+
+function debouncedTabUpdate(tab) {
+    if (updateTimeout) {
+        clearTimeout(updateTimeout);
+    }
+    
+    updateTimeout = setTimeout(() => {
+        if (!isUpdating) {
+            isUpdating = true;
+            loadTabContent(tab).finally(() => {
+                isUpdating = false;
+                // Handle pending updates
+                if (pendingUpdate) {
+                    pendingUpdate = false;
+                    setTimeout(() => debouncedTabUpdate(currentActiveTab), 500);
+                }
+            });
+        } else {
+            pendingUpdate = true;
+        }
+    }, 300);
+}
+
+function smartUpdate(relevantTabs) {
+    if (relevantTabs.includes(currentActiveTab)) {
+        coordinatedUpdate(() => debouncedTabUpdate(currentActiveTab), 1000);
+    }
+}
+
+// WebSocket Functions
+function isWebSocketReady() {
+    return typeof io !== 'undefined' && 
+           socket && 
+           socket.connected && 
+           isConnected &&
+           !connectionStability.shouldUseFallback;
+}
+
+function initializeWebSocket() {
+    if (socket) {
+        socket.removeAllListeners();
+        socket.disconnect();
+    }
+    
+    if (typeof io === 'undefined') {
+        console.warn('Socket.IO not available, using fallback polling');
+        return false;
+    }
+    
+    socket = io({
+        transports: ['websocket', 'polling'],
+        upgrade: true,
+        rememberUpgrade: true,
+        timeout: 20000,
+        forceNew: false,
+        reconnection: false // We handle reconnection manually
+    });
+    
+    socket.on('connect', () => {
+        isConnected = true;
+        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        
+        // Track connection stability
+        const now = Date.now();
+        if (connectionStability.lastConnectionTime) {
+            const timeSinceLastConnection = now - connectionStability.lastConnectionTime;
+            if (timeSinceLastConnection < 10000) { // Less than 10 seconds since last connection
+                connectionStability.consecutiveDisconnects++;
+                console.log(`Rapid reconnect detected (${connectionStability.consecutiveDisconnects}). Connection unstable.`);
+                
+                // If we have too many rapid disconnects, force fallback mode
+                if (connectionStability.consecutiveDisconnects >= 3) {
+                    connectionStability.shouldUseFallback = true;
+                    connectionStability.fallbackStartTime = now;
+                    console.log('Connection deemed unstable, forcing fallback mode');
+                }
+            } else {
+                // Good connection, reset counter
+                connectionStability.consecutiveDisconnects = 0;
+                // If we've been in fallback for more than 60 seconds and connection seems stable, allow WebSocket
+                if (connectionStability.shouldUseFallback && (now - connectionStability.fallbackStartTime > 60000)) {
+                    connectionStability.shouldUseFallback = false;
+                    console.log('Connection stability restored, allowing WebSocket use');
+                }
+            }
+        }
+        connectionStability.lastConnectionTime = now;
+        
+        console.log('WebSocket connected - ready for live updates');
+        // Update connection status if indicator exists
+        updateConnectionStatus();
+        
+        // Only switch from fallback to WebSocket if connection is stable
+        if (currentActiveTab === 'live' && liveUpdateInterval && !connectionStability.shouldUseFallback) {
+            console.log('Switching live tab from fallback to WebSocket updates');
+            clearInterval(liveUpdateInterval);
+            liveUpdateInterval = null;
+        }
+    });
+
+    socket.on('disconnect', (reason) => {
+        isConnected = false;
+        console.log('WebSocket disconnected:', reason);
+        updateConnectionStatus();
+        
+        // Always start fallback immediately if we're on live tab and don't have it running
+        if (currentActiveTab === 'live' && !liveUpdateInterval && currentLiveMatch) {
+            console.log('Starting polling fallback due to disconnect');
+            startLiveUpdates(currentLiveMatch);
+        }
+        
+        // Handle different disconnect reasons
+        if (reason === 'transport close' || reason === 'transport error') {
+            console.log('Transport issue detected');
+            connectionStability.shouldUseFallback = true;
+            connectionStability.fallbackStartTime = Date.now();
+            
+            // Only try to reconnect if we haven't hit too many consecutive disconnects
+            if (connectionStability.consecutiveDisconnects < 5 && reconnectAttempts < maxReconnectAttempts) {
+                setTimeout(() => {
+                    reconnectAttempts++;
+                    console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} after transport issue`);
+                    if (socket && !socket.connected) {
+                        socket.connect();
+                    }
+                }, reconnectDelay * Math.pow(2, reconnectAttempts)); // Exponential backoff
+            } else {
+                console.log('Too many transport issues, staying in fallback mode');
+            }
+        } else if (reason !== 'io client disconnect' && reconnectAttempts < maxReconnectAttempts && connectionStability.consecutiveDisconnects < 3) {
+            // For other disconnect reasons, try normal reconnection if connection isn't too unstable
+            setTimeout(() => {
+                reconnectAttempts++;
+                console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+                if (socket && !socket.connected) {
+                    socket.connect();
+                }
+            }, reconnectDelay * reconnectAttempts);
+        } else {
+            console.log('WebSocket deemed unreliable, staying in polling mode');
+            connectionStability.shouldUseFallback = true;
+            connectionStability.fallbackStartTime = Date.now();
+        }
+    });
+
+    socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error);
+        isConnected = false;
+        updateConnectionStatus();
+        
+        // If we have connection errors, start polling fallback immediately
+        if (currentActiveTab === 'live' && !liveUpdateInterval && currentLiveMatch) {
+            console.log('Starting polling fallback due to connection error');
+            startLiveUpdates(currentLiveMatch);
+        }
+    });
+    
+    // Handle reconnect error
+    socket.on('reconnect_error', (error) => {
+        console.error('WebSocket reconnect error:', error);
+    });
+    
+    // Handle transport errors specifically
+    socket.on('error', (error) => {
+        console.error('WebSocket transport error:', error);
+        // Force switch to polling if we get transport errors
+        if (currentActiveTab === 'live' && !liveUpdateInterval && currentLiveMatch) {
+            console.log('Starting polling fallback due to transport error');
+            startLiveUpdates(currentLiveMatch);
+        }
+    });
+
+    // Setup WebSocket event listeners
+    setupWebSocketEventListeners();
+    
+    return true;
+}
+
+function updateConnectionStatus() {
+    // Optional: Update connection status indicator if it exists
+    const statusElement = document.getElementById('connection-status');
+    if (statusElement) {
+        if (isConnected) {
+            statusElement.innerHTML = '<i class="fas fa-circle" style="color: #16a34a;"></i> Live';
+            statusElement.title = 'WebSocket Verbindung aktiv';
+        } else {
+            statusElement.innerHTML = '<i class="fas fa-circle" style="color: #dc2626;"></i> Offline';
+            statusElement.title = 'WebSocket Verbindung getrennt';
+        }
+    }
+}
+
+function setupWebSocketEventListeners() {
+    // Live Score Updates - update live display immediately
+    socket.on('live-score-update', (data) => {
+        console.log('Live score update received:', data);
+        if (currentActiveTab === 'live' && data && data.match) {
+            updateLiveScoreDisplay(data);
+        }
+    });
+
+    // Match Started - refresh live tab and home statistics
+    socket.on('match-started', (data) => {
+        console.log('Match started:', data);
+        showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        
+        if (currentActiveTab === 'live') {
+            // Immediately start timer with new match data
+            if (data.match) {
+                currentLiveMatch = data.match;
+                startLocalLiveTimer(data.match);
+            }
+            coordinatedUpdate(() => loadLiveMatch(), 1000);
+        }
+        if (currentActiveTab === 'home') {
+            coordinatedUpdate(() => updateStats(), 1000);
+        }
+    });
+
+    // Match Finished - refresh multiple tabs
+    socket.on('match-finished', (data) => {
+        console.log('Match finished:', data);
+        showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
+        
+        // Stop local timer since match ended
+        stopLocalLiveTimer();
+        currentLiveMatch = null;
+        
+        // Smart update for relevant tabs
+        smartUpdate(['live', 'home', 'schedule']);
+    });
+
+    // Match Result Added - refresh tables, schedule, and home
+    socket.on('match-result-added', (data) => {
+        console.log('Match result added:', data);
+        showNotification(`Ergebnis eingetragen: ${data.match.team1} ${data.score1}:${data.score2} ${data.match.team2}`, 'success');
+        
+        // Smart update for relevant tabs
+        smartUpdate(['tables', 'schedule', 'home']);
+    });
+
+    // Current Match Changed - update live display
+    socket.on('current-match-changed', (data) => {
+        console.log('Current match changed:', data);
+        if (currentActiveTab === 'live') {
+            // Stop current timer first
+            stopLocalLiveTimer();
+            currentLiveMatch = null;
+            
+            // Immediately reload to show new match
+            coordinatedUpdate(() => loadLiveMatch(), 200);
+        }
+    });
+
+    // Match Paused
+    socket.on('match-paused', (data) => {
+        console.log('Match paused:', data);
+        if (currentActiveTab === 'live' && currentLiveMatch) {
+            // Update local match data
+            currentLiveMatch.isPaused = true;
+            currentLiveMatch.pauseStartTime = data.pauseStartTime;
+            showNotification(`Spiel pausiert: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        }
+    });
+
+    // Match Resumed
+    socket.on('match-resumed', (data) => {
+        console.log('Match resumed:', data);
+        if (currentActiveTab === 'live' && currentLiveMatch) {
+            // Update local match data
+            currentLiveMatch.isPaused = false;
+            currentLiveMatch.pausedTime = data.totalPausedTime;
+            showNotification(`Spiel fortgesetzt: ${data.match.team1} vs ${data.match.team2}`, 'success');
+        }
+    });
+
+    // Halftime Started
+    socket.on('halftime-started', (data) => {
+        console.log('Halftime started:', data);
+        if (currentActiveTab === 'live' && currentLiveMatch) {
+            currentLiveMatch.halfTimeBreak = true;
+            currentLiveMatch.firstHalfEndTime = data.firstHalfEndTime;
+            showNotification(`Halbzeit: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        }
+    });
+
+    // Second Half Started
+    socket.on('second-half-started', (data) => {
+        console.log('Second half started:', data);
+        if (currentActiveTab === 'live') {
+            if (currentLiveMatch) {
+                currentLiveMatch.halfTimeBreak = false;
+                currentLiveMatch.currentHalf = 2;
+                currentLiveMatch.secondHalfStartTime = data.secondHalfStartTime;
+            }
+            showNotification(`2. Halbzeit gestartet: ${data.match.team1} vs ${data.match.team2}`, 'success');
+            // Reload live display to show correct UI
+            coordinatedUpdate(() => loadLiveMatch(), 500);
+        }
+    });
+
+    // Data Imported - refresh all content
+    socket.on('data-imported', (data) => {
+        console.log('Data imported:', data);
+        showNotification(`Turnierdaten aktualisiert: ${data.teamsCount} Teams, ${data.matchesCount} Spiele`, 'info');
+        // Force update regardless of timing
+        debouncedTabUpdate(currentActiveTab);
+    });
+
+    // Team Registered/Updated - refresh teams and home
+    socket.on('team-registered', (data) => {
+        console.log('Team registered:', data);
+        smartUpdate(['teams', 'home']);
+    });
+
+    // Tournament Status Changed
+    socket.on('tournament-status-changed', (data) => {
+        console.log('Tournament status changed:', data);
+        // Check registration status
+        checkRegistrationStatus();
+        if (currentActiveTab === 'home') {
+            coordinatedUpdate(() => updateStats(), 1000);
+        }
+    });
+}
+
+// Helper function to update live score display without full reload
+function updateLiveScoreDisplay(data) {
+    try {
+        if (!data || !data.match) return;
+        
+        // Update display elements
+        const score1Element = document.getElementById('live-score1');
+        const score2Element = document.getElementById('live-score2');
+        
+        if (score1Element && data.match.score1 !== null && data.match.score1 !== undefined) {
+            score1Element.textContent = data.match.score1;
+        }
+        if (score2Element && data.match.score2 !== null && data.match.score2 !== undefined) {
+            score2Element.textContent = data.match.score2;
+        }
+        
+        // Update local match data for timer calculations
+        if (currentLiveMatch && data.match) {
+            currentLiveMatch.score1 = data.match.score1;
+            currentLiveMatch.score2 = data.match.score2;
+            // Update other match properties if available
+            if (data.match.isPaused !== undefined) currentLiveMatch.isPaused = data.match.isPaused;
+            if (data.match.currentHalf !== undefined) currentLiveMatch.currentHalf = data.match.currentHalf;
+            if (data.match.halfTimeBreak !== undefined) currentLiveMatch.halfTimeBreak = data.match.halfTimeBreak;
+        }
+    } catch (error) {
+        console.error('Error updating live score display:', error);
+    }
+}
+
 // Navigation
 navBtns.forEach(btn => {
     btn.addEventListener('click', () => {
         const targetTab = btn.dataset.tab;
+        
+        // Stop local timer if switching away from live tab
+        if (currentActiveTab === 'live' && targetTab !== 'live') {
+            stopLocalLiveTimer();
+        }
         
         // Update current active tab
         currentActiveTab = targetTab;
@@ -109,22 +507,36 @@ function loadTabContent(tab) {
     }
 }
 
-// Auto-refresh mechanism for schedule updates
+// Fallback auto-refresh mechanism (only when WebSocket is not connected)
 function startScheduleAutoRefresh() {
+    // Only start polling if WebSocket is not ready
+    if (isWebSocketReady()) {
+        console.log('WebSocket ready, skipping polling-based auto-refresh');
+        return;
+    }
+    
     if (scheduleRefreshInterval) {
         clearInterval(scheduleRefreshInterval);
     }
     
+    console.log('WebSocket not available, starting fallback polling...');
     scheduleRefreshInterval = setInterval(async () => {
         try {
+            // Skip if WebSocket becomes available
+            if (isWebSocketReady()) {
+                clearInterval(scheduleRefreshInterval);
+                scheduleRefreshInterval = null;
+                console.log('WebSocket reconnected, stopping fallback polling');
+                return;
+            }
+            
             // Check if schedule was updated
             const response = await fetch('/api/tournament');
             const data = await response.json();
             
             if (data.tournament && data.tournament.lastUpdated) {
                 if (lastScheduleUpdate && new Date(data.tournament.lastUpdated) > new Date(lastScheduleUpdate)) {
-                    console.log('Schedule updated, refreshing content...');
-                    // Refresh current tab content if it's schedule, teams, tables, home, or live
+                    console.log('Schedule updated via fallback polling, refreshing content...');
                     if (['schedule', 'teams', 'tables', 'home', 'live'].includes(currentActiveTab)) {
                         loadTabContent(currentActiveTab);
                     }
@@ -132,9 +544,9 @@ function startScheduleAutoRefresh() {
                 lastScheduleUpdate = data.tournament.lastUpdated;
             }
         } catch (error) {
-            console.error('Error checking for schedule updates:', error);
+            console.error('Error checking for schedule updates via fallback:', error);
         }
-    }, 5000); // Check every 5 seconds
+    }, 10000); // Check every 10 seconds (less frequent than before)
 }
 
 // Modal Management
@@ -386,7 +798,6 @@ async function checkRegistrationStatus() {
 }
 
 // Live Match Functions
-let liveUpdateInterval = null;
 
 function calculateLiveTime(liveMatch) {
     if (!liveMatch || !liveMatch.startTime) {
@@ -395,7 +806,7 @@ function calculateLiveTime(liveMatch) {
     
     const now = new Date();
     const startTime = new Date(liveMatch.startTime);
-    const halfTimeMinutes = liveMatch.halfTimeMinutes || 45;
+    const halfTimeMinutes = liveMatch.halfTimeMinutes || 5; // Standard auf 5 Minuten geändert
     
     // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
     if (liveMatch.isPaused && liveMatch.pauseStartTime) {
@@ -728,11 +1139,12 @@ async function loadLiveMatch() {
                 </div>
             `;
             
-            // Clear existing interval
+            // Clear existing intervals
             if (liveUpdateInterval) {
                 clearInterval(liveUpdateInterval);
                 liveUpdateInterval = null;
             }
+            stopLocalLiveTimer();
         }
         
         liveContent.innerHTML = html;
@@ -753,7 +1165,22 @@ async function loadLiveMatch() {
 }
 
 function startLiveUpdates(liveMatch) {
-    console.log('Starting live updates for viewers...');
+    // Start local timer only if not already running
+    if (!localLiveTimerInterval) {
+        startLocalLiveTimer(liveMatch);
+    } else {
+        // Update the match data for existing timer
+        currentLiveMatch = liveMatch;
+        console.log('Local timer already running, updated match data');
+    }
+    
+    // Only start polling if WebSocket is not ready
+    if (isWebSocketReady()) {
+        console.log('WebSocket ready, live updates handled via WebSocket events');
+        return;
+    }
+    
+    console.log('WebSocket not ready, starting fallback live updates...');
     
     // Clear existing interval
     if (liveUpdateInterval) {
@@ -762,6 +1189,14 @@ function startLiveUpdates(liveMatch) {
     
     liveUpdateInterval = setInterval(async () => {
         try {
+            // Skip if WebSocket becomes available
+            if (isWebSocketReady()) {
+                clearInterval(liveUpdateInterval);
+                liveUpdateInterval = null;
+                console.log('WebSocket reconnected, stopping fallback live updates');
+                return;
+            }
+            
             // Fetch latest data first
             const [liveResponse, nextResponse] = await Promise.all([
                 fetch('/api/live-match'),
@@ -781,14 +1216,23 @@ function startLiveUpdates(liveMatch) {
             // Update liveMatch object with fresh data
             const updatedMatch = liveData.liveMatch;
             
-            // Update timer
+            // Update local match data for timer consistency
+            if (currentLiveMatch) {
+                Object.assign(currentLiveMatch, updatedMatch);
+            } else {
+                currentLiveMatch = updatedMatch;
+                // Restart timer with updated data
+                startLocalLiveTimer(updatedMatch);
+            }
+            
+            // Update timer (local timer should be handling this, but fallback for display)
             const timeInfo = calculateLiveTime(updatedMatch);
             const timerElement = document.getElementById('live-timer');
             const halfElement = document.getElementById('live-half-info');
             
             if (timerElement) {
                 timerElement.textContent = timeInfo.displayTime;
-                console.log(`Updated viewer timer: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
+                console.log(`Updated viewer timer (fallback): ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
             }
             if (halfElement) halfElement.textContent = timeInfo.halfInfo;
             
@@ -822,9 +1266,56 @@ function startLiveUpdates(liveMatch) {
             }
             
         } catch (error) {
-            console.error('Fehler beim Live-Update:', error);
+            console.error('Fehler beim Live-Update (fallback):', error);
         }
-    }, 1000);
+    }, 2000); // Less frequent polling: 2 seconds instead of 1
+}
+
+// Local Live Timer for smooth display updates
+function startLocalLiveTimer(liveMatch) {
+    console.log('Starting local live timer for public view...');
+    
+    // Store the current match data locally
+    currentLiveMatch = liveMatch;
+    
+    // Clear existing timer
+    if (localLiveTimerInterval) {
+        clearInterval(localLiveTimerInterval);
+    }
+    
+    // Start local timer that updates every second
+    localLiveTimerInterval = setInterval(() => {
+        if (!currentLiveMatch || currentActiveTab !== 'live') {
+            return;
+        }
+        
+        try {
+            // Calculate time based on stored match data and current time
+            const timeInfo = calculateLiveTime(currentLiveMatch);
+            
+            const timerElement = document.getElementById('live-timer');
+            const halfElement = document.getElementById('live-half-info');
+            
+            if (timerElement) {
+                timerElement.textContent = timeInfo.displayTime;
+            }
+            if (halfElement) {
+                halfElement.textContent = timeInfo.halfInfo;
+            }
+            
+        } catch (error) {
+            console.error('Local timer update error:', error);
+        }
+    }, 1000); // Update every second for smooth timer
+}
+
+// Stop local live timer
+function stopLocalLiveTimer() {
+    if (localLiveTimerInterval) {
+        clearInterval(localLiveTimerInterval);
+        localLiveTimerInterval = null;
+        console.log('Stopped local live timer');
+    }
 }
 
 // Rules Functions
@@ -1887,9 +2378,35 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTeams();
     checkRegistrationStatus();
     
-    // Check for live matches on page load
-    loadLiveMatch();
+    // Initialize WebSocket connection first
+    const webSocketResult = initializeWebSocket();
     
-    // Start auto-refresh for schedule updates
-    startScheduleAutoRefresh();
+    // Wait a moment for WebSocket to connect, then load live matches
+    if (webSocketResult !== false) {
+        // WebSocket initialization started, wait for connection
+        setTimeout(() => {
+            loadLiveMatch();
+        }, 500); // Short delay to allow WebSocket to connect
+    } else {
+        // WebSocket not available, load immediately with fallback
+        loadLiveMatch();
+    }
+    
+    // Start fallback auto-refresh (only if WebSocket fails)
+    setTimeout(() => {
+        startScheduleAutoRefresh();
+    }, 2000); // Wait 2 seconds for WebSocket to connect
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (socket) {
+            socket.close();
+        }
+        if (scheduleRefreshInterval) {
+            clearInterval(scheduleRefreshInterval);
+        }
+        if (liveUpdateInterval) {
+            clearInterval(liveUpdateInterval);
+        }
+    });
 });

@@ -12,11 +12,21 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 5;
 const reconnectDelay = 3000;
+let lastInitialDataLoad = 0;
+let isInitialized = false;
 
 // Debouncing and Request Management
 let refreshTimeout = null;
 let isRefreshing = false;
 let pendingRefresh = false;
+let lastWebSocketUpdate = 0;
+
+// Header Update Debouncing
+let connectionStatusTimeout = null;
+let tournamentInfoTimeout = null;
+
+// Notification Management
+let notificationTimeout = null;
 
 // Tournament Info Caching
 let lastTournamentText = null;
@@ -36,6 +46,9 @@ const loadingOverlay = document.getElementById('loading-overlay');
 let currentActiveTab = 'dashboard';
 // Auto-refresh now handled by WebSocket events - interval no longer needed
 let liveControlInterval = null;
+let isLiveControlUpdating = false;
+let localLiveTimerInterval = null;
+let currentLiveMatch = null;
 
 // Session Management
 const SESSION_KEY = 'admin_session';
@@ -43,11 +56,39 @@ const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 Stunden
 
 // Utility Functions
 function showNotification(message, type = 'success') {
+    // Clear any existing notification timeout to prevent conflicts
+    if (notificationTimeout) {
+        clearTimeout(notificationTimeout);
+        notificationTimeout = null;
+    }
+    
+    // If notification is already showing, immediately hide it before showing new one
+    if (notification.classList.contains('show')) {
+        notification.classList.remove('show');
+        // Small delay to allow transition to complete
+        setTimeout(() => {
+            displayNotification(message, type);
+        }, 150);
+    } else {
+        displayNotification(message, type);
+    }
+}
+
+function displayNotification(message, type) {
     notification.textContent = message;
     notification.className = `notification ${type}`;
     notification.classList.add('show');
-    setTimeout(() => {
+    
+    notificationTimeout = setTimeout(() => {
         notification.classList.remove('show');
+        // Additional cleanup after transition
+        setTimeout(() => {
+            if (!notification.classList.contains('show')) {
+                notification.textContent = '';
+                notification.className = 'notification';
+            }
+        }, 300); // Wait for CSS transition to complete
+        notificationTimeout = null;
     }, 3000);
 }
 
@@ -217,41 +258,64 @@ function initializeWebSocket() {
         socket.disconnect();
     }
 
-    socket = io();
+    // Initialize with better configuration for stability
+    socket = io({
+        transports: ['websocket', 'polling'], // Allow fallback to polling
+        upgrade: true,
+        rememberUpgrade: true,
+        timeout: 20000,
+        forceNew: false,
+        reconnection: true,
+        reconnectionAttempts: maxReconnectAttempts,
+        reconnectionDelay: reconnectDelay,
+        reconnectionDelayMax: 10000,
+        maxReconnectionAttempts: maxReconnectAttempts
+    });
     
     socket.on('connect', () => {
         isConnected = true;
         reconnectAttempts = 0;
-        updateConnectionStatus();
+        debouncedUpdateConnectionStatus();
         console.log('WebSocket connected');
         
-        // Initiale Daten anfordern mit Delay für stabilere Verbindung
-        if (isLoggedIn) {
-            setTimeout(() => {
-                loadInitialData();
-            }, 500); // 500ms Delay für stabilere Verbindung
+        // Initiale Daten nur beim ersten Mal oder nach längerer Trennung laden
+        if (isLoggedIn && !isInitialized) {
+            const now = Date.now();
+            if (now - lastInitialDataLoad > 10000) { // Mindestens 10 Sekunden seit letztem Load
+                setTimeout(() => {
+                    if (!isInitialized) { // Double check to prevent race conditions
+                        lastInitialDataLoad = now;
+                        isInitialized = true;
+                        loadInitialData();
+                    }
+                }, 500); // 500ms Delay für stabilere Verbindung
+            }
         }
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
         isConnected = false;
-        updateConnectionStatus();
-        console.log('WebSocket disconnected');
+        debouncedUpdateConnectionStatus();
+        console.log('WebSocket disconnected:', reason);
         
-        // Versuche Reconnect
-        if (reconnectAttempts < maxReconnectAttempts) {
-            setTimeout(() => {
-                reconnectAttempts++;
-                console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
-                initializeWebSocket();
-            }, reconnectDelay);
+        // Reset initialization flag for transport errors to allow reconnection
+        if (reason === 'transport error' || reason === 'transport close') {
+            console.log('Transport error detected, allowing re-initialization');
+            // Don't increment reconnectAttempts for transport errors as they're usually temporary
+        } else if (reason !== 'io client disconnect') {
+            reconnectAttempts++;
+        }
+        
+        // Socket.IO handles automatic reconnection, we just track attempts
+        if (reconnectAttempts <= maxReconnectAttempts) {
+            console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
         }
     });
 
     socket.on('connect_error', (error) => {
         console.error('WebSocket connection error:', error);
         isConnected = false;
-        updateConnectionStatus();
+        debouncedUpdateConnectionStatus();
     });
 
     // WebSocket Event Listeners
@@ -279,6 +343,17 @@ function updateConnectionStatus() {
     showRefreshIndicator(!isConnected);
 }
 
+// Debounced version to prevent flickering
+function debouncedUpdateConnectionStatus() {
+    if (connectionStatusTimeout) {
+        clearTimeout(connectionStatusTimeout);
+    }
+    connectionStatusTimeout = setTimeout(() => {
+        updateConnectionStatus();
+        connectionStatusTimeout = null;
+    }, 200); // 200ms debounce
+}
+
 function setupWebSocketEventListeners() {
     // Live Score Updates - only update UI, no refresh needed
     socket.on('live-score-update', (data) => {
@@ -286,7 +361,7 @@ function setupWebSocketEventListeners() {
         updateLiveScoreDisplay(data);
         // Only refresh if not currently refreshing and on relevant tabs
         if (!isRefreshing && (currentActiveTab === 'dashboard')) {
-            refreshCurrentTabContent();
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
     });
 
@@ -295,14 +370,18 @@ function setupWebSocketEventListeners() {
         console.log('Match started:', data);
         showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
         
+        // Set timestamp for error recovery detection
+        window.lastMatchStartedEvent = Date.now();
+        
         // Avoid race condition if we're in the middle of starting a match manually
         if (window.isStartingMatch) {
             console.log('Skipping immediate refresh due to manual match start in progress');
             return;
         }
         
-        if (!isRefreshing && (currentActiveTab === 'live' || currentActiveTab === 'dashboard')) {
-            refreshCurrentTabContent();
+        // Always refresh relevant tabs for match start events
+        if (currentActiveTab === 'live' || currentActiveTab === 'dashboard' || currentActiveTab === 'matches') {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
     });
 
@@ -327,7 +406,7 @@ function setupWebSocketEventListeners() {
         console.log('Match finished:', data);
         showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
         if (!isRefreshing) {
-            refreshCurrentTabContent();
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
         
         // If on live tab, automatically load next match after short delay
@@ -345,8 +424,9 @@ function setupWebSocketEventListeners() {
     socket.on('match-result-added', (data) => {
         console.log('Match result added:', data);
         showNotification(`Ergebnis eingetragen: ${data.match.team1} ${data.score1}:${data.score2} ${data.match.team2}`, 'success');
-        if (!isRefreshing && (currentActiveTab === 'results' || currentActiveTab === 'dashboard')) {
-            refreshCurrentTabContent();
+        // Always refresh for result updates as they affect multiple tabs
+        if (currentActiveTab === 'results' || currentActiveTab === 'dashboard' || currentActiveTab === 'matches') {
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
     });
 
@@ -354,7 +434,7 @@ function setupWebSocketEventListeners() {
     socket.on('current-match-changed', (data) => {
         console.log('Current match changed:', data);
         if (!isRefreshing && currentActiveTab === 'live') {
-            refreshCurrentTabContent();
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
     });
 
@@ -387,10 +467,10 @@ function setupWebSocketEventListeners() {
         console.log('Data imported:', data);
         showNotification(`Daten für ${data.year} erfolgreich importiert: ${data.teamsCount} Teams, ${data.matchesCount} Spiele`, 'success');
         if (!isRefreshing) {
-            refreshCurrentTabContent();
+            coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
         }
         // Update tournament info immediately after import
-        updateTournamentInfo();
+        debouncedUpdateTournamentInfo();
     });
 }
 
@@ -475,6 +555,18 @@ function updateLiveScoreDisplay(data) {
     });
 }
 
+// Helper function to coordinate WebSocket-triggered updates
+function coordinatedWebSocketUpdate(callback, minInterval = 500) {
+    const now = Date.now();
+    if (now - lastWebSocketUpdate < minInterval) {
+        // Too frequent, skip this update
+        return false;
+    }
+    lastWebSocketUpdate = now;
+    callback();
+    return true;
+}
+
 // Helper function to refresh current tab content with debouncing
 async function refreshCurrentTabContent() {
     if (!isLoggedIn || !isConnected) return;
@@ -538,8 +630,8 @@ async function performTabRefresh() {
         }
         
         // Only update tournament info if we actually loaded new data and socket is stable
-        if (socket && socket.connected && !isRefreshing) {
-            updateTournamentInfo();
+        if (socket && socket.connected) {
+            debouncedUpdateTournamentInfo();
         }
         console.log(`WebSocket refreshed tab: ${currentActiveTab}`);
     } catch (error) {
@@ -551,10 +643,10 @@ async function performTabRefresh() {
     } finally {
         isRefreshing = false;
         
-        // Handle pending refresh if needed
+        // Handle pending refresh if needed with longer delay to prevent cascading
         if (pendingRefresh) {
             pendingRefresh = false;
-            setTimeout(() => refreshCurrentTabContent(), 500);
+            setTimeout(() => refreshCurrentTabContent(), 2000); // Increased from 500ms to 2000ms
         }
     }
 }
@@ -779,9 +871,18 @@ loginForm.addEventListener('submit', async (e) => {
             adminContent.style.display = 'block';
             showNotification('Erfolgreich angemeldet');
             
-            await loadInitialData();
-            loadTabContent('dashboard');
+            // Initialize WebSocket first, then load data
             initializeWebSocket();
+            
+            // Mark as initialized to prevent duplicate loads
+            isInitialized = true;
+            lastInitialDataLoad = Date.now();
+            
+            // Small delay to allow WebSocket to connect
+            setTimeout(async () => {
+                await loadInitialData();
+                loadTabContent('dashboard');
+            }, 1000);
         } else {
             showNotification('Ungültiges Passwort', 'error');
         }
@@ -812,10 +913,19 @@ async function checkAutoLogin() {
                 loginScreen.style.display = 'none';
                 adminContent.style.display = 'block';
                 
-                await loadInitialData();
-                loadTabContent('dashboard');
+                // Initialize WebSocket first, then load data
                 initializeWebSocket();
-                console.log('Auto-login successful');
+                
+                // Mark as initialized to prevent duplicate loads
+                isInitialized = true;
+                lastInitialDataLoad = Date.now();
+                
+                // Small delay to allow WebSocket to connect
+                setTimeout(async () => {
+                    await loadInitialData();
+                    loadTabContent('dashboard');
+                    console.log('Auto-login successful');
+                }, 1000);
             } else {
                 clearSession();
             }
@@ -828,6 +938,15 @@ async function checkAutoLogin() {
 
 // Load Initial Data
 async function loadInitialData() {
+    // Verhindere mehrfache gleichzeitige Aufrufe
+    if (isRefreshing) {
+        console.log('loadInitialData bereits in Bearbeitung, überspringe');
+        return;
+    }
+    
+    isRefreshing = true;
+    console.log('Lade initiale Daten...');
+    
     // Alle API-Aufrufe parallel ausführen mit Promise.allSettled
     const apiCalls = [
         fetch('/api/tournament').then(response => response.json()),
@@ -863,7 +982,7 @@ async function loadInitialData() {
         }
         
         // UI aktualisieren (auch wenn einige Requests fehlgeschlagen sind)
-        updateTournamentInfo();
+        debouncedUpdateTournamentInfo();
         
         // Erfolgreich geladene Daten loggen
         const successCount = results.filter(r => r.status === 'fulfilled').length;
@@ -882,7 +1001,9 @@ async function loadInitialData() {
         currentTournament = null;
         teams = [];
         matches = [];
-        updateTournamentInfo();
+        debouncedUpdateTournamentInfo();
+    } finally {
+        isRefreshing = false;
     }
 }
 
@@ -908,6 +1029,17 @@ function updateTournamentInfo() {
         tournamentInfo.textContent = newText;
         lastTournamentText = newText;
     }
+}
+
+// Debounced version to prevent flickering
+function debouncedUpdateTournamentInfo() {
+    if (tournamentInfoTimeout) {
+        clearTimeout(tournamentInfoTimeout);
+    }
+    tournamentInfoTimeout = setTimeout(() => {
+        updateTournamentInfo();
+        tournamentInfoTimeout = null;
+    }, 150); // 150ms debounce
 }
 
 // Tab Content Loading
@@ -3434,7 +3566,7 @@ async function startMatchDialog(matchId) {
     ]);
 }
 
-async function executeStartMatch(matchId, modalId) {
+async function executeStartMatch(matchId, modalId, retryCount = 0) {
     const halfTimeDuration = parseInt(document.getElementById('half-time-duration').value);
     const halftimeBreakDuration = parseInt(document.getElementById('halftime-break-duration').value);
     
@@ -3448,9 +3580,19 @@ async function executeStartMatch(matchId, modalId) {
         return;
     }
     
+    if (retryCount >= 3) {
+        showNotification('Maximale Anzahl von Wiederholungsversuchen erreicht', 'error');
+        return;
+    }
+    
     showLoading(true);
     
     try {
+        // Check if WebSocket is connected before making API call
+        if (!isConnected) {
+            console.warn('WebSocket not connected, starting match anyway...');
+        }
+        
         const response = await fetch('/api/admin/start-match', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3461,6 +3603,10 @@ async function executeStartMatch(matchId, modalId) {
                 halftimeBreakMinutes: halftimeBreakDuration
             })
         });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
         
         const data = await response.json();
         
@@ -3483,12 +3629,42 @@ async function executeStartMatch(matchId, modalId) {
                 }
             }, 1500); // Wait 1.5 seconds for server sync and WebSocket events
         } else {
-            showNotification(data.error, 'error');
+            showNotification(data.error || 'Unbekannter Fehler beim Starten', 'error');
         }
     } catch (error) {
-        showNotification('Fehler beim Starten des Spiels', 'error');
+        console.error('Error starting match:', error);
+        
+        // Check if this is a network error that might have succeeded on server
+        if (error.name === 'TypeError' && (error.message.includes('Failed to fetch') || error.message === 'Load failed')) {
+            console.log('Network error during match start - checking if match was actually started via WebSocket events');
+            showNotification('Netzwerkunterbrechung - prüfe ob Spiel gestartet wurde...', 'warning');
+            
+            // Wait for potential WebSocket events to confirm if match started
+            setTimeout(() => {
+                // Check if we received a match-started event in the meantime
+                if (window.lastMatchStartedEvent && Date.now() - window.lastMatchStartedEvent < 5000) {
+                    console.log('Match was actually started successfully (confirmed via WebSocket)');
+                    showNotification('Spiel erfolgreich gestartet! (Netzwerkunterbrechung ignoriert)', 'success');
+                    closeModal(modalId);
+                    switchToTab('live');
+                } else {
+                    // Offer retry option
+                    const retryMessage = 'Netzwerkfehler beim Starten. Möchten Sie es erneut versuchen?';
+                    if (confirm(retryMessage)) {
+                        console.log(`Retrying match start after network error (attempt ${retryCount + 1})`);
+                        // Retry the match start with incremented counter
+                        executeStartMatch(matchId, modalId, retryCount + 1);
+                    } else {
+                        showNotification('Spiel-Start abgebrochen', 'error');
+                    }
+                }
+            }, 2000);
+        } else {
+            showNotification(`Fehler beim Starten des Spiels: ${error.message}`, 'error');
+        }
     } finally {
         showLoading(false);
+        window.isStartingMatch = false;
     }
 }
 
@@ -3510,8 +3686,14 @@ async function loadLiveControl() {
     try {
         // Load current live match and next match data with better error handling
         const [liveResult, nextResult] = await Promise.allSettled([
-            fetch('/api/live-match').then(r => r.json()),
-            fetch('/api/next-match').then(r => r.json())
+            fetch('/api/live-match').then(async r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                return r.json();
+            }),
+            fetch('/api/next-match').then(async r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                return r.json();
+            })
         ]);
         
         const liveData = liveResult.status === 'fulfilled' ? liveResult.value : { liveMatch: null };
@@ -3718,7 +3900,7 @@ async function loadLiveControl() {
             }
             
             // Start live timer updates
-            startLiveControlUpdates(liveMatch);
+            startLocalLiveTimer(liveMatch);
             
         } else {
             // No live match - show next match and upcoming
@@ -3933,64 +4115,107 @@ async function loadLiveControl() {
     }
 }
 
-// LIVE CONTROL TIMER UPDATES
-function startLiveControlUpdates(liveMatch) {
-    console.log('Starting live control updates for admin...');
+// LOCAL LIVE TIMER UPDATES (independent of API calls)
+function startLocalLiveTimer(liveMatch) {
+    console.log('Starting local live timer for admin...');
     
-    // Clear existing interval
+    // Store the current match data locally
+    currentLiveMatch = liveMatch;
+    
+    // Clear existing timers
+    if (localLiveTimerInterval) {
+        clearInterval(localLiveTimerInterval);
+    }
     if (liveControlInterval) {
         clearInterval(liveControlInterval);
     }
     
-    liveControlInterval = setInterval(async () => {
+    // Start local timer that updates every second
+    localLiveTimerInterval = setInterval(() => {
+        if (!currentLiveMatch || currentActiveTab !== 'live') {
+            return;
+        }
+        
         try {
-            // Fetch latest live match data
-            const response = await fetch('/api/live-match');
-            const data = await response.json();
-            
-            if (!data.liveMatch) {
-                // Match ended, reload live control completely
-                console.log('Match ended, reloading live control');
-                clearInterval(liveControlInterval);
-                liveControlInterval = null;
-                await loadLiveControl();
-                return;
-            }
-            
-            // Check if halftime state changed - reload if so
-            const updatedMatch = data.liveMatch;
-            const currentHalfTimeState = updatedMatch.halfTimeBreak;
-            const currentHalf = updatedMatch.currentHalf;
-            
-            // If halftime state or half changed, reload completely for button updates
-            if (typeof window.lastHalfTimeState !== 'undefined' && 
-                (window.lastHalfTimeState !== currentHalfTimeState || window.lastHalf !== currentHalf)) {
-                console.log('Halftime state changed, reloading live control');
-                window.lastHalfTimeState = currentHalfTimeState;
-                window.lastHalf = currentHalf;
-                clearInterval(liveControlInterval);
-                liveControlInterval = null;
-                await loadLiveControl();
-                return;
-            }
-            
-            // Store current state for next comparison
-            window.lastHalfTimeState = currentHalfTimeState;
-            window.lastHalf = currentHalf;
-            
-            // Update timer and half info
-            const timeInfo = calculateLiveTime(updatedMatch);
+            // Calculate time based on stored match data and current time
+            const timeInfo = calculateLiveTime(currentLiveMatch);
             
             const timerElement = document.getElementById('admin-live-timer');
             const halfElement = document.getElementById('admin-live-half');
             
             if (timerElement) {
                 timerElement.textContent = timeInfo.displayTime;
-                console.log(`Updated admin timer: ${timeInfo.displayTime} - ${timeInfo.halfInfo}`);
             }
-            if (halfElement) halfElement.textContent = timeInfo.halfInfo;
+            if (halfElement) {
+                halfElement.textContent = timeInfo.halfInfo;
+            }
             
-            // Update scores (sync with any changes from other sources) - but only if user is not typing
+        } catch (error) {
+            console.error('Local timer update error:', error);
+        }
+    }, 1000); // Update every second for smooth timer
+    
+    // Start less frequent API sync for data updates
+    startLiveControlUpdates();
+}
+
+// LIVE CONTROL API SYNC (less frequent, for data sync only)
+function startLiveControlUpdates() {
+    console.log('Starting live control API sync...');
+    
+    liveControlInterval = setInterval(async () => {
+        // Skip if not on live tab
+        if (currentActiveTab !== 'live' || isLiveControlUpdating) {
+            return;
+        }
+        
+        try {
+            isLiveControlUpdating = true;
+            
+            // Try to fetch latest live match data for sync
+            const response = await fetch('/api/live-match');
+            if (!response.ok) {
+                console.log(`API sync failed (${response.status}), continuing with local timer`);
+                return;
+            }
+            
+            const data = await response.json();
+            
+            if (!data.liveMatch) {
+                // Match ended, reload live control completely
+                console.log('Match ended, reloading live control');
+                clearInterval(liveControlInterval);
+                clearInterval(localLiveTimerInterval);
+                liveControlInterval = null;
+                localLiveTimerInterval = null;
+                currentLiveMatch = null;
+                await loadLiveControl();
+                return;
+            }
+            
+            // Update local match data
+            const updatedMatch = data.liveMatch;
+            
+            // Check if halftime state changed - reload if so
+            const currentHalfTimeState = updatedMatch.halfTimeBreak;
+            const currentHalf = updatedMatch.currentHalf;
+            
+            if (currentLiveMatch && 
+                (currentLiveMatch.halfTimeBreak !== currentHalfTimeState || 
+                 currentLiveMatch.currentHalf !== currentHalf)) {
+                console.log('Halftime state changed, reloading live control');
+                clearInterval(liveControlInterval);
+                clearInterval(localLiveTimerInterval);
+                liveControlInterval = null;
+                localLiveTimerInterval = null;
+                await loadLiveControl();
+                return;
+            }
+            
+            // Update local match data
+            currentLiveMatch = updatedMatch;
+            
+            // Update scores if changed
             const score1Input = document.getElementById('live-score1');
             const score2Input = document.getElementById('live-score2');
             
@@ -4002,9 +4227,11 @@ function startLiveControlUpdates(liveMatch) {
             }
             
         } catch (error) {
-            console.error('Live control update error:', error);
+            console.log('API sync error, continuing with local timer:', error.message);
+        } finally {
+            isLiveControlUpdating = false;
         }
-    }, 1000);
+    }, 5000); // Check every 5 seconds for data sync
 }
 
 // Live Time Calculation Function
@@ -4270,22 +4497,56 @@ async function executeEndMatch(matchId, modalId) {
         
         const data = await response.json();
         
+        // Handle non-success HTTP status codes
+        if (!response.ok) {
+            console.error(`HTTP ${response.status} error:`, data);
+            throw new Error(data.message || data.error || `Server returned ${response.status}`);
+        }
+        
         if (data.success) {
             showNotification('Spiel erfolgreich beendet');
             closeModal(modalId);
             
-            // Clear live timer
+            // Clear live timers
             if (liveControlInterval) {
                 clearInterval(liveControlInterval);
                 liveControlInterval = null;
             }
+            if (localLiveTimerInterval) {
+                clearInterval(localLiveTimerInterval);
+                localLiveTimerInterval = null;
+            }
+            currentLiveMatch = null;
             
             // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
-            showNotification(data.error, 'error');
+            // Handle specific error cases
+            let errorMessage = data.message || data.error || 'Unbekannter Fehler beim Beenden des Spiels';
+            
+            if (data.error === 'unentschieden_ko') {
+                errorMessage = 'K.O.-Spiel ist unentschieden! Verlängerung erforderlich.';
+            } else if (data.error === 'unentschieden_ko_overtime') {
+                errorMessage = 'Spiel ist nach Verlängerung unentschieden! Elfmeterschießen erforderlich.';
+            } else if (data.error === 'penalty_shootout_active') {
+                errorMessage = 'Elfmeterschießen ist noch aktiv! Bitte beenden Sie das Elfmeterschießen zuerst.';
+            }
+            
+            console.error('Match finish error:', data);
+            showNotification(errorMessage, 'error');
         }
     } catch (error) {
-        showNotification('Fehler beim Beenden des Spiels', 'error');
+        console.error('Execute end match error:', error);
+        let errorMessage = 'Fehler beim Beenden des Spiels';
+        
+        if (error.message.includes('unentschieden_ko')) {
+            errorMessage = 'K.O.-Spiel ist unentschieden! Verlängerung erforderlich.';
+        } else if (error.message.includes('penalty_shootout_active')) {
+            errorMessage = 'Elfmeterschießen ist noch aktiv! Bitte beenden Sie das Elfmeterschießen zuerst.';
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
+        
+        showNotification(errorMessage, 'error');
     } finally {
         showLoading(false);
     }
@@ -4321,11 +4582,16 @@ async function executeStopMatch(matchId, modalId) {
             showNotification('Spiel abgebrochen');
             closeModal(modalId);
             
-            // Clear live timer
+            // Clear live timers
             if (liveControlInterval) {
                 clearInterval(liveControlInterval);
                 liveControlInterval = null;
             }
+            if (localLiveTimerInterval) {
+                clearInterval(localLiveTimerInterval);
+                localLiveTimerInterval = null;
+            }
+            currentLiveMatch = null;
             
             // await refreshCurrentTabContent(); // Entfernt - wird durch WebSocket-Events gehandelt
         } else {
@@ -4635,5 +4901,8 @@ window.addEventListener('beforeunload', () => {
     // WebSocket cleanup handled by beforeunload - no manual stop needed
     if (liveControlInterval) {
         clearInterval(liveControlInterval);
+    }
+    if (localLiveTimerInterval) {
+        clearInterval(localLiveTimerInterval);
     }
 });

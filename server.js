@@ -2283,8 +2283,11 @@ app.put('/api/admin/results/:matchId', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
-    } else if (match.phase !== 'group') {
-        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+    } else if (match.phase === 'swiss') {
+        // Swiss-System: Kein Tabellen-Update bei manueller Ergebnis-Eingabe
+        console.log('Swiss match result updated manually');
+    } else if (match.phase !== 'group' && match.phase !== 'swiss') {
+        // Bei echten K.O.-Spielen: Aktualisiere abhängige Spiele
         updateDependentKnockoutMatches(matchId);
     }
     
@@ -3191,14 +3194,20 @@ app.post('/api/admin/live-score', (req, res) => {
 app.post('/api/admin/start-match', (req, res) => {
     const { password, matchId, halfTimeMinutes, halftimeBreakMinutes } = req.body;
     
+    console.log(`Start match request: matchId=${matchId}, halfTime=${halfTimeMinutes}min, break=${halftimeBreakMinutes}min`);
+    
     if (password !== ADMIN_PASSWORD) {
+        console.log('Start match failed: Invalid password');
         return res.status(401).json({ error: 'Ungültiges Passwort' });
     }
     
     const match = matches.find(m => m.id === matchId);
     if (!match) {
+        console.log(`Start match failed: Match not found with id ${matchId}`);
         return res.status(404).json({ error: 'Spiel nicht gefunden' });
     }
+    
+    console.log(`Starting match ${matchId}: ${match.team1} vs ${match.team2}`);
     
     if (currentTournament) {
         currentTournament.currentMatch = matchId;
@@ -3223,7 +3232,9 @@ app.post('/api/admin/start-match', (req, res) => {
     };
     
     autoSave();
+    console.log(`Match ${matchId} started successfully, broadcasting update`);
     broadcastUpdate('match-started', { matchId, match, currentMatch: matchId });
+    console.log(`Sending success response for match ${matchId}`);
     res.json({ success: true, match });
 });
 
@@ -3336,22 +3347,45 @@ app.post('/api/admin/start-second-half', (req, res) => {
 app.post('/api/admin/finish-match', (req, res) => {
     const { password, matchId } = req.body;
     
+    console.log(`Finish match request: matchId=${matchId}`);
+    
     if (password !== ADMIN_PASSWORD) {
+        console.log('Finish match failed: Invalid password');
         return res.status(401).json({ error: 'Ungültiges Passwort' });
     }
     
     const match = matches.find(m => m.id === matchId);
-    if (!match || !match.liveScore) {
-        return res.status(404).json({ error: 'Spiel nicht gefunden oder kein Live-Score' });
+    if (!match) {
+        console.log(`Finish match failed: Match not found with id ${matchId}`);
+        return res.status(404).json({ error: 'Spiel nicht gefunden' });
     }
     
-    // Bei K.O.-Spielen: Prüfe auf Unentschieden
-    if (match.phase !== 'group') {
+    if (!match.liveScore) {
+        console.log(`Finish match failed: No live score for match ${matchId}`, match);
+        return res.status(404).json({ error: 'Kein Live-Score vorhanden' });
+    }
+    
+    console.log(`Match ${matchId} live score:`, match.liveScore);
+    console.log(`Match ${matchId} full object:`, {
+        id: match.id,
+        phase: match.phase,
+        group: match.group,
+        team1: match.team1,
+        team2: match.team2,
+        round: match.round
+    });
+    
+    // Bei K.O.-Spielen: Prüfe auf Unentschieden (aber nicht bei Swiss-System)
+    if (match.phase !== 'group' && match.phase !== 'swiss') {
+        console.log(`K.O. match validation for ${matchId}: phase=${match.phase}`);
         const totalScore1 = match.liveScore.score1 + (match.liveScore.overtime?.score1 || 0);
         const totalScore2 = match.liveScore.score2 + (match.liveScore.overtime?.score2 || 0);
         
+        console.log(`Scores: regular (${match.liveScore.score1}-${match.liveScore.score2}), total (${totalScore1}-${totalScore2}), currentHalf=${match.liveScore.currentHalf}`);
+        
         // Nach regulärer Spielzeit unentschieden
         if (match.liveScore.currentHalf === 2 && match.liveScore.score1 === match.liveScore.score2) {
+            console.log(`Finish match failed: K.O. match is tied after regular time`);
             return res.status(400).json({ 
                 error: 'unentschieden_ko',
                 message: 'K.O.-Spiel ist unentschieden - Verlängerung erforderlich',
@@ -3361,6 +3395,7 @@ app.post('/api/admin/finish-match', (req, res) => {
         
         // Nach Verlängerung unentschieden
         if (match.liveScore.currentHalf === 4 && totalScore1 === totalScore2) {
+            console.log(`Finish match failed: K.O. match is tied after overtime`);
             return res.status(400).json({ 
                 error: 'unentschieden_ko_overtime',
                 message: 'K.O.-Spiel ist nach Verlängerung unentschieden - Elfmeterschießen erforderlich',
@@ -3370,6 +3405,7 @@ app.post('/api/admin/finish-match', (req, res) => {
         
         // Elfmeterschießen nicht beendet
         if (match.liveScore.penaltyShootout?.isActive) {
+            console.log(`Finish match failed: Penalty shootout is still active`);
             return res.status(400).json({ 
                 error: 'penalty_shootout_active',
                 message: 'Elfmeterschießen ist noch aktiv',
@@ -3392,6 +3428,7 @@ app.post('/api/admin/finish-match', (req, res) => {
         }
     }
     
+    console.log(`Finishing match ${matchId} successfully`);
     match.score1 = match.liveScore.score1;
     match.score2 = match.liveScore.score2;
     match.completed = true;
@@ -3406,8 +3443,12 @@ app.post('/api/admin/finish-match', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
         }
-    } else if (match.phase !== 'group') {
-        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+    } else if (match.phase === 'swiss') {
+        // Swiss-System: Aktualisiere Tabelle (ähnlich wie Gruppenspiele)
+        console.log('Swiss match completed, updating standings');
+        // TODO: Implementiere Swiss-System Tabellen-Update falls benötigt
+    } else {
+        // Bei echten K.O.-Spielen: Aktualisiere abhängige Spiele
         updateDependentKnockoutMatches(matchId);
     }
     
@@ -3649,8 +3690,11 @@ app.post('/api/admin/result', (req, res) => {
         if (koGenerated) {
             console.log('K.O.-Phase automatisch generiert nach Spielergebnis');
         }
-    } else if (match.phase !== 'group') {
-        // Bei K.O.-Spielen: Aktualisiere abhängige Spiele
+    } else if (match.phase === 'swiss') {
+        // Swiss-System: Kein Tabellen-Update bei manueller Ergebnis-Eingabe
+        console.log('Swiss match result updated manually');
+    } else if (match.phase !== 'group' && match.phase !== 'swiss') {
+        // Bei echten K.O.-Spielen: Aktualisiere abhängige Spiele
         updateDependentKnockoutMatches(matchId);
     }
     
