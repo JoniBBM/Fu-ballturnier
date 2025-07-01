@@ -34,7 +34,7 @@ const notification = document.getElementById('notification');
 let lastScheduleUpdate = null;
 let scheduleRefreshInterval = null;
 let liveUpdateInterval = null;
-let currentActiveTab = 'home';
+let currentActiveTab = localStorage.getItem('currentTab') || 'home';
 
 // Local Live Timer Management
 let localLiveTimerInterval = null;
@@ -458,6 +458,7 @@ navBtns.forEach(btn => {
         
         // Update current active tab
         currentActiveTab = targetTab;
+        localStorage.setItem('currentTab', targetTab);
         
         // Update active nav button
         navBtns.forEach(b => b.classList.remove('active'));
@@ -856,11 +857,11 @@ function calculateLiveTime(liveMatch) {
             }
         }
         
-        // Fallback für alte Version
+        // Wenn Halbzeitpause abgelaufen ist
         return {
-            displayTime: formatTime(halfTimeMinutes, 0),
-            halfInfo: 'HALBZEIT',
-            currentMinute: halfTimeMinutes,
+            displayTime: '00:00',
+            halfInfo: '2. HALBZEIT BEREIT',
+            currentMinute: 0,
             currentSecond: 0
         };
     }
@@ -2374,6 +2375,33 @@ async function loadContact() {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    // Restore saved tab
+    const savedTab = localStorage.getItem('currentTab');
+    if (savedTab && document.getElementById(savedTab)) {
+        // Set active nav button
+        navBtns.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.tab === savedTab) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Set active tab content
+        tabContents.forEach(content => {
+            content.classList.remove('active');
+        });
+        const savedTabContent = document.getElementById(savedTab);
+        if (savedTabContent) {
+            savedTabContent.classList.add('active');
+        }
+        
+        // Load content for saved tab
+        loadTabContent(savedTab);
+    } else {
+        // Load default home tab
+        loadTabContent('home');
+    }
+    
     updateStats();
     loadTeams();
     checkRegistrationStatus();

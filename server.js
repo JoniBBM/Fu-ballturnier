@@ -3782,6 +3782,41 @@ app.post('/api/admin/login', (req, res) => {
     }
 });
 
+// Admin: Update Tournament Settings
+app.post('/api/admin/update-settings', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (token !== ADMIN_PASSWORD) {
+            return res.status(401).json({ error: 'Ungültiges Token' });
+        }
+        
+        const { halfTimeMinutes, halftimeBreakMinutes } = req.body;
+        
+        if (!halfTimeMinutes || !halftimeBreakMinutes) {
+            return res.status(400).json({ error: 'halfTimeMinutes und halftimeBreakMinutes sind erforderlich' });
+        }
+        
+        if (halfTimeMinutes < 1 || halfTimeMinutes > 45 || halftimeBreakMinutes < 1 || halftimeBreakMinutes > 10) {
+            return res.status(400).json({ error: 'Ungültige Zeitwerte' });
+        }
+        
+        if (!currentTournament) {
+            return res.status(400).json({ error: 'Kein aktives Turnier gefunden' });
+        }
+        
+        // Update tournament settings
+        currentTournament.settings.halfTimeMinutes = halfTimeMinutes;
+        currentTournament.settings.halftimeBreakMinutes = halftimeBreakMinutes;
+        
+        await autoSave();
+        
+        res.json({ success: true, settings: currentTournament.settings });
+    } catch (error) {
+        console.error('Update settings error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Aktualisieren der Einstellungen' });
+    }
+});
+
 // Admin: Import von Turnierdaten
 app.post('/api/admin/import', async (req, res) => {
     try {

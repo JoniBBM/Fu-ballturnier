@@ -11,7 +11,7 @@ let socket = null;
 let isConnected = false;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 5;
-const reconnectDelay = 3000;
+const reconnectDelay = 1000;
 let lastInitialDataLoad = 0;
 let isInitialized = false;
 
@@ -43,7 +43,7 @@ const refreshIndicator = document.getElementById('refresh-indicator');
 const loadingOverlay = document.getElementById('loading-overlay');
 
 // Auto-Refresh State (now handled by WebSocket)
-let currentActiveTab = 'dashboard';
+let currentActiveTab = localStorage.getItem('adminCurrentTab') || 'dashboard';
 // Auto-refresh now handled by WebSocket events - interval no longer needed
 let liveControlInterval = null;
 let isLiveControlUpdating = false;
@@ -159,117 +159,6 @@ function formatTime(minutes, seconds) {
     const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
     const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
     return `${mins}:${secs}`;
-}
-
-// Calculate match time for live matches
-function calculateMatchTime(liveMatch) {
-    if (!liveMatch || !liveMatch.startTime) {
-        return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0, currentSecond: 0 };
-    }
-    
-    const now = new Date();
-    const startTime = new Date(liveMatch.startTime);
-    const halfTimeMinutes = liveMatch.halfTimeMinutes || 5; // Standard auf 5 Minuten geändert
-    
-    // Wenn pausiert und pauseStartTime gesetzt, Zeit bei Pausenbeginn stoppen
-    if (liveMatch.isPaused && liveMatch.pauseStartTime) {
-        const pauseStartTime = new Date(liveMatch.pauseStartTime);
-        let elapsedTime = 0;
-        
-        if (liveMatch.currentHalf === 1) {
-            elapsedTime = pauseStartTime - startTime - (liveMatch.pausedTime || 0);
-        } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
-            const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
-            elapsedTime = pauseStartTime - secondHalfStart - (liveMatch.pausedTime || 0);
-        }
-        
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        const currentMinute = Math.floor(totalSeconds / 60);
-        const currentSecond = totalSeconds % 60;
-        
-        return {
-            displayTime: formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond)),
-            halfInfo: 'PAUSIERT',
-            currentMinute: Math.max(0, currentMinute),
-            currentSecond: Math.max(0, currentSecond)
-        };
-    }
-    
-    // Halbzeitpause
-    if (liveMatch.halfTimeBreak) {
-        const halftimeBreakMinutes = liveMatch.halftimeBreakMinutes || 1;
-        
-        // Berechne verbleibende Halbzeitpause
-        if (liveMatch.firstHalfEndTime) {
-            const firstHalfEnd = new Date(liveMatch.firstHalfEndTime);
-            const halftimeElapsed = Math.floor((now - firstHalfEnd) / 1000);
-            const halftimeTotal = halftimeBreakMinutes * 60;
-            const halftimeRemaining = Math.max(0, halftimeTotal - halftimeElapsed);
-            
-            const remainingMinutes = Math.floor(halftimeRemaining / 60);
-            const remainingSeconds = halftimeRemaining % 60;
-            
-            if (halftimeRemaining > 0) {
-                return {
-                    displayTime: formatTime(remainingMinutes, remainingSeconds),
-                    halfInfo: 'HALBZEITPAUSE',
-                    currentMinute: remainingMinutes,
-                    currentSecond: remainingSeconds
-                };
-            }
-        }
-        
-        // Fallback für alte Version
-        return {
-            displayTime: formatTime(halfTimeMinutes, 0),
-            halfInfo: 'HALBZEIT',
-            currentMinute: halfTimeMinutes,
-            currentSecond: 0
-        };
-    }
-    
-    let elapsedTime = 0;
-    let currentMinute = 0;
-    let currentSecond = 0;
-    let halfInfo = '';
-    
-    if (liveMatch.currentHalf === 1) {
-        // Erste Halbzeit
-        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        currentMinute = Math.floor(totalSeconds / 60);
-        currentSecond = totalSeconds % 60;
-        
-        if (currentMinute >= halfTimeMinutes) {
-            currentMinute = halfTimeMinutes;
-            currentSecond = 0;
-            halfInfo = '1. HALBZEIT ENDE';
-        } else {
-            halfInfo = '1. HALBZEIT';
-        }
-    } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
-        // Zweite Halbzeit
-        const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
-        elapsedTime = now - secondHalfStart - (liveMatch.pausedTime || 0);
-        const totalSeconds = Math.floor(elapsedTime / 1000);
-        currentMinute = Math.floor(totalSeconds / 60);
-        currentSecond = totalSeconds % 60;
-        
-        if (currentMinute >= halfTimeMinutes) {
-            currentMinute = halfTimeMinutes;
-            currentSecond = 0;
-            halfInfo = 'SPIEL ENDE';
-        } else {
-            halfInfo = '2. HALBZEIT';
-        }
-    }
-    
-    return {
-        displayTime: formatTime(currentMinute, currentSecond),
-        halfInfo: halfInfo,
-        currentMinute: currentMinute,
-        currentSecond: currentSecond
-    };
 }
 
 // Convert ISO string to datetime-local format for input fields
@@ -1012,6 +901,7 @@ menuItems.forEach(item => {
 function switchToTab(targetTab) {
     // Update current active tab
     currentActiveTab = targetTab;
+    localStorage.setItem('adminCurrentTab', targetTab);
     
     // Update active menu item
     menuItems.forEach(mi => mi.classList.remove('active'));
@@ -1084,7 +974,11 @@ loginForm.addEventListener('submit', async (e) => {
             // Small delay to allow WebSocket to connect
             setTimeout(async () => {
                 await loadInitialData();
-                loadTabContent('dashboard');
+                
+                // Restore saved tab or use dashboard as default
+                const savedTab = localStorage.getItem('adminCurrentTab') || 'dashboard';
+                switchToTab(savedTab);
+                loadTabContent(savedTab);
             }, 1000);
         } else {
             showNotification('Ungültiges Passwort', 'error');
@@ -1126,7 +1020,11 @@ async function checkAutoLogin() {
                 // Small delay to allow WebSocket to connect
                 setTimeout(async () => {
                     await loadInitialData();
-                    loadTabContent('dashboard');
+                    
+                    // Restore saved tab or use dashboard as default
+                    const savedTab = localStorage.getItem('adminCurrentTab') || 'dashboard';
+                    switchToTab(savedTab);
+                    loadTabContent(savedTab);
                     console.log('Auto-login successful');
                 }, 1000);
             } else {
@@ -1983,7 +1881,10 @@ async function executeResetSchedules(modalId) {
         if (data.success) {
             showNotification(data.message);
             closeModal(modalId);
-            await refreshCurrentTabContent();
+            // WebSocket wird automatisch aktualisiert - nur Tab-Content refreshen
+            setTimeout(() => {
+                refreshCurrentTabContent();
+            }, 300);
         } else {
             showNotification(data.error, 'error');
         }
@@ -3728,6 +3629,10 @@ async function startMatchDialog(matchId) {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
     
+    // Get values from scheduled match, tournament settings, or defaults
+    const halfTimeMinutes = match.scheduled?.halftimeDuration || currentTournament.settings.halfTimeMinutes || 5;
+    const halftimeBreakMinutes = match.scheduled?.halftimeBreak || currentTournament.settings.halftimeBreakMinutes || 1;
+    
     createModal('Spiel starten', `
         <div class="start-match-info">
             <h4>${match.team1} vs ${match.team2}</h4>
@@ -3743,18 +3648,18 @@ async function startMatchDialog(matchId) {
         <div class="start-match-options">
             <div class="form-group">
                 <label for="half-time-duration">Halbzeit-Dauer (Minuten):</label>
-                <input type="number" id="half-time-duration" value="5" min="1" max="99" 
+                <input type="number" id="half-time-duration" value="${halfTimeMinutes}" min="1" max="99" 
                        style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
                 <small style="color: #666; margin-top: 0.5rem; display: block;">
-                    Standard: 5 Minuten pro Halbzeit. Du kannst jeden Wert zwischen 1-99 Minuten eingeben.
+                    ${match.scheduled ? `Geplant: ${halfTimeMinutes} Minuten pro Halbzeit` : `Standard: ${halfTimeMinutes} Minuten pro Halbzeit (aus Turnier-Einstellungen)`}. Du kannst jeden Wert zwischen 1-99 Minuten eingeben.
                 </small>
             </div>
             <div class="form-group">
                 <label for="halftime-break-duration">Halbzeitpause (Minuten):</label>
-                <input type="number" id="halftime-break-duration" value="1" min="1" max="10" 
+                <input type="number" id="halftime-break-duration" value="${halftimeBreakMinutes}" min="1" max="10" 
                        style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem; text-align: center; font-size: 1.125rem;">
                 <small style="color: #666; margin-top: 0.5rem; display: block;">
-                    Standard: 1 Minute Halbzeitpause.
+                    ${match.scheduled ? `Geplant: ${halftimeBreakMinutes} Minuten Halbzeitpause` : `Standard: ${halftimeBreakMinutes} Minuten Halbzeitpause (aus Turnier-Einstellungen)`}.
                 </small>
             </div>
         </div>
@@ -4020,7 +3925,7 @@ async function loadLiveControl() {
                             
                             ${(() => {
                                 // Prüfe ob erste Halbzeit abgelaufen ist
-                                const timeInfo = calculateMatchTime(liveMatch);
+                                const timeInfo = calculateLiveTime(liveMatch);
                                 const isFirstHalfExpired = liveMatch.currentHalf === 1 && 
                                                           timeInfo.currentMinute >= (liveMatch.halfTimeMinutes || 45);
                                 
@@ -4314,13 +4219,13 @@ async function loadLiveControl() {
             </div>
         `;
         
-        // Automatisches Retry nach 3 Sekunden
+        // Automatisches Retry nach 1 Sekunde
         setTimeout(() => {
             if (currentActiveTab === 'live') {
                 console.log('Auto-retrying live control load...');
                 loadLiveControl();
             }
-        }, 3000);
+        }, 1000);
     }
 }
 
@@ -4501,11 +4406,11 @@ function calculateLiveTime(liveMatch) {
             }
         }
         
-        // Fallback für alte Version
+        // Wenn Halbzeitpause abgelaufen ist
         return {
-            displayTime: formatTime(halfTimeMinutes, 0),
-            halfInfo: 'HALBZEIT',
-            currentMinute: halfTimeMinutes,
+            displayTime: '00:00',
+            halfInfo: '2. HALBZEIT BEREIT',
+            currentMinute: 0,
             currentSecond: 0
         };
     }
@@ -4669,9 +4574,20 @@ async function startSecondHalf(matchId) {
         
         if (data.success) {
             showNotification('2. Halbzeit gestartet');
-            // Force immediate live control update
+            // Force immediate live control update with retry
             if (currentActiveTab === 'live') {
-                await loadLiveControl();
+                try {
+                    await loadLiveControl();
+                } catch (error) {
+                    console.log('Initial live control load failed, retrying in 500ms...');
+                    setTimeout(async () => {
+                        try {
+                            await loadLiveControl();
+                        } catch (retryError) {
+                            console.log('Retry failed, will use auto-retry mechanism');
+                        }
+                    }, 500);
+                }
             }
         } else {
             showNotification(data.error, 'error');
@@ -4991,6 +4907,11 @@ function loadSettings() {
                 <input type="number" id="half-time-minutes" value="${settings.halfTimeMinutes || 5}" min="1" max="45" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
             </div>
             
+            <div class="form-group">
+                <label for="halftime-break-minutes">Standard Halbzeitpause (Minuten):</label>
+                <input type="number" id="halftime-break-minutes" value="${settings.halftimeBreakMinutes || 1}" min="1" max="10" style="width: 100%; padding: 0.5rem; border: 2px solid #ccc; border-radius: 0.5rem;">
+            </div>
+            
             <div class="settings-checkboxes">
                 <h5>K.O.-Phase Optionen:</h5>
                 <label style="display: block; margin-bottom: 0.5rem;">
@@ -5098,6 +5019,51 @@ function updateTeamCountDisplay() {
 function refreshTeams() {
     refreshCurrentTabContent();
     showNotification('Teams manuell aktualisiert');
+}
+
+async function saveTournamentSettings() {
+    const halfTimeMinutes = parseInt(document.getElementById('half-time-minutes').value);
+    const halftimeBreakMinutes = parseInt(document.getElementById('halftime-break-minutes').value);
+    
+    if (isNaN(halfTimeMinutes) || halfTimeMinutes < 1 || halfTimeMinutes > 45) {
+        showNotification('Halbzeit-Dauer muss zwischen 1 und 45 Minuten liegen', 'error');
+        return;
+    }
+    
+    if (isNaN(halftimeBreakMinutes) || halftimeBreakMinutes < 1 || halftimeBreakMinutes > 10) {
+        showNotification('Halbzeitpause muss zwischen 1 und 10 Minuten liegen', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/admin/update-settings', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('adminToken')}`
+            },
+            body: JSON.stringify({
+                halfTimeMinutes,
+                halftimeBreakMinutes
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                currentTournament.settings.halfTimeMinutes = halfTimeMinutes;
+                currentTournament.settings.halftimeBreakMinutes = halftimeBreakMinutes;
+                showNotification('Einstellungen erfolgreich gespeichert');
+            } else {
+                showNotification('Fehler beim Speichern der Einstellungen', 'error');
+            }
+        } else {
+            showNotification('Fehler beim Speichern der Einstellungen', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        showNotification('Fehler beim Speichern der Einstellungen', 'error');
+    }
 }
 
 // Initialize
