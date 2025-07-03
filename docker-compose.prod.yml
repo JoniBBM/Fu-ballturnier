@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tournament-app:
     build: .
@@ -14,8 +12,6 @@ services:
       - ./saves:/app/saves
     networks:
       - tournament-network
-    # Production: npm start (node, nicht nodemon)
-    command: npm start
 
 networks:
   tournament-network:

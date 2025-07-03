@@ -83,7 +83,11 @@ function updateStats() {
 function coordinatedUpdate(callback, minInterval = 1000) {
     const now = Date.now();
     if (now - lastWebSocketUpdate < minInterval) {
-        // Too frequent, skip this update
+        // Too frequent, but ensure tables get updated eventually
+        setTimeout(() => {
+            lastWebSocketUpdate = now;
+            callback();
+        }, minInterval - (now - lastWebSocketUpdate));
         return false;
     }
     lastWebSocketUpdate = now;
@@ -99,14 +103,29 @@ function debouncedTabUpdate(tab) {
     updateTimeout = setTimeout(() => {
         if (!isUpdating) {
             isUpdating = true;
-            loadTabContent(tab).finally(() => {
-                isUpdating = false;
-                // Handle pending updates
-                if (pendingUpdate) {
-                    pendingUpdate = false;
-                    setTimeout(() => debouncedTabUpdate(currentActiveTab), 500);
+            try {
+                const result = loadTabContent(tab);
+                if (result && typeof result.finally === 'function') {
+                    result.finally(() => {
+                        isUpdating = false;
+                        // Handle pending updates
+                        if (pendingUpdate) {
+                            pendingUpdate = false;
+                            setTimeout(() => debouncedTabUpdate(currentActiveTab), 500);
+                        }
+                    });
+                } else {
+                    isUpdating = false;
+                    // Handle pending updates
+                    if (pendingUpdate) {
+                        pendingUpdate = false;
+                        setTimeout(() => debouncedTabUpdate(currentActiveTab), 500);
+                    }
                 }
-            });
+            } catch (error) {
+                console.error('Error in loadTabContent:', error);
+                isUpdating = false;
+            }
         } else {
             pendingUpdate = true;
         }
@@ -121,11 +140,33 @@ function smartUpdate(relevantTabs) {
 
 // WebSocket Functions
 function isWebSocketReady() {
-    return typeof io !== 'undefined' && 
+    const isBasicallyConnected = typeof io !== 'undefined' && 
            socket && 
            socket.connected && 
-           isConnected &&
-           !connectionStability.shouldUseFallback;
+           isConnected;
+    
+    // If basic connection is not working, definitely not ready
+    if (!isBasicallyConnected) {
+        return false;
+    }
+    
+    // If we're in fallback mode, not ready
+    if (connectionStability.shouldUseFallback) {
+        return false;
+    }
+    
+    // If we've had too many recent disconnects, not ready
+    if (connectionStability.consecutiveDisconnects >= 3) {
+        return false;
+    }
+    
+    // If connection is very recent (less than 5 seconds), not ready yet
+    if (connectionStability.lastConnectionTime && 
+        (Date.now() - connectionStability.lastConnectionTime) < 5000) {
+        return false;
+    }
+    
+    return true;
 }
 
 function initializeWebSocket() {
@@ -140,28 +181,38 @@ function initializeWebSocket() {
     }
     
     socket = io({
-        transports: ['websocket', 'polling'],
+        transports: ['polling', 'websocket'], // Try polling first, then websocket
         upgrade: true,
-        rememberUpgrade: true,
-        timeout: 20000,
+        rememberUpgrade: false, // Disable remember upgrade to prevent issues
+        timeout: 30000, // Increase timeout
         forceNew: false,
-        reconnection: false // We handle reconnection manually
+        reconnection: false, // We handle reconnection manually
+        pingTimeout: 60000,
+        pingInterval: 25000,
+        autoConnect: true,
+        closeOnBeforeunload: false
     });
     
     socket.on('connect', () => {
         isConnected = true;
         reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        console.log('WebSocket connected - ready for live updates');
+        console.log('Connection details:', {
+            transport: socket.io.engine.transport.name,
+            upgraded: socket.io.engine.upgraded,
+            id: socket.id
+        });
         
         // Track connection stability
         const now = Date.now();
         if (connectionStability.lastConnectionTime) {
             const timeSinceLastConnection = now - connectionStability.lastConnectionTime;
-            if (timeSinceLastConnection < 10000) { // Less than 10 seconds since last connection
+            if (timeSinceLastConnection < 30000) { // Less than 30 seconds since last connection
                 connectionStability.consecutiveDisconnects++;
                 console.log(`Rapid reconnect detected (${connectionStability.consecutiveDisconnects}). Connection unstable.`);
                 
                 // If we have too many rapid disconnects, force fallback mode
-                if (connectionStability.consecutiveDisconnects >= 3) {
+                if (connectionStability.consecutiveDisconnects >= 7) {
                     connectionStability.shouldUseFallback = true;
                     connectionStability.fallbackStartTime = now;
                     console.log('Connection deemed unstable, forcing fallback mode');
@@ -169,8 +220,8 @@ function initializeWebSocket() {
             } else {
                 // Good connection, reset counter
                 connectionStability.consecutiveDisconnects = 0;
-                // If we've been in fallback for more than 60 seconds and connection seems stable, allow WebSocket
-                if (connectionStability.shouldUseFallback && (now - connectionStability.fallbackStartTime > 60000)) {
+                // If we've been in fallback for more than 30 seconds and connection seems stable, allow WebSocket
+                if (connectionStability.shouldUseFallback && (now - connectionStability.fallbackStartTime > 30000)) {
                     connectionStability.shouldUseFallback = false;
                     console.log('Connection stability restored, allowing WebSocket use');
                 }
@@ -193,6 +244,12 @@ function initializeWebSocket() {
     socket.on('disconnect', (reason) => {
         isConnected = false;
         console.log('WebSocket disconnected:', reason);
+        console.log('Disconnect details:', {
+            reason: reason,
+            transport: socket.io?.engine?.transport?.name,
+            wasConnected: socket.connected,
+            consecutiveDisconnects: connectionStability.consecutiveDisconnects
+        });
         updateConnectionStatus();
         
         // Always start fallback immediately if we're on live tab and don't have it running
@@ -201,25 +258,32 @@ function initializeWebSocket() {
             startLiveUpdates(currentLiveMatch);
         }
         
-        // Handle different disconnect reasons
+        // Handle different disconnect reasons - be less aggressive about reconnecting
         if (reason === 'transport close' || reason === 'transport error') {
             console.log('Transport issue detected');
-            connectionStability.shouldUseFallback = true;
-            connectionStability.fallbackStartTime = Date.now();
+            
+            // Don't immediately force fallback mode
+            if (connectionStability.consecutiveDisconnects >= 3) {
+                connectionStability.shouldUseFallback = true;
+                connectionStability.fallbackStartTime = Date.now();
+                console.log('Multiple transport issues, enabling fallback mode');
+            }
             
             // Only try to reconnect if we haven't hit too many consecutive disconnects
-            if (connectionStability.consecutiveDisconnects < 5 && reconnectAttempts < maxReconnectAttempts) {
+            if (connectionStability.consecutiveDisconnects < 7 && reconnectAttempts < maxReconnectAttempts) {
                 setTimeout(() => {
                     reconnectAttempts++;
                     console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} after transport issue`);
                     if (socket && !socket.connected) {
                         socket.connect();
                     }
-                }, reconnectDelay * Math.pow(2, reconnectAttempts)); // Exponential backoff
+                }, reconnectDelay * (reconnectAttempts + 2)); // Longer delay for transport issues
             } else {
                 console.log('Too many transport issues, staying in fallback mode');
+                connectionStability.shouldUseFallback = true;
+                connectionStability.fallbackStartTime = Date.now();
             }
-        } else if (reason !== 'io client disconnect' && reconnectAttempts < maxReconnectAttempts && connectionStability.consecutiveDisconnects < 3) {
+        } else if (reason !== 'io client disconnect' && reconnectAttempts < maxReconnectAttempts && connectionStability.consecutiveDisconnects < 7) {
             // For other disconnect reasons, try normal reconnection if connection isn't too unstable
             setTimeout(() => {
                 reconnectAttempts++;
@@ -227,7 +291,7 @@ function initializeWebSocket() {
                 if (socket && !socket.connected) {
                     socket.connect();
                 }
-            }, reconnectDelay * reconnectAttempts);
+            }, reconnectDelay * (reconnectAttempts + 1));
         } else {
             console.log('WebSocket deemed unreliable, staying in polling mode');
             connectionStability.shouldUseFallback = true;
@@ -240,11 +304,19 @@ function initializeWebSocket() {
         isConnected = false;
         updateConnectionStatus();
         
+        // Force fallback mode after connection errors
+        connectionStability.shouldUseFallback = true;
+        connectionStability.fallbackStartTime = Date.now();
+        connectionStability.consecutiveDisconnects++;
+        
         // If we have connection errors, start polling fallback immediately
         if (currentActiveTab === 'live' && !liveUpdateInterval && currentLiveMatch) {
             console.log('Starting polling fallback due to connection error');
             startLiveUpdates(currentLiveMatch);
         }
+        
+        // Don't try to reconnect immediately after connection errors
+        reconnectAttempts++;
     });
     
     // Handle reconnect error
@@ -289,6 +361,10 @@ function setupWebSocketEventListeners() {
         if (currentActiveTab === 'live' && data && data.match) {
             updateLiveScoreDisplay(data);
         }
+        // Also update tables if match is completed with this score update
+        if (data && data.match && data.match.completed && currentActiveTab === 'tables') {
+            setTimeout(() => loadTables(), 2000);
+        }
     });
 
     // Match Started - refresh live tab and home statistics
@@ -318,8 +394,13 @@ function setupWebSocketEventListeners() {
         stopLocalLiveTimer();
         currentLiveMatch = null;
         
-        // Smart update for relevant tabs
-        smartUpdate(['live', 'home', 'schedule']);
+        // Smart update for relevant tabs INCLUDING tables
+        smartUpdate(['live', 'home', 'schedule', 'tables']);
+        
+        // Force table update if on tables tab
+        if (currentActiveTab === 'tables') {
+            setTimeout(() => loadTables(), 1500);
+        }
     });
 
     // Match Result Added - refresh tables, schedule, and home
@@ -329,6 +410,11 @@ function setupWebSocketEventListeners() {
         
         // Smart update for relevant tabs
         smartUpdate(['tables', 'schedule', 'home']);
+        
+        // Force table update if on tables tab
+        if (currentActiveTab === 'tables') {
+            setTimeout(() => loadTables(), 1500);
+        }
     });
 
     // Current Match Changed - update live display
@@ -413,6 +499,34 @@ function setupWebSocketEventListeners() {
         if (currentActiveTab === 'home') {
             coordinatedUpdate(() => updateStats(), 1000);
         }
+        // Refresh live display if on live tab
+        if (currentActiveTab === 'live') {
+            coordinatedUpdate(() => loadLiveMatch(), 500);
+        }
+    });
+
+    // Matches Generated - refresh live display to show new schedule
+    socket.on('matches-generated', (data) => {
+        console.log('Matches generated:', data);
+        showNotification(`Spielplan erstellt: ${data.totalMatches} Spiele generiert`, 'success');
+        // Refresh live display immediately to show next match
+        if (currentActiveTab === 'live') {
+            coordinatedUpdate(() => loadLiveMatch(), 300);
+        }
+        // Also refresh other relevant tabs
+        smartUpdate(['matches', 'home']);
+    });
+
+    // Matches Scheduled - refresh countdown timers and schedule displays
+    socket.on('matches-scheduled', (data) => {
+        console.log('Matches scheduled:', data);
+        showNotification(`${data.scheduledCount} Spiele zeitlich geplant`, 'success');
+        // Refresh live display to update countdown timers
+        if (currentActiveTab === 'live') {
+            coordinatedUpdate(() => loadLiveMatch(), 200);
+        }
+        // Also refresh matches tab to show updated schedule
+        smartUpdate(['matches', 'home']);
     });
 }
 
@@ -480,6 +594,8 @@ function loadTabContent(tab) {
     switch (tab) {
         case 'home':
             updateStats();
+            // Ensure auto-refresh is running for home
+            setTimeout(() => startScheduleAutoRefresh(), 500);
             break;
         case 'live':
             loadLiveMatch();
@@ -489,12 +605,18 @@ function loadTabContent(tab) {
             break;
         case 'teams':
             loadTeams();
+            // Ensure auto-refresh is running for teams
+            setTimeout(() => startScheduleAutoRefresh(), 500);
             break;
         case 'schedule':
             loadSchedule();
+            // Ensure auto-refresh is running for schedule
+            setTimeout(() => startScheduleAutoRefresh(), 500);
             break;
         case 'tables':
             loadTables();
+            // Always ensure auto-refresh is running for tables
+            setTimeout(() => startScheduleAutoRefresh(), 500);
             break;
         case 'knockout':
             loadKnockoutMatches();
@@ -1040,7 +1162,7 @@ async function loadLiveMatch() {
                                     <div class="info-content">
                                         <div class="info-label">Zeit</div>
                                         <div class="info-value">${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</div>
-                                        <div class="countdown-display">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
+                                        <div class="countdown-display" data-next-time="${nextTime.toISOString()}">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!'}</div>
                                     </div>
                                 </div>
                             ` : `
@@ -1146,9 +1268,13 @@ async function loadLiveMatch() {
                 liveUpdateInterval = null;
             }
             stopLocalLiveTimer();
+            stopCountdownTimer();
         }
         
         liveContent.innerHTML = html;
+        
+        // Start countdown timer for "Startet in X Min" updates
+        startCountdownTimer();
         
     } catch (error) {
         console.error('Fehler beim Laden des Live-Spiels:', error);
@@ -1310,12 +1436,57 @@ function startLocalLiveTimer(liveMatch) {
     }, 1000); // Update every second for smooth timer
 }
 
+// Global countdown timer for updating "Startet in X Min" displays
+let countdownTimerInterval = null;
+
+function startCountdownTimer() {
+    // Clear existing timer
+    if (countdownTimerInterval) {
+        clearInterval(countdownTimerInterval);
+    }
+    
+    // Start countdown timer that updates every 30 seconds
+    countdownTimerInterval = setInterval(() => {
+        if (currentActiveTab !== 'live') {
+            return;
+        }
+        
+        try {
+            // Update countdown displays
+            updateCountdownDisplays();
+        } catch (error) {
+            console.error('Countdown timer update error:', error);
+        }
+    }, 30000); // Update every 30 seconds
+}
+
+function updateCountdownDisplays() {
+    const countdownElements = document.querySelectorAll('.countdown-display');
+    countdownElements.forEach(element => {
+        const nextTime = element.dataset.nextTime;
+        if (nextTime) {
+            const timeUntilMatch = new Date(nextTime) - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            element.textContent = minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Startet gleich!';
+        }
+    });
+}
+
 // Stop local live timer
 function stopLocalLiveTimer() {
     if (localLiveTimerInterval) {
         clearInterval(localLiveTimerInterval);
         localLiveTimerInterval = null;
         console.log('Stopped local live timer');
+    }
+}
+
+// Stop countdown timer
+function stopCountdownTimer() {
+    if (countdownTimerInterval) {
+        clearInterval(countdownTimerInterval);
+        countdownTimerInterval = null;
+        console.log('Stopped countdown timer');
     }
 }
 
@@ -1655,8 +1826,8 @@ async function loadTables() {
         });
         
         if (!data.tournament.groups || data.tournament.groups.length === 0) {
-            // Try to generate tables from existing matches if tournament is running
-            if (data.tournament.status === 'active' || data.tournament.status === 'running') {
+            // Try to generate tables from existing matches if tournament is running or finished
+            if (data.tournament.status === 'active' || data.tournament.status === 'running' || data.tournament.status === 'finished' || data.tournament.status === 'completed') {
                 // Fetch matches to generate table data
                 try {
                     const matchesResponse = await fetch('/api/matches');
@@ -1682,10 +1853,10 @@ async function loadTables() {
                         <i class="fas fa-table"></i>
                         <h3>Keine Tabellen verfügbar</h3>
                         <p>Die Gruppentabellen werden erstellt, sobald das Turnier startet und Spiele gespielt werden.</p>
-                        ${data.tournament.status !== 'active' ? `
+                        ${data.tournament.status !== 'active' && data.tournament.status !== 'finished' && data.tournament.status !== 'completed' ? `
                             <div style="margin-top: 1rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem;">
                                 <strong>Turnier-Status:</strong> ${data.tournament.status}<br>
-                                <small>Tabellen werden angezeigt wenn Status "active" ist und Gruppen vorhanden sind.</small>
+                                <small>Tabellen werden angezeigt wenn Status "active", "finished" oder "completed" ist und Gruppen vorhanden sind.</small>
                             </div>
                         ` : ''}
                     </div>
@@ -1711,6 +1882,14 @@ async function loadTables() {
         }
         
         data.tournament.groups.forEach(group => {
+            // Debug logging for group structure
+            console.log('Group data:', {
+                name: group.name,
+                hasTable: !!group.table,
+                tableLength: group.table?.length || 0,
+                table: group.table
+            });
+            
             html += `
                 <div class="group-table">
                     <h3>${group.name}</h3>
@@ -1732,7 +1911,18 @@ async function loadTables() {
                             <tbody>
             `;
             
-            group.table.forEach((entry, index) => {
+            if (!group.table || group.table.length === 0) {
+                html += `
+                    <tr>
+                        <td colspan="9" style="text-align: center; color: #666; padding: 2rem;">
+                            Keine Tabellendaten verfügbar
+                        </td>
+                    </tr>
+                `;
+            } else {
+                console.log(`Rendering table for ${group.name} with ${group.table.length} entries`);
+                group.table.forEach((entry, index) => {
+                    console.log(`Rendering entry ${index + 1}:`, entry);
                 html += `
                     <tr>
                         <td><div class="position">${index + 1}</div></td>
@@ -1747,6 +1937,7 @@ async function loadTables() {
                     </tr>
                 `;
             });
+            }
             
             html += `
                             </tbody>
@@ -1756,7 +1947,10 @@ async function loadTables() {
             `;
         });
         
+        console.log('Final table HTML length:', html.length);
+        console.log('Setting tablesContent.innerHTML');
         tablesContent.innerHTML = html;
+        console.log('Table HTML set successfully');
     } catch (error) {
         console.error('Fehler beim Laden der Tabellen:', error);
         const tablesContent = document.getElementById('tables-content');
@@ -2155,7 +2349,7 @@ async function loadKnockoutMatches() {
             `;
             
             semifinals.forEach(match => {
-                const matchTime = new Date(match.datetime);
+                const matchTime = match.scheduled ? new Date(match.scheduled.datetime) : null;
                 const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
                 
                 html += `
@@ -2174,13 +2368,14 @@ async function loadKnockoutMatches() {
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
-                            ${matchTime.toLocaleString('de-DE', {
+                            ${matchTime ? matchTime.toLocaleString('de-DE', {
                                 weekday: 'short',
                                 day: '2-digit',
                                 month: '2-digit',
                                 hour: '2-digit',
-                                minute: '2-digit'
-                            })}
+                                minute: '2-digit',
+                                timeZone: 'Europe/Berlin'
+                            }) : 'Noch nicht geplant'}
                         </div>
                     </div>
                 `;
@@ -2201,7 +2396,7 @@ async function loadKnockoutMatches() {
             `;
             
             thirdPlace.forEach(match => {
-                const matchTime = new Date(match.datetime);
+                const matchTime = match.scheduled ? new Date(match.scheduled.datetime) : null;
                 const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
                 
                 html += `
@@ -2220,13 +2415,14 @@ async function loadKnockoutMatches() {
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
-                            ${matchTime.toLocaleString('de-DE', {
+                            ${matchTime ? matchTime.toLocaleString('de-DE', {
                                 weekday: 'short',
                                 day: '2-digit',
                                 month: '2-digit',
                                 hour: '2-digit',
-                                minute: '2-digit'
-                            })}
+                                minute: '2-digit',
+                                timeZone: 'Europe/Berlin'
+                            }) : 'Noch nicht geplant'}
                         </div>
                     </div>
                 `;
@@ -2247,7 +2443,7 @@ async function loadKnockoutMatches() {
             `;
             
             finals.forEach(match => {
-                const matchTime = new Date(match.datetime);
+                const matchTime = match.scheduled ? new Date(match.scheduled.datetime) : null;
                 const statusClass = match.completed ? 'completed' : match.liveScore?.isLive ? 'live' : 'scheduled';
                 
                 html += `
@@ -2266,13 +2462,14 @@ async function loadKnockoutMatches() {
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
-                            ${matchTime.toLocaleString('de-DE', {
+                            ${matchTime ? matchTime.toLocaleString('de-DE', {
                                 weekday: 'short',
                                 day: '2-digit',
                                 month: '2-digit',
                                 hour: '2-digit',
-                                minute: '2-digit'
-                            })}
+                                minute: '2-digit',
+                                timeZone: 'Europe/Berlin'
+                            }) : 'Noch nicht geplant'}
                         </div>
                     </div>
                 `;

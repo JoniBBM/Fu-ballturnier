@@ -6,16 +6,16 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# Nodemon für Live-Reload installieren
+# Nodemon für Live-Reload installieren (für Development)
 RUN npm install -g nodemon
 
 # Saves-Ordner erstellen
 RUN mkdir -p /app/saves
 
-# Code wird über Volume gemountet, daher hier nicht kopieren
-# COPY . .
+# Code kopieren (für Production)
+COPY . .
 
 EXPOSE 5678
 
-# Standard-Command (wird durch docker-compose überschrieben)
-CMD ["npm", "run", "dev"]
+# Standard-Command
+CMD ["npm", "start"]

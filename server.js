@@ -98,13 +98,10 @@ async function loadDataForYear(year) {
 
 // Daten für aktuelles Jahr speichern
 async function saveData() {
-    if (!currentTournament) {
-        console.log('Keine aktuellen Turnierdaten zum Speichern');
-        return;
-    }
-    
-    const year = currentTournament.year;
+    // Always save data, even if no current tournament exists
+    const year = currentTournament ? currentTournament.year : new Date().getFullYear();
     const filename = path.join(SAVES_DIR, `${year}.json`);
+    const tempFilename = path.join(SAVES_DIR, `${year}.json.tmp`);
     
     try {
         const data = {
@@ -116,10 +113,20 @@ async function saveData() {
             contactData,
             lastUpdated: new Date().toISOString()
         };
-        await fs.promises.writeFile(filename, JSON.stringify(data, null, 2));
+        
+        // Atomic save: write to temp file first, then rename
+        await fs.promises.writeFile(tempFilename, JSON.stringify(data, null, 2));
+        await fs.promises.rename(tempFilename, filename);
+        
         console.log(`Daten für ${year} gespeichert in:`, filename);
     } catch (error) {
         console.error(`Fehler beim Speichern der Daten für ${year}:`, error);
+        // Clean up temp file if it exists
+        try {
+            await fs.promises.unlink(tempFilename);
+        } catch (cleanupError) {
+            // Ignore cleanup errors
+        }
     }
 }
 
@@ -138,7 +145,7 @@ async function autoSave() {
             console.error('Error in autoSave:', error);
         }
         autoSaveTimeout = null;
-    }, 500); // 500ms delay to group rapid saves
+    }, 100); // 100ms delay to group rapid saves
 }
 
 // Beim Start das aktuelle Jahr laden
@@ -272,10 +279,20 @@ function generatePenaltyShootouts(groups) {
  * Aktualisiert Gruppentabelle und behandelt Elfmeterschießen
  */
 function updateGroupTableWithPenalties(groupName, matches) {
-    if (!currentTournament) return;
+    if (!currentTournament) {
+        console.log('No current tournament found for table update');
+        return;
+    }
     
     const group = currentTournament.groups.find(g => g.name === groupName);
-    if (!group) return;
+    if (!group) {
+        console.log(`Group ${groupName} not found in tournament`);
+        return;
+    }
+    
+    console.log(`Updating table for group: ${groupName}`);
+    
+    console.log(`Resetting table for group: ${groupName}`);
     
     // Reset table
     group.table.forEach(entry => {
@@ -292,6 +309,12 @@ function updateGroupTableWithPenalties(groupName, matches) {
     
     // Calculate stats from matches (ohne Elfmeterschießen)
     const groupMatches = matches.filter(m => m.group === groupName && m.completed && !m.isPenaltyShootout);
+    
+    console.log(`Found ${groupMatches.length} completed matches for group ${groupName}:`);
+    groupMatches.forEach(match => {
+        console.log(`Processing match: ${match.team1} ${match.score1}:${match.score2} ${match.team2}`);
+    });
+    
     groupMatches.forEach(match => {
         const team1Entry = group.table.find(t => t.team === match.team1);
         const team2Entry = group.table.find(t => t.team === match.team2);
@@ -1345,7 +1368,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
             koMatches.push({
                 id: 'third_place',
                 phase: 'placement',
-                group: 'Platzierungsspiele',
+                group: 'Spiel um Platz 3',
                 team1: 'Verlierer semifinal_1',
                 team2: 'Verlierer semifinal_2',
                 score1: null,
@@ -1414,7 +1437,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
                 koMatches.push({
                     id: 'third_place',
                     phase: 'placement',
-                    group: 'Platzierungsspiele',
+                    group: 'Spiel um Platz 3',
                     team1: 'Verlierer semifinal_1',
                     team2: 'Verlierer semifinal_2',
                     score1: null,
@@ -1436,7 +1459,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
             koMatches.push({
                 id: 'fifth_place_semi1',
                 phase: 'placement',
-                group: 'Platzierungsspiele',
+                group: 'Spiel um Platz 5/6',
                 team1: 'Verlierer quarterfinal_1',
                 team2: 'Verlierer quarterfinal_2',
                 score1: null,
@@ -1451,7 +1474,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
             koMatches.push({
                 id: 'fifth_place_semi2',
                 phase: 'placement',
-                group: 'Platzierungsspiele',
+                group: 'Spiel um Platz 7/8',
                 team1: 'Verlierer quarterfinal_3',
                 team2: 'Verlierer quarterfinal_4',
                 score1: null,
@@ -1466,7 +1489,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
             koMatches.push({
                 id: 'fifth_place',
                 phase: 'placement',
-                group: 'Platzierungsspiele',
+                group: 'Spiel um Platz 5',
                 team1: 'Sieger fifth_place_semi1',
                 team2: 'Sieger fifth_place_semi2',
                 score1: null,
@@ -1482,7 +1505,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
                 koMatches.push({
                     id: 'seventh_place',
                     phase: 'placement',
-                    group: 'Platzierungsspiele',
+                    group: 'Spiel um Platz 7',
                     team1: 'Verlierer fifth_place_semi1',
                     team2: 'Verlierer fifth_place_semi2',
                     score1: null,
@@ -1499,7 +1522,7 @@ function generateKnockoutMatches(finalTable, knockoutConfig) {
             koMatches.push({
                 id: 'fifth_place',
                 phase: 'placement',
-                group: 'Platzierungsspiele',
+                group: 'Spiel um Platz 5',
                 team1: finalTable[4].team,
                 team2: finalTable[5].team,
                 score1: null,
@@ -1615,10 +1638,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration) {
         
         unscheduledMatches.forEach((match, index) => {
             // Überspringe K.O.-Spiele mit Platzhalter-Teams
-            if ((match.team1 && match.team1.includes('Sieger ')) || 
-                (match.team1 && match.team1.includes('Verlierer ')) ||
-                (match.team2 && match.team2.includes('Sieger ')) || 
-                (match.team2 && match.team2.includes('Verlierer '))) {
+            if (isPlaceholderMatch(match)) {
                 return;
             }
             
@@ -1642,10 +1662,7 @@ function intelligentScheduling(matches, groups, startTime, matchDuration) {
             let longestRest = -1;
             unscheduledMatches.forEach((match, index) => {
                 // Überspringe K.O.-Spiele mit Platzhalter-Teams
-                if ((match.team1 && match.team1.includes('Sieger ')) || 
-                    (match.team1 && match.team1.includes('Verlierer ')) ||
-                    (match.team2 && match.team2.includes('Sieger ')) || 
-                    (match.team2 && match.team2.includes('Verlierer '))) {
+                if (isPlaceholderMatch(match)) {
                     return;
                 }
                 
@@ -2379,7 +2396,7 @@ app.put('/api/admin/tournament/status', async (req, res) => {
         return res.status(404).json({ error: 'Kein aktives Turnier' });
     }
     
-    const validStatuses = ['registration', 'closed', 'active', 'finished'];
+    const validStatuses = ['registration', 'closed', 'active', 'finished', 'completed'];
     if (!validStatuses.includes(status)) {
         return res.status(400).json({ error: 'Ungültiger Status' });
     }
@@ -2576,8 +2593,8 @@ app.post('/api/admin/generate-knockout', async (req, res) => {
         m.phase === 'quarterfinal' || 
         m.phase === 'semifinal' || 
         m.phase === 'final' ||
-        m.group?.toLowerCase().includes('finale') ||
-        m.group?.toLowerCase().includes('platz')
+        m.phase === 'placement' ||
+        m.group?.toLowerCase().includes('finale')
     );
     
     if (existingKoMatches.length > 0) {
@@ -2605,8 +2622,8 @@ app.post('/api/admin/generate-knockout', async (req, res) => {
             m.phase === 'quarterfinal' || 
             m.phase === 'semifinal' || 
             m.phase === 'final' ||
-            m.group?.toLowerCase().includes('finale') ||
-            m.group?.toLowerCase().includes('platz')
+            m.phase === 'placement' ||
+            m.group?.toLowerCase().includes('finale')
         );
         
         res.json({ 
@@ -2794,6 +2811,30 @@ app.post('/api/admin/matches/reset-schedule', async (req, res) => {
 });
 
 // Admin: Alle Spiele automatisch planen
+// Helper function to check if a match has placeholder teams
+function isPlaceholderMatch(match) {
+    if (!match.team1 || !match.team2) return true;
+    
+    // Special handling for final and third place match - they're ready to schedule when semifinals are done
+    if ((match.id === 'final' && match.phase === 'final') || 
+        (match.id === 'third_place' && match.phase === 'placement')) {
+        return false; // Final and third place matches are schedulable
+    }
+    
+    const placeholderPatterns = [
+        'sieger gruppe',
+        'sieger viertelfinale', 
+        'gewinner'
+    ];
+    
+    const team1Lower = match.team1.toLowerCase();
+    const team2Lower = match.team2.toLowerCase();
+    
+    return placeholderPatterns.some(pattern => 
+        team1Lower.includes(pattern) || team2Lower.includes(pattern)
+    );
+}
+
 app.post('/api/admin/matches/schedule-all', async (req, res) => {
     const { password, startTime, matchDuration, halftimeDuration, halftimeBreak, breakDuration } = req.body;
     
@@ -2813,16 +2854,36 @@ app.post('/api/admin/matches/schedule-all', async (req, res) => {
     }
     
     try {
-        // Finde alle ungeplanten Spiele (ohne K.O.-Spiele)
-        const unscheduledMatches = matches.filter(match => 
+        // Finde alle ungeplanten Spiele (inklusive K.O.-Spiele)
+        let unscheduledMatches = matches.filter(match => 
             !match.scheduled && 
             !match.completed &&
-            !(match.phase === 'quarterfinal' || match.phase === 'semifinal' || match.phase === 'final') &&
-            !(match.group?.toLowerCase().includes('finale')) &&
-            !(match.group?.toLowerCase().includes('halbfinale')) &&
-            !(match.group?.toLowerCase().includes('viertelfinale')) &&
-            !(match.group?.toLowerCase().includes('platz'))
+            // Allow KO matches to be scheduled
+            !isPlaceholderMatch(match)
         );
+        
+        // Sortiere KO-Spiele in der richtigen Reihenfolge:
+        // 1. Gruppenphasenspiele
+        // 2. Halbfinale
+        // 3. Finale
+        // 4. Platzierungsspiele (von unten nach oben: 7, 5, 3)
+        unscheduledMatches.sort((a, b) => {
+            const getMatchPriority = (match) => {
+                if (match.phase === 'group') return 1;
+                if (match.phase === 'semifinal') return 2;
+                if (match.phase === 'final') return 3;
+                if (match.phase === 'quarterfinal') return 4;
+                
+                // Platzierungsspiele nach Position sortieren
+                if (match.group?.toLowerCase().includes('platz 7')) return 5;
+                if (match.group?.toLowerCase().includes('platz 5')) return 6;
+                if (match.group?.toLowerCase().includes('platz 3')) return 7;
+                
+                return 8; // Andere Spiele zuletzt
+            };
+            
+            return getMatchPriority(a) - getMatchPriority(b);
+        });
         
         if (unscheduledMatches.length === 0) {
             return res.json({
@@ -2908,7 +2969,6 @@ app.post('/api/admin/matches/schedule-all', async (req, res) => {
             message: `${unscheduledMatches.length} Spiele erfolgreich geplant`,
             scheduledCount: unscheduledMatches.length,
             startTime: startTime,
-            field: field,
             duration: duration
         });
         
@@ -3056,9 +3116,7 @@ app.post('/api/admin/schedule-knockout', async (req, res) => {
     }
     
     const koMatches = matches.filter(m => m.phase !== 'group');
-    const schedulableMatches = koMatches.filter(m => !m.scheduled && 
-        !(m.team1.includes('Sieger ') || m.team1.includes('Verlierer ') ||
-          m.team2.includes('Sieger ') || m.team2.includes('Verlierer ')));
+    const schedulableMatches = koMatches.filter(m => !m.scheduled && !isPlaceholderMatch(m));
     
     if (schedulableMatches.length === 0) {
         return res.status(400).json({ error: 'Keine K.O.-Spiele zum Planen verfügbar' });
@@ -3068,9 +3126,25 @@ app.post('/api/admin/schedule-knockout', async (req, res) => {
     const today = new Date();
     let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
     
-    // Sortiere nach Phasen (quarterfinals -> semifinals -> finals -> placement)
-    const phaseOrder = { 'quarterfinal': 1, 'semifinal': 2, 'final': 3, 'placement': 4 };
-    schedulableMatches.sort((a, b) => phaseOrder[a.phase] - phaseOrder[b.phase]);
+    // Sortiere nach Phasen: quarterfinals -> semifinals -> placement (von unten nach oben) -> finals
+    const phaseOrder = { 'quarterfinal': 1, 'semifinal': 2, 'placement': 3, 'final': 5 };
+    schedulableMatches.sort((a, b) => {
+        const phaseComparison = phaseOrder[a.phase] - phaseOrder[b.phase];
+        if (phaseComparison !== 0) return phaseComparison;
+        
+        // Innerhalb der Platzierungsspiele: von unten nach oben (7., 5., 3. Platz)
+        if (a.phase === 'placement' && b.phase === 'placement') {
+            const getPlacementPriority = (matchId) => {
+                if (matchId.includes('seventh_place')) return 1; // 7. Platz zuerst
+                if (matchId.includes('fifth_place')) return 2;   // 5. Platz als zweites
+                if (matchId.includes('third_place')) return 3;   // 3. Platz als letztes
+                return 4; // Andere Platzierungsspiele
+            };
+            return getPlacementPriority(a.id) - getPlacementPriority(b.id);
+        }
+        
+        return 0;
+    });
     
     let scheduledCount = 0;
     let currentPhase = null;
@@ -3102,6 +3176,58 @@ app.post('/api/admin/schedule-knockout', async (req, res) => {
     });
 });
 
+// Admin: KO-Spiele komplett zurücksetzen (löschen)
+app.post('/api/admin/reset-ko-schedules', async (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    try {
+        let deletedCount = 0;
+        
+        // KO-Spiele komplett aus der matches-Liste entfernen
+        const originalLength = matches.length;
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const match = matches[i];
+            if (match.phase === 'quarterfinal' || 
+                match.phase === 'semifinal' || 
+                match.phase === 'final' || 
+                match.phase === 'placement' ||
+                match.group?.toLowerCase().includes('finale') ||
+                match.group?.toLowerCase().includes('platz')) {
+                matches.splice(i, 1);
+                deletedCount++;
+            }
+        }
+        
+        // Knockout-Phase im Tournament zurücksetzen
+        if (currentTournament) {
+            currentTournament.knockoutPhase = {
+                quarterfinals: [],
+                semifinals: [],
+                final: null
+            };
+            currentTournament.lastUpdated = new Date().toISOString();
+        }
+        
+        await autoSave();
+        
+        // Broadcast update
+        broadcastUpdate('matches-updated', { matches });
+        
+        res.json({
+            success: true,
+            deletedCount: deletedCount,
+            message: `${deletedCount} KO-Spiele komplett gelöscht - Gruppenphase kann neu generiert werden`
+        });
+    } catch (error) {
+        console.error('Fehler beim Löschen der KO-Spiele:', error);
+        res.status(500).json({ error: 'Interner Serverfehler' });
+    }
+});
+
 app.post('/api/admin/schedule-all', async (req, res) => {
     const { password, startTime, matchDuration } = req.body;
     
@@ -3109,10 +3235,31 @@ app.post('/api/admin/schedule-all', async (req, res) => {
         return res.status(401).json({ error: 'Ungültiges Passwort' });
     }
     
-    const unscheduledMatches = matches.filter(m => !m.scheduled);
+    let unscheduledMatches = matches.filter(m => !m.scheduled && !isPlaceholderMatch(m));
     if (unscheduledMatches.length === 0) {
         return res.status(400).json({ error: 'Keine ungeplanten Spiele vorhanden' });
     }
+    
+    // Sortiere KO-Spiele in der richtigen Reihenfolge
+    unscheduledMatches.sort((a, b) => {
+        const getMatchPriority = (match) => {
+            if (match.phase === 'group') return 1;
+            if (match.phase === 'quarterfinal') return 2;
+            if (match.phase === 'semifinal') return 3;
+            
+            // Platzierungsspiele nach Position sortieren
+            if (match.group?.toLowerCase().includes('platz 7')) return 4;
+            if (match.group?.toLowerCase().includes('platz 5')) return 5;
+            if (match.group?.toLowerCase().includes('platz 3')) return 6;
+            
+            // Finale als letztes Spiel
+            if (match.phase === 'final') return 7;
+            
+            return 8; // Andere Spiele zuletzt
+        };
+        
+        return getMatchPriority(a) - getMatchPriority(b);
+    });
     
     if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
         return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
@@ -3152,14 +3299,103 @@ app.post('/api/admin/schedule-all', async (req, res) => {
     }
 });
 
+// Admin: Final/KO-Spiele einfach planen
+app.post('/api/admin/schedule-finals', async (req, res) => {
+    const { password, startTime, matchDuration, breakBetweenRounds } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+        return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
+    }
+    
+    // Alle finalen KO-Spiele finden
+    const finalMatches = matches.filter(m => 
+        m.phase === 'semifinal' || m.phase === 'final' || m.phase === 'placement'
+    );
+    
+    if (finalMatches.length === 0) {
+        return res.status(400).json({ error: 'Keine finalen KO-Spiele vorhanden' });
+    }
+    
+    // Korrekte Reihenfolge: Halbfinale → Platzierungsspiele → Finale
+    finalMatches.sort((a, b) => {
+        // 1. Halbfinale zuerst
+        if (a.phase === 'semifinal' && b.phase !== 'semifinal') return -1;
+        if (b.phase === 'semifinal' && a.phase !== 'semifinal') return 1;
+        
+        // 2. Platzierungsspiele in der Mitte (nach Position)
+        if (a.phase === 'placement' && b.phase === 'placement') {
+            const getPlacementOrder = (match) => {
+                if (match.id.includes('seventh_place')) return 1;
+                if (match.id.includes('fifth_place')) return 2;
+                if (match.id.includes('third_place')) return 3;
+                return 4;
+            };
+            return getPlacementOrder(a) - getPlacementOrder(b);
+        }
+        
+        // 3. Finale als letztes
+        if (a.phase === 'final' && b.phase !== 'final') return 1;
+        if (b.phase === 'final' && a.phase !== 'final') return -1;
+        
+        return 0;
+    });
+    
+    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
+    const today = new Date();
+    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
+    
+    let scheduledCount = 0;
+    let currentPhase = null;
+    
+    finalMatches.forEach(match => {
+        // Zwischen verschiedenen Phasen: längere Pause
+        if (currentPhase && currentPhase !== match.phase) {
+            currentTime = new Date(currentTime.getTime() + (breakBetweenRounds || 30) * 60000);
+        }
+        
+        match.scheduled = {
+            datetime: new Date(currentTime),
+            halftimeDuration: 10,
+            halftimeBreak: 1
+        };
+        
+        currentTime = new Date(currentTime.getTime() + parseInt(matchDuration) * 60000);
+        currentPhase = match.phase;
+        scheduledCount++;
+    });
+    
+    if (currentTournament) {
+        currentTournament.lastUpdated = new Date().toISOString();
+    }
+    
+    await autoSave();
+    res.json({ 
+        success: true, 
+        scheduledMatches: scheduledCount,
+        message: `${scheduledCount} finale KO-Spiele korrekt geplant`
+    });
+});
+
 // API: Nächstes geplantes Spiel abrufen (auch überfällige)
 app.get('/api/next-match', (req, res) => {
     const now = new Date();
     
+    // Finde das aktuelle Live-Spiel
+    const liveMatch = matches.find(m => m.liveScore?.isLive);
+    
     // Finde das nächste noch nicht abgeschlossene Spiel (auch überfällige)
-    const upcomingMatches = matches
+    let upcomingMatches = matches
         .filter(m => m.scheduled && !m.completed)
         .sort((a, b) => new Date(a.scheduled.datetime) - new Date(b.scheduled.datetime));
+    
+    // Wenn ein Live-Spiel aktiv ist, entferne es aus der Liste der nächsten Spiele
+    if (liveMatch) {
+        upcomingMatches = upcomingMatches.filter(m => m.id !== liveMatch.id);
+    }
     
     if (upcomingMatches.length > 0) {
         const nextMatch = upcomingMatches[0];
@@ -3494,18 +3730,23 @@ app.post('/api/admin/finish-match', async (req, res) => {
     match.liveScore.isLive = false;
     match.liveScore.finishedAt = new Date();
     
-    if (match.phase === 'group') {
+    if (match.phase === 'group' || match.phase === 'swiss') {
+        console.log(`Updating table for ${match.phase} match in group: ${match.group}`);
         updateGroupTable(match.group, matches);
         
-        // Prüfe ob alle Gruppenspiele abgeschlossen sind und generiere K.O.-Spiele
-        const koGenerated = await generateFinalTableAndKnockoutMatches();
-        if (koGenerated) {
-            console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
+        // Debug: Check if table was updated
+        const updatedGroup = currentTournament.groups.find(g => g.name === match.group);
+        if (updatedGroup) {
+            console.log(`Table updated for ${match.group}:`, updatedGroup.table);
         }
-    } else if (match.phase === 'swiss') {
-        // Swiss-System: Aktualisiere Tabelle (ähnlich wie Gruppenspiele)
-        console.log('Swiss match completed, updating standings');
-        // TODO: Implementiere Swiss-System Tabellen-Update falls benötigt
+        
+        // Only generate knockout matches for group phase, not swiss
+        if (match.phase === 'group') {
+            const koGenerated = await generateFinalTableAndKnockoutMatches();
+            if (koGenerated) {
+                console.log('K.O.-Phase automatisch generiert nach Live-Spiel Ende');
+            }
+        }
     } else {
         // Bei echten K.O.-Spielen: Aktualisiere abhängige Spiele
         updateDependentKnockoutMatches(matchId);
@@ -3518,6 +3759,40 @@ app.post('/api/admin/finish-match', async (req, res) => {
     await autoSave();
     broadcastUpdate('match-finished', { matchId, match });
     res.json({ success: true, match });
+});
+
+// Admin: Recalculate all tables (useful for fixing table inconsistencies)
+app.post('/api/admin/recalculate-tables', async (req, res) => {
+    const { password } = req.body;
+    
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).json({ error: 'Ungültiges Passwort' });
+    }
+    
+    if (!currentTournament || !currentTournament.groups) {
+        return res.status(404).json({ error: 'Kein aktives Turnier mit Gruppen' });
+    }
+    
+    console.log('Recalculating all tables...');
+    
+    // Recalculate each group's table
+    currentTournament.groups.forEach(group => {
+        console.log(`Recalculating table for group: ${group.name}`);
+        updateGroupTable(group.name, matches);
+    });
+    
+    await autoSave();
+    broadcastUpdate('tables-recalculated', { 
+        timestamp: new Date().toISOString(),
+        groups: currentTournament.groups.length 
+    });
+    
+    console.log('All tables recalculated successfully');
+    res.json({ 
+        success: true, 
+        message: 'Alle Tabellen wurden neu berechnet',
+        groups: currentTournament.groups.length
+    });
 });
 
 // Admin: Verlängerung starten

@@ -977,13 +977,30 @@ tr:hover td {
     color: var(--white);
     font-weight: 600;
     z-index: 1001;
-    transform: translateX(400px);
+    transform: translateX(calc(100% + 2rem));
     transition: transform 0.3s ease;
     box-shadow: var(--shadow-lg);
+    max-width: calc(100vw - 4rem);
+    word-wrap: break-word;
 }
 
 .notification.show {
     transform: translateX(0);
+}
+
+/* Mobile responsiveness for notifications */
+@media (max-width: 768px) {
+    .notification {
+        top: 1rem;
+        right: 1rem;
+        left: 1rem;
+        max-width: none;
+        transform: translateY(-100px);
+    }
+    
+    .notification.show {
+        transform: translateY(0);
+    }
 }
 
 .notification.success {

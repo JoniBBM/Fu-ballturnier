@@ -704,7 +704,7 @@ async function performTabRefresh() {
                 break;
             case 'matches':
                 await loadInitialData(true); // Force reload für Matches  
-                loadMatches();
+                await loadMatches();
                 break;
             case 'live':
                 await loadLiveControl();
@@ -1157,7 +1157,7 @@ async function loadTabContent(tab) {
             loadTeams();
             break;
         case 'matches':
-            loadMatches();
+            await loadMatches();
             break;
         case 'live':
             await loadLiveControl();
@@ -1234,6 +1234,12 @@ function loadTournamentManagement() {
                     </button>
                     <button class="btn btn-outline" onclick="resetAllSchedules()">
                         <i class="fas fa-calendar-times"></i> <span class="btn-text">Zeitpläne zurücksetzen</span>
+                    </button>
+                    <button class="btn btn-outline" onclick="resetKOSchedules()">
+                        <i class="fas fa-trophy"></i> <span class="btn-text">KO-Spiele Zeitplan zurücksetzen</span>
+                    </button>
+                    <button class="btn btn-outline" onclick="recalculateTables()">
+                        <i class="fas fa-calculator"></i> <span class="btn-text">Tabellen neu berechnen</span>
                     </button>
                     <button class="btn btn-outline" onclick="exportTournamentData()">
                         <i class="fas fa-download"></i> <span class="btn-text">Daten exportieren</span>
@@ -1866,6 +1872,56 @@ async function resetAllSchedules() {
     ]);
 }
 
+// Reset KO Match Schedules
+async function resetKOSchedules() {
+    const koMatches = matches.filter(m => 
+        m.scheduled && 
+        (m.phase === 'quarterfinal' || m.phase === 'semifinal' || m.phase === 'final' ||
+         m.group?.toLowerCase().includes('finale') ||
+         m.group?.toLowerCase().includes('platz'))
+    );
+    
+    createModal('KO-Spiele Zeitplan zurücksetzen', `
+        <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-exclamation-triangle" style="color: #f59e0b;"></i>
+            <strong>Achtung:</strong> Nur KO-Spiele Zeitplanungen werden gelöscht!
+        </div>
+        <p>Diese Aktion entfernt die geplanten Zeiten nur von KO-Spielen (Viertelfinale, Halbfinale, Finale, Platzierungsspiele). Gruppenspiele bleiben geplant.</p>
+        <p><strong>Betroffen:</strong> ${koMatches.length} geplante KO-Spiele</p>
+        ${koMatches.length === 0 ? '<p><em>Keine geplanten KO-Spiele gefunden.</em></p>' : ''}
+    `, [
+        { text: 'KO-Zeitpläne zurücksetzen', class: 'btn-warning', handler: (modalId) => executeResetKOSchedules(modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function executeResetKOSchedules(modalId) {
+    showLoading(true);
+    closeModal(modalId);
+    
+    try {
+        const response = await fetch('/api/admin/reset-ko-schedules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showNotification(`${data.resetCount} KO-Spiele Zeitplanungen zurückgesetzt`);
+            await loadInitialData(true);
+        } else {
+            showNotification(data.error, 'error');
+        }
+    } catch (error) {
+        console.error('Fehler beim Zurücksetzen der KO-Zeitpläne:', error);
+        showNotification('Fehler beim Zurücksetzen der KO-Zeitpläne', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
 async function executeResetSchedules(modalId) {
     showLoading(true);
     
@@ -1890,6 +1946,52 @@ async function executeResetSchedules(modalId) {
         }
     } catch (error) {
         showNotification('Fehler beim Zurücksetzen der Zeitpläne', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Recalculate Tables
+async function recalculateTables() {
+    if (!currentTournament) {
+        showNotification('Kein aktives Turnier vorhanden', 'error');
+        return;
+    }
+
+    if (!adminPassword) {
+        showNotification('Kein Admin-Passwort gesetzt', 'error');
+        return;
+    }
+
+    // Simple confirmation without modal
+    if (!confirm('Sollen alle Tabellen basierend auf den abgeschlossenen Spielen neu berechnet werden? Dies kann bei Inkonsistenzen in der Tabelle helfen.')) {
+        return;
+    }
+
+    showLoading(true);
+    try {
+        console.log('Sending recalculate request...');
+        const response = await fetch('/api/admin/recalculate-tables', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: adminPassword })
+        });
+
+        const data = await response.json();
+        console.log('Recalculate response:', data);
+
+        if (response.ok) {
+            showNotification(data.message || 'Tabellen erfolgreich neu berechnet', 'success');
+            // Refresh current tab content
+            if (typeof refreshCurrentTabContent === 'function') {
+                refreshCurrentTabContent();
+            }
+        } else {
+            showNotification(data.error || 'Fehler beim Neuberechnen der Tabellen', 'error');
+        }
+    } catch (error) {
+        console.error('Error recalculating tables:', error);
+        showNotification('Fehler beim Neuberechnen der Tabellen', 'error');
     } finally {
         showLoading(false);
     }
@@ -2435,7 +2537,7 @@ async function generateKnockoutMatches() {
             showNotification('K.O.-Phase erfolgreich generiert!');
             
             // Lade Spielplan neu um K.O.-Spiele anzuzeigen
-            await loadAllData();
+            await loadInitialData(true);
             
             // Deaktiviere Button dauerhaft
             generateBtn.innerHTML = '<i class="fas fa-check"></i> K.O.-Spiele generiert';
@@ -2642,7 +2744,7 @@ async function loadUpcomingMatches() {
                 <div class="next-match-admin">
                     <div class="next-match-time">
                         <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
-                        <span class="countdown">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
+                        <span class="countdown" data-next-time="${nextTime.toISOString()}">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt'}</span>
                     </div>
                     <div class="next-match-info">
                         <strong>${nextMatch.team1} vs ${nextMatch.team2}</strong>
@@ -2696,6 +2798,9 @@ async function loadUpcomingMatches() {
         console.error('Error loading upcoming matches:', error);
         document.getElementById('upcoming-matches').innerHTML = '<p>Fehler beim Laden der nächsten Spiele</p>';
     }
+    
+    // Start countdown timer for admin displays
+    startAdminCountdownTimer();
 }
 
 // Teams verwalten
@@ -2888,12 +2993,24 @@ async function deleteTeam(teamId) {
 }
 
 // Spielplan verwalten
-function loadMatches() {
+async function loadMatches() {
     const matchesAdmin = document.getElementById('matches-schedule-admin');
     
     if (!currentTournament) {
         matchesAdmin.innerHTML = '<p>Kein Turnier vorhanden. Erstelle zuerst ein Turnier.</p>';
         return;
+    }
+    
+    // Always refresh matches data to include latest KO matches
+    try {
+        const response = await fetch('/api/matches');
+        const latestMatches = await response.json();
+        if (latestMatches) {
+            matches = latestMatches;
+            console.log('Spielstand-Daten aktualisiert, Gesamtspiele:', matches.length);
+        }
+    } catch (error) {
+        console.error('Fehler beim Laden der aktuellen Spiele:', error);
     }
     
     if (currentTournament.status === 'registration') {
@@ -3513,7 +3630,23 @@ async function removeMatchSchedule(matchId, modalId) {
 
 // Schedule All Matches (Intelligent)
 async function scheduleAllMatches() {
-    const unscheduledCount = matches.filter(m => !m.scheduled).length;
+    // Refresh matches data first to get latest KO matches
+    try {
+        const response = await fetch('/api/matches');
+        const latestMatches = await response.json();
+        if (latestMatches) {
+            matches = latestMatches;
+        }
+    } catch (error) {
+        console.error('Fehler beim Aktualisieren der Spiele:', error);
+    }
+    
+    const unscheduledMatches = matches.filter(m => !m.scheduled);
+    const unscheduledCount = unscheduledMatches.length;
+    
+    console.log('Alle Spiele:', matches.length);
+    console.log('Ungeplante Spiele gefunden:', unscheduledMatches);
+    console.log('Anzahl ungeplanter Spiele:', unscheduledCount);
     
     if (unscheduledCount === 0) {
         showNotification('Keine ungeplanten Spiele vorhanden', 'warning');
@@ -3982,7 +4115,7 @@ async function loadLiveControl() {
                                 <div class="detail-row">
                                     <i class="fas fa-clock"></i> 
                                     <span>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</span>
-                                    ${minutesUntil > 0 ? `<span class="time-until">(in ${minutesUntil} Min.)</span>` : '<span class="time-until ready">Startbereit!</span>'}
+                                    ${minutesUntil > 0 ? `<span class="time-until countdown-badge" data-next-time="${nextTime.toISOString()}">(in ${minutesUntil} Min.)</span>` : '<span class="time-until ready countdown-badge">Startbereit!</span>'}
                                 </div>
                             </div>
                             
@@ -4036,7 +4169,7 @@ async function loadLiveControl() {
                                 <div class="match-teams-display">${nextMatch.team1} <span class="vs">vs</span> ${nextMatch.team2}</div>
                                 <div class="match-time-display">
                                     <strong>${nextTime.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin'})}</strong>
-                                    <span class="countdown-badge">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt startbereit!'}</span>
+                                    <span class="countdown-badge" data-next-time="${nextTime.toISOString()}">${minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt startbereit!'}</span>
                                 </div>
                                 <div class="match-details-grid">
                                     <div class="detail-item">
@@ -4202,6 +4335,9 @@ async function loadLiveControl() {
         
         liveControl.innerHTML = html;
         
+        // Start countdown timer for live control displays
+        startAdminCountdownTimer();
+        
     } catch (error) {
         console.error('Error loading live control:', error);
         const liveControl = document.getElementById('live-match-control');
@@ -4262,6 +4398,19 @@ function startLocalLiveTimer(liveMatch) {
             }
             if (halfElement) {
                 halfElement.textContent = timeInfo.halfInfo;
+            }
+            
+            // Auto-trigger halftime when first half ends
+            if (timeInfo.halfInfo === '1. HALBZEIT ENDE' && 
+                currentLiveMatch.currentHalf === 1 && 
+                !currentLiveMatch.halfTimeBreak &&
+                !currentLiveMatch.autoHalftimeTriggered) {
+                
+                console.log('Auto-triggering halftime break...');
+                currentLiveMatch.autoHalftimeTriggered = true;
+                
+                // Trigger halftime break
+                startHalfTime(currentLiveMatch.id);
             }
             
         } catch (error) {
@@ -4460,6 +4609,52 @@ function formatTime(minutes, seconds) {
     const mins = Math.min(Math.max(minutes, 0), 99).toString().padStart(2, '0');
     const secs = Math.min(Math.max(seconds, 0), 59).toString().padStart(2, '0');
     return `${mins}:${secs}`;
+}
+
+// Admin Countdown Timer for updating "in X Min" displays
+let adminCountdownTimerInterval = null;
+
+function startAdminCountdownTimer() {
+    // Clear existing timer
+    if (adminCountdownTimerInterval) {
+        clearInterval(adminCountdownTimerInterval);
+    }
+    
+    // Start countdown timer that updates every 30 seconds
+    adminCountdownTimerInterval = setInterval(() => {
+        try {
+            // Update countdown displays in admin panel
+            updateAdminCountdownDisplays();
+        } catch (error) {
+            console.error('Admin countdown timer update error:', error);
+        }
+    }, 30000); // Update every 30 seconds
+}
+
+function updateAdminCountdownDisplays() {
+    const countdownElements = document.querySelectorAll('.countdown, .countdown-admin, .countdown-badge');
+    countdownElements.forEach(element => {
+        const nextTime = element.dataset.nextTime;
+        if (nextTime) {
+            const timeUntilMatch = new Date(nextTime) - new Date();
+            const minutesUntil = Math.max(0, Math.floor(timeUntilMatch / (1000 * 60)));
+            
+            // Update text based on context
+            if (element.classList.contains('countdown-badge')) {
+                element.textContent = minutesUntil > 0 ? `(in ${minutesUntil} Min.)` : 'Startbereit!';
+            } else {
+                element.textContent = minutesUntil > 0 ? `in ${minutesUntil} Min.` : 'Jetzt';
+            }
+        }
+    });
+}
+
+function stopAdminCountdownTimer() {
+    if (adminCountdownTimerInterval) {
+        clearInterval(adminCountdownTimerInterval);
+        adminCountdownTimerInterval = null;
+        console.log('Stopped admin countdown timer');
+    }
 }
 
 // Live Match Control Functions
