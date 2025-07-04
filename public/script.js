@@ -51,6 +51,22 @@ let audioContext = null;
 let soundEnabled = true;
 let audioInitialized = false;
 
+// Server time synchronization
+let serverTimeOffset = 0; // Difference between server and client time
+let lastServerSync = 0;
+
+function updateServerTimeOffset(serverTimestamp) {
+    const clientTime = Date.now();
+    const offset = serverTimestamp - clientTime;
+    
+    // Only update if we haven't synced recently (avoid constant updates)
+    if (clientTime - lastServerSync > 5000) { // 5 seconds minimum between syncs
+        serverTimeOffset = offset;
+        lastServerSync = clientTime;
+        console.log(`Server time sync: offset ${offset}ms`);
+    }
+}
+
 function initAudio() {
     if (audioInitialized) return;
     
@@ -65,11 +81,16 @@ function initAudio() {
 }
 
 function playWhistle(eventType = 'default') {
-    if (!soundEnabled || !audioInitialized) return;
+    if (!soundEnabled) return;
     
     // Only play whistle for legitimate game events, not page refreshes
     const validEvents = ['match-start', 'halftime', 'fulltime', 'pause', 'resume', 'overtime', 'overtime-start'];
     if (!validEvents.includes(eventType)) return;
+    
+    // Skip if audio not initialized (only admins can enable audio)
+    if (!audioInitialized) {
+        return;
+    }
     
     try {
         // Resume audio context if needed (for user interaction requirement)
@@ -127,8 +148,7 @@ function playWhistle(eventType = 'default') {
                 showNotification(message, type);
             }).catch(error => {
                 console.warn('Could not play whistle sound:', error);
-                // Fallback: Just show notification without sound
-                showNotification('🔇 Sound nicht verfügbar', 'warning');
+                // Audio failed - skip showing button on public page
             });
         };
         
@@ -137,15 +157,21 @@ function playWhistle(eventType = 'default') {
         
     } catch (error) {
         console.warn('Error playing whistle sound:', error);
+        // Audio failed - skip showing button on public page
     }
 }
 
+
 // Initialize audio on page load
 document.addEventListener('DOMContentLoaded', function() {
-    initAudio();
+    // Don't initialize audio immediately - wait for user interaction
     
     // Enhanced mobile audio initialization
     const enableAudio = function() {
+        if (!audioInitialized) {
+            initAudio();
+        }
+        
         if (audioContext && audioContext.state === 'suspended') {
             audioContext.resume();
         }
@@ -608,6 +634,12 @@ function setupWebSocketEventListeners() {
     // Match Started - refresh live tab and home statistics
     socket.on('match-started', (data) => {
         console.log('Match started:', data);
+        
+        // Sync server time
+        if (data.serverTimestamp) {
+            updateServerTimeOffset(data.serverTimestamp);
+        }
+        
         playWhistle('match-start'); // Play whistle when match starts
         
         if (currentActiveTab === 'live') {
@@ -646,14 +678,20 @@ function setupWebSocketEventListeners() {
             showFinishedMatchDisplay(finishedMatch);
         }
         
-        // Smart update for relevant tabs INCLUDING tables (delayed for live tab)
+        // Smart update for relevant tabs INCLUDING tables and knockout (delayed for live tab)
         setTimeout(() => {
-            smartUpdate(['live', 'home', 'schedule', 'tables']);
+            smartUpdate(['live', 'home', 'schedule', 'tables', 'knockout']);
         }, currentActiveTab === 'live' ? 10000 : 0); // 10 seconds delay for live tab
         
-        // Force table update if on tables tab
+        // Force updates for specific tabs if they are active
         if (currentActiveTab === 'tables') {
             setTimeout(() => loadTables(), 1500);
+        }
+        if (currentActiveTab === 'knockout') {
+            setTimeout(() => loadKnockoutMatches(), 1500);
+        }
+        if (currentActiveTab === 'schedule') {
+            setTimeout(() => loadSchedule(), 1500);
         }
     });
 
@@ -663,11 +701,17 @@ function setupWebSocketEventListeners() {
         showNotification(`Ergebnis eingetragen: ${data.match.team1} ${data.score1}:${data.score2} ${data.match.team2}`, 'success');
         
         // Smart update for relevant tabs
-        smartUpdate(['tables', 'schedule', 'home']);
+        smartUpdate(['tables', 'schedule', 'home', 'knockout']);
         
-        // Force table update if on tables tab
+        // Force updates for specific tabs if they are active
         if (currentActiveTab === 'tables') {
             setTimeout(() => loadTables(), 1500);
+        }
+        if (currentActiveTab === 'knockout') {
+            setTimeout(() => loadKnockoutMatches(), 1500);
+        }
+        if (currentActiveTab === 'schedule') {
+            setTimeout(() => loadSchedule(), 1500);
         }
     });
 
@@ -687,23 +731,41 @@ function setupWebSocketEventListeners() {
     // Match Paused
     socket.on('match-paused', (data) => {
         console.log('Match paused:', data);
+        
+        // Sync server time
+        if (data.serverTimestamp) {
+            updateServerTimeOffset(data.serverTimestamp);
+        }
+        
         playWhistle('pause'); // Play whistle when match is paused
         // Update live match data globally, not just on live tab
         if (currentLiveMatch && currentLiveMatch.id === data.matchId) {
             currentLiveMatch.isPaused = true;
-            currentLiveMatch.pauseStartTime = data.pauseStartTime;
+            currentLiveMatch.pauseStartTime = data.pauseStartTime || data.match.liveScore?.pauseStartTime;
         }
+        // Pause the local timer
+        pauseLocalLiveTimer();
     });
 
     // Match Resumed
     socket.on('match-resumed', (data) => {
         console.log('Match resumed:', data);
+        
+        // Sync server time
+        if (data.serverTimestamp) {
+            updateServerTimeOffset(data.serverTimestamp);
+        }
+        
         playWhistle('resume'); // Play whistle when match is resumed
         // Update live match data globally, not just on live tab
         if (currentLiveMatch && currentLiveMatch.id === data.matchId) {
             currentLiveMatch.isPaused = false;
             currentLiveMatch.pausedTime = data.totalPausedTime;
+            // Remove pauseStartTime when resumed
+            delete currentLiveMatch.pauseStartTime;
         }
+        // Resume the local timer
+        resumeLocalLiveTimer();
     });
 
     // Halftime Started
@@ -767,8 +829,16 @@ function setupWebSocketEventListeners() {
         if (currentActiveTab === 'live') {
             coordinatedUpdate(() => loadLiveMatch(), 300);
         }
-        // Also refresh other relevant tabs
-        smartUpdate(['matches', 'home']);
+        // Also refresh other relevant tabs including knockout and schedule
+        smartUpdate(['schedule', 'home', 'knockout', 'tables']);
+        
+        // Force updates for specific tabs if they are active
+        if (currentActiveTab === 'knockout') {
+            setTimeout(() => loadKnockoutMatches(), 1000);
+        }
+        if (currentActiveTab === 'schedule') {
+            setTimeout(() => loadSchedule(), 1000);
+        }
     });
 
     // Matches Scheduled - refresh countdown timers and schedule displays
@@ -780,7 +850,7 @@ function setupWebSocketEventListeners() {
             coordinatedUpdate(() => loadLiveMatch(), 200);
         }
         // Also refresh matches tab to show updated schedule
-        smartUpdate(['matches', 'home']);
+        smartUpdate(['schedule', 'home', 'knockout']);
     });
     
     // Penalty Shootout Started
@@ -805,6 +875,24 @@ function setupWebSocketEventListeners() {
     socket.on('timer-ended', (data) => {
         console.log('Timer ended event:', data);
         playWhistle(data.type || 'fulltime');
+    });
+    
+    // Matches Updated - refresh all match-related displays
+    socket.on('matches-updated', (data) => {
+        console.log('Matches updated:', data);
+        // Update all relevant tabs
+        smartUpdate(['schedule', 'knockout', 'tables', 'home']);
+        
+        // Force updates for specific tabs if they are active
+        if (currentActiveTab === 'knockout') {
+            setTimeout(() => loadKnockoutMatches(), 500);
+        }
+        if (currentActiveTab === 'schedule') {
+            setTimeout(() => loadSchedule(), 500);
+        }
+        if (currentActiveTab === 'tables') {
+            setTimeout(() => loadTables(), 500);
+        }
     });
 }
 
@@ -1389,7 +1477,8 @@ function calculateLiveTime(liveMatch) {
         return { displayTime: '00:00', halfInfo: 'Kein Spiel', currentMinute: 0, currentSecond: 0 };
     }
     
-    const now = new Date();
+    // Use synchronized server time for accurate calculations
+    const now = new Date(Date.now() + serverTimeOffset);
     const startTime = new Date(liveMatch.startTime);
     const halfTimeMinutes = liveMatch.halfTimeMinutes || 5; // Standard auf 5 Minuten geändert
     
@@ -1490,9 +1579,17 @@ function calculateLiveTime(liveMatch) {
     let currentSecond = 0;
     let halfInfo = '';
     
+    // Calculate total paused time including current pause if active
+    let totalPausedTime = liveMatch.pausedTime || 0;
+    if (liveMatch.isPaused && liveMatch.pauseStartTime) {
+        const pauseStartTime = new Date(liveMatch.pauseStartTime);
+        const currentPauseDuration = now - pauseStartTime;
+        totalPausedTime += currentPauseDuration;
+    }
+
     if (liveMatch.currentHalf === 1) {
         // Erste Halbzeit
-        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        elapsedTime = now - startTime - totalPausedTime;
         const totalSeconds = Math.floor(elapsedTime / 1000);
         currentMinute = Math.floor(totalSeconds / 60);
         currentSecond = totalSeconds % 60;
@@ -1507,7 +1604,7 @@ function calculateLiveTime(liveMatch) {
     } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
         // Zweite Halbzeit
         const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
-        elapsedTime = now - secondHalfStart - (liveMatch.pausedTime || 0);
+        elapsedTime = now - secondHalfStart - totalPausedTime;
         const totalSeconds = Math.floor(elapsedTime / 1000);
         currentMinute = Math.floor(totalSeconds / 60);
         currentSecond = totalSeconds % 60;
@@ -1521,7 +1618,7 @@ function calculateLiveTime(liveMatch) {
         }
     } else if (liveMatch.currentHalf === 3 && liveMatch.extensionStarted) {
         // Erste Verlängerung
-        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        elapsedTime = now - startTime - totalPausedTime;
         const totalSeconds = Math.floor(elapsedTime / 1000);
         currentMinute = Math.floor(totalSeconds / 60);
         currentSecond = totalSeconds % 60;
@@ -1536,7 +1633,7 @@ function calculateLiveTime(liveMatch) {
         }
     } else if (liveMatch.currentHalf === 4 && liveMatch.extensionStarted) {
         // Zweite Verlängerung
-        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        elapsedTime = now - startTime - totalPausedTime;
         const totalSeconds = Math.floor(elapsedTime / 1000);
         currentMinute = Math.floor(totalSeconds / 60);
         currentSecond = totalSeconds % 60;
@@ -2064,6 +2161,23 @@ function stopLocalLiveTimer() {
         clearInterval(localLiveTimerInterval);
         localLiveTimerInterval = null;
         console.log('Stopped local live timer');
+    }
+}
+
+// Pause local live timer
+function pauseLocalLiveTimer() {
+    if (localLiveTimerInterval) {
+        clearInterval(localLiveTimerInterval);
+        localLiveTimerInterval = null;
+        console.log('Paused local live timer');
+    }
+}
+
+// Resume local live timer
+function resumeLocalLiveTimer() {
+    if (!localLiveTimerInterval && currentLiveMatch && currentActiveTab === 'live') {
+        startLocalLiveTimer(currentLiveMatch);
+        console.log('Resumed local live timer');
     }
 }
 

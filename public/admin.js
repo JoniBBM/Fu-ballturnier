@@ -48,7 +48,11 @@ let currentActiveTab = localStorage.getItem('adminCurrentTab') || 'dashboard';
 let liveControlInterval = null;
 let isLiveControlUpdating = false;
 let localLiveTimerInterval = null;
-let currentLiveMatch = null;
+
+// Audio Context for Admin
+let audioContext = null;
+let audioInitialized = false;
+let soundEnabled = true;
 
 // Session Management
 const SESSION_KEY = 'admin_session';
@@ -384,6 +388,7 @@ function setupWebSocketEventListeners() {
     // Match Started - refresh live tab (but avoid race condition with executeStartMatch)
     socket.on('match-started', (data) => {
         console.log('Match started:', data);
+        playWhistle('match-start'); // Play whistle when match starts
         showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
         
         // Set timestamp for error recovery detection
@@ -404,6 +409,7 @@ function setupWebSocketEventListeners() {
     // Match Paused - minimal refresh
     socket.on('match-paused', (data) => {
         console.log('Match paused:', data);
+        playWhistle('pause'); // Play whistle when match is paused
         showNotification(`Spiel pausiert: ${data.match.team1} vs ${data.match.team2}`, 'warning');
         // Update UI state without full refresh
         updateMatchStatus(data.match, 'paused');
@@ -412,6 +418,7 @@ function setupWebSocketEventListeners() {
     // Match Resumed - minimal refresh
     socket.on('match-resumed', (data) => {
         console.log('Match resumed:', data);
+        playWhistle('resume'); // Play whistle when match is resumed
         showNotification(`Spiel fortgesetzt: ${data.match.team1} vs ${data.match.team2}`, 'info');
         // Update UI state without full refresh
         updateMatchStatus(data.match, 'resumed');
@@ -420,9 +427,30 @@ function setupWebSocketEventListeners() {
     // Match Finished - important refresh and auto-load next match
     socket.on('match-finished', (data) => {
         console.log('Match finished:', data);
+        playWhistle('fulltime'); // Play whistle when match ends
         showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
         if (!isRefreshing) {
             coordinatedWebSocketUpdate(() => refreshCurrentTabContent(), 1000);
+        }
+    });
+    
+    // Penalty Shootout Started
+    socket.on('penalty-shootout-started', (data) => {
+        console.log('Penalty shootout started:', data);
+        showNotification(`Elfmeterschießen gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        if (!isRefreshing && currentActiveTab === 'live') {
+            // Reload live control to show penalty interface
+            coordinatedWebSocketUpdate(() => loadLiveControl(), 200);
+        }
+    });
+    
+    // Penalty Result
+    socket.on('penalty-result', (data) => {
+        console.log('Penalty result:', data);
+        const resultText = data.scored ? 'Tor' : 'Verschossen';
+        showNotification(`Elfmeter: ${resultText}`, data.scored ? 'success' : 'warning');
+        if (!isRefreshing && currentActiveTab === 'live') {
+            updatePenaltyDisplay(data);
         }
         
         // If on live tab, automatically load next match after short delay
@@ -642,6 +670,120 @@ function updateLiveScoreDisplay(data) {
             scoreDisplay.textContent = `${score1}:${score2}`;
         }
     });
+}
+
+// Update penalty shootout display in real-time
+function updatePenaltyDisplay(data) {
+    try {
+        const { match } = data;
+        
+        if (!match || !match.liveScore?.penaltyShootout) {
+            console.log('No penalty shootout data, falling back to full reload');
+            if (currentActiveTab === 'live') {
+                preserveScrollAndReload();
+            }
+            return;
+        }
+        
+        const penalty = match.liveScore.penaltyShootout;
+        console.log('Updating penalty display with:', penalty);
+        
+        // Update penalty scores (more specific selectors)
+        const scoreElements = document.querySelectorAll('.penalty-score .score');
+        if (scoreElements.length >= 2) {
+            scoreElements[0].textContent = penalty.score1;
+            scoreElements[1].textContent = penalty.score2;
+            console.log('Updated penalty scores:', penalty.score1, penalty.score2);
+        } else {
+            console.log('Score elements not found, preserving scroll position and reloading...');
+            preserveScrollAndReload();
+            return;
+        }
+        
+        // Update penalty progress (more robust approach)
+        const team1Penalties = document.querySelector('.team-penalties:first-child');
+        const team2Penalties = document.querySelector('.team-penalties:last-child');
+        
+        if (team1Penalties && team2Penalties) {
+            // Replace the entire content after the team name
+            const team1Progress = penalty.penalties1.map(p => p.scored ? '⚽' : '❌').join(' ');
+            const team2Progress = penalty.penalties2.map(p => p.scored ? '⚽' : '❌').join(' ');
+            
+            team1Penalties.innerHTML = `<strong>${match.team1}:</strong> ${team1Progress}`;
+            team2Penalties.innerHTML = `<strong>${match.team2}:</strong> ${team2Progress}`;
+            console.log('Updated penalty progress');
+        } else {
+            console.log('Penalty progress elements not found, reloading...');
+            preserveScrollAndReload();
+            return;
+        }
+        
+        // Update current shooter
+        const currentShooterDiv = document.querySelector('.current-shooter');
+        if (currentShooterDiv) {
+            const currentTeamName = penalty.currentTeam === 1 ? match.team1 : match.team2;
+            currentShooterDiv.innerHTML = `
+                <strong>Aktueller Schütze:</strong>
+                ${currentTeamName}
+                (${penalty.currentShooter}. Schütze)
+            `;
+            console.log('Updated current shooter:', currentTeamName, penalty.currentShooter);
+        } else {
+            console.log('Current shooter element not found, reloading...');
+            preserveScrollAndReload();
+            return;
+        }
+        
+        // Check if penalty shootout is finished and reload if necessary
+        if (penalty.finished) {
+            console.log('Penalty shootout finished, reloading in 2 seconds...');
+            setTimeout(() => {
+                if (currentActiveTab === 'live') {
+                    loadLiveControl();
+                }
+            }, 2000); // Give time to see the final result
+        }
+        
+        console.log('Penalty display updated successfully');
+        
+    } catch (error) {
+        console.error('Error in updatePenaltyDisplay:', error);
+        console.log('Falling back to full reload due to error');
+        if (currentActiveTab === 'live') {
+            preserveScrollAndReload();
+        }
+    }
+}
+
+// Preserve scroll position when doing full reload
+function preserveScrollAndReload() {
+    try {
+        // Store current scroll position
+        const scrollPosition = window.scrollY || document.documentElement.scrollTop;
+        console.log('Preserving scroll position:', scrollPosition);
+        
+        // Store in sessionStorage so it persists across reload
+        sessionStorage.setItem('adminScrollPosition', scrollPosition.toString());
+        
+        // Do the reload
+        loadLiveControl();
+        
+        // Restore scroll position after a short delay
+        setTimeout(() => {
+            const savedPosition = sessionStorage.getItem('adminScrollPosition');
+            if (savedPosition) {
+                const position = parseInt(savedPosition);
+                console.log('Restoring scroll position:', position);
+                window.scrollTo(0, position);
+                sessionStorage.removeItem('adminScrollPosition');
+            }
+        }, 100); // Small delay to ensure content is loaded
+        
+    } catch (error) {
+        console.error('Error preserving scroll position:', error);
+        // Fallback to normal reload
+        loadLiveControl();
+    }
 }
 
 // Helper function to coordinate WebSocket-triggered updates
@@ -964,6 +1106,9 @@ loginForm.addEventListener('submit', async (e) => {
             adminContent.style.display = 'block';
             showNotification('Erfolgreich angemeldet');
             
+            // Check for previous audio activation
+            checkPreviousAudioActivation();
+            
             // Initialize WebSocket first, then load data
             initializeWebSocket();
             
@@ -1009,6 +1154,9 @@ async function checkAutoLogin() {
                 isLoggedIn = true;
                 loginScreen.style.display = 'none';
                 adminContent.style.display = 'block';
+                
+                // Check for previous audio activation
+                checkPreviousAudioActivation();
                 
                 // Initialize WebSocket first, then load data
                 initializeWebSocket();
@@ -4056,6 +4204,10 @@ async function loadLiveControl() {
                                 </button>
                             `}
                             
+                            <button class="btn btn-outline btn-large" onclick="manualWhistle()" title="Manueller Pfiff">
+                                <i class="fas fa-whistle"></i> Pfeifen
+                            </button>
+                            
                             ${(() => {
                                 // Prüfe ob erste Halbzeit abgelaufen ist
                                 const timeInfo = calculateLiveTime(liveMatch);
@@ -4097,12 +4249,54 @@ async function loadLiveControl() {
                                         <button class="btn btn-primary btn-large" onclick="endMatch('${liveMatch.id}')">
                                             <i class="fas fa-flag-checkered"></i> Spiel beenden
                                         </button>
+                                        <button class="btn btn-warning btn-large" onclick="startPenaltyShootout('${liveMatch.id}')">
+                                            <i class="fas fa-futbol"></i> Elfmeterschießen starten
+                                        </button>
                                     ` : ''}
                                     ${liveMatch.currentHalf === 3 && !liveMatch.halfTimeBreak ? `
                                         <button class="btn btn-info btn-large" onclick="startExtensionHalfTime('${liveMatch.id}')">
                                             <i class="fas fa-clock"></i> Verlängerung Halbzeit
                                         </button>
                                     ` : ''}
+                                </div>
+                            ` : ''}
+                            
+                            ${liveMatch.liveScore?.penaltyShootout?.isActive ? `
+                                <div class="penalty-shootout-controls">
+                                    <h4>Elfmeterschießen</h4>
+                                    <div class="penalty-status">
+                                        <div class="penalty-score">
+                                            <span class="team-name">${liveMatch.team1}</span>
+                                            <span class="score">${liveMatch.liveScore.penaltyShootout.score1}</span>
+                                            <span class="separator">:</span>
+                                            <span class="score">${liveMatch.liveScore.penaltyShootout.score2}</span>
+                                            <span class="team-name">${liveMatch.team2}</span>
+                                        </div>
+                                        <div class="penalty-progress">
+                                            <div class="team-penalties">
+                                                <strong>${liveMatch.team1}:</strong>
+                                                ${liveMatch.liveScore.penaltyShootout.penalties1.map(p => p.scored ? '⚽' : '❌').join(' ')}
+                                            </div>
+                                            <div class="team-penalties">
+                                                <strong>${liveMatch.team2}:</strong>
+                                                ${liveMatch.liveScore.penaltyShootout.penalties2.map(p => p.scored ? '⚽' : '❌').join(' ')}
+                                            </div>
+                                        </div>
+                                        <div class="current-shooter">
+                                            <strong>Aktueller Schütze:</strong>
+                                            ${liveMatch.liveScore.penaltyShootout.currentTeam === 1 ? liveMatch.team1 : liveMatch.team2}
+                                            (${liveMatch.liveScore.penaltyShootout.currentShooter}. Schütze)
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="penalty-buttons">
+                                        <button class="btn btn-success btn-large" onclick="recordPenalty('${liveMatch.id}', true)">
+                                            <i class="fas fa-check"></i> Tor
+                                        </button>
+                                        <button class="btn btn-danger btn-large" onclick="recordPenalty('${liveMatch.id}', false)">
+                                            <i class="fas fa-times"></i> Verschossen
+                                        </button>
+                                    </div>
                                 </div>
                             ` : ''}
                         </div>
@@ -4360,6 +4554,17 @@ async function loadLiveControl() {
         }
         
         liveControl.innerHTML = html;
+        
+        // Restore scroll position if one was saved
+        setTimeout(() => {
+            const savedPosition = sessionStorage.getItem('adminScrollPosition');
+            if (savedPosition) {
+                const position = parseInt(savedPosition);
+                console.log('Auto-restoring scroll position:', position);
+                window.scrollTo(0, position);
+                sessionStorage.removeItem('adminScrollPosition');
+            }
+        }, 50);
         
         // Start countdown timer for live control displays
         startAdminCountdownTimer();
@@ -5121,7 +5326,10 @@ async function executeEndMatch(matchId, modalId) {
             if (data.error === 'unentschieden_ko') {
                 errorMessage = 'K.O.-Spiel ist unentschieden! Verlängerung erforderlich.';
             } else if (data.error === 'unentschieden_ko_overtime') {
-                errorMessage = 'Spiel ist nach Verlängerung unentschieden! Elfmeterschießen erforderlich.';
+                // Automatisch Elfmeterschießen-Modal öffnen
+                closeModal(modalId);
+                startPenaltyShootout(matchId);
+                return;
             } else if (data.error === 'penalty_shootout_active') {
                 errorMessage = 'Elfmeterschießen ist noch aktiv! Bitte beenden Sie das Elfmeterschießen zuerst.';
             }
@@ -5427,6 +5635,224 @@ function loadSettings() {
     `;
 }
 
+// Audio Functions for Admin
+function initAudio() {
+    if (audioInitialized) return;
+    
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioInitialized = true;
+        // Save audio activation state
+        localStorage.setItem('adminAudioActivated', 'true');
+        console.log('Admin audio context initialized');
+    } catch (e) {
+        console.warn('Audio context not supported:', e);
+        soundEnabled = false;
+    }
+}
+
+// Check if audio was previously activated
+function checkPreviousAudioActivation() {
+    if (localStorage.getItem('adminAudioActivated') === 'true') {
+        console.log('Audio was previously activated, attempting to initialize...');
+        // Try to initialize audio context
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Check if we need user interaction
+            if (audioContext.state === 'suspended') {
+                console.log('Audio context suspended, will resume on next user interaction');
+                // Set up auto-resume on user interaction
+                setupAutoAudioResume();
+            } else {
+                audioInitialized = true;
+                console.log('Audio context automatically initialized');
+            }
+        } catch (e) {
+            console.warn('Could not auto-initialize audio:', e);
+        }
+    }
+}
+
+// Set up automatic audio resume on user interaction
+function setupAutoAudioResume() {
+    const resumeAudio = () => {
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume().then(() => {
+                audioInitialized = true;
+                console.log('Audio context automatically resumed');
+                // Remove event listeners after successful resume
+                document.removeEventListener('click', resumeAudio);
+                document.removeEventListener('keydown', resumeAudio);
+                document.removeEventListener('touchstart', resumeAudio);
+            }).catch(e => {
+                console.warn('Failed to resume audio context:', e);
+            });
+        }
+    };
+    
+    // Listen for any user interaction
+    document.addEventListener('click', resumeAudio, { once: true });
+    document.addEventListener('keydown', resumeAudio, { once: true });
+    document.addEventListener('touchstart', resumeAudio, { once: true });
+}
+
+function showAudioEnableButton() {
+    // Only show if logged in as admin
+    if (!isLoggedIn) return;
+    
+    // Check if button already exists
+    if (document.getElementById('audio-enable-btn')) return;
+    
+    const button = document.createElement('button');
+    button.id = 'audio-enable-btn';
+    button.innerHTML = '🔊 Audio aktivieren';
+    button.style.cssText = `
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background: #007bff;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    `;
+    
+    button.onclick = () => {
+        initAudio();
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        button.remove();
+        showNotification('🔊 Audio aktiviert', 'success');
+    };
+    
+    document.body.appendChild(button);
+}
+
+function playWhistle(eventType = 'default') {
+    console.log(`Admin playWhistle called with eventType: ${eventType}, soundEnabled: ${soundEnabled}, isLoggedIn: ${isLoggedIn}, audioInitialized: ${audioInitialized}`);
+    
+    // Check if admin is logged in (either via variable or DOM check)
+    const adminLoggedIn = isLoggedIn || (adminContent && adminContent.style.display !== 'none');
+    
+    if (!soundEnabled || !adminLoggedIn) {
+        console.log(`Skipping whistle: soundEnabled: ${soundEnabled}, adminLoggedIn: ${adminLoggedIn}`);
+        return;
+    }
+    
+    // Only play whistle for legitimate game events and manual admin whistle
+    const validEvents = ['match-start', 'halftime', 'fulltime', 'pause', 'resume', 'overtime', 'overtime-start', 'manual'];
+    if (!validEvents.includes(eventType)) {
+        console.log(`Skipping whistle: invalid event type "${eventType}"`);
+        return;
+    }
+    
+    // Try to initialize audio if not done yet
+    if (!audioInitialized || !audioContext) {
+        console.log('Audio not initialized, trying to initialize now...');
+        try {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioContext.state === 'running') {
+                audioInitialized = true;
+                localStorage.setItem('adminAudioActivated', 'true');
+                console.log('Audio successfully initialized during playWhistle');
+            } else if (audioContext.state === 'suspended') {
+                console.log('Audio context suspended, trying to resume...');
+                audioContext.resume().then(() => {
+                    audioInitialized = true;
+                    localStorage.setItem('adminAudioActivated', 'true');
+                    console.log('Audio context resumed during playWhistle');
+                });
+            }
+        } catch (e) {
+            console.warn('Could not initialize audio during playWhistle:', e);
+            showAudioEnableButton();
+            return;
+        }
+    }
+    
+    try {
+        // Resume audio context if needed
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
+        const audio = new Audio('/sounds/pfeife.mp3');
+        audio.volume = 0.8;
+        audio.preload = 'auto';
+        audio.crossOrigin = 'anonymous';
+        
+        audio.play().then(() => {
+            console.log(`Admin whistle sound played for: ${eventType}`);
+            
+            let message = '🔊 Pfiff!';
+            let type = 'info';
+            
+            switch(eventType) {
+                case 'match-start':
+                    message = '🔊 Spielbeginn!';
+                    type = 'success';
+                    break;
+                case 'halftime':
+                    message = '🔊 Halbzeit-Pfiff!';
+                    type = 'info';
+                    break;
+                case 'fulltime':
+                    message = '🔊 Spielende!';
+                    type = 'success';
+                    break;
+                case 'pause':
+                    message = '🔊 Spiel pausiert!';
+                    type = 'warning';
+                    break;
+                case 'resume':
+                    message = '🔊 Spiel fortgesetzt!';
+                    type = 'success';
+                    break;
+                case 'overtime':
+                    message = '🔊 Verlängerung beendet!';
+                    type = 'warning';
+                    break;
+                case 'overtime-start':
+                    message = '🔊 Verlängerung startet!';
+                    type = 'warning';
+                    break;
+                case 'manual':
+                    message = '🔊 Manueller Pfiff!';
+                    type = 'info';
+                    break;
+            }
+            
+            showNotification(message, type);
+        }).catch(error => {
+            console.warn('Could not play admin whistle sound:', error);
+            showAudioEnableButton();
+        });
+        
+    } catch (error) {
+        console.warn('Error playing admin whistle sound:', error);
+        showAudioEnableButton();
+    }
+}
+
+// Manual whistle function for admin
+function manualWhistle() {
+    if (!isLoggedIn) {
+        showNotification('Nicht angemeldet', 'error');
+        return;
+    }
+    
+    playWhistle('manual');
+    showNotification('🔊 Manueller Pfiff!', 'info');
+}
+
 async function saveTournamentSettings() {
     const format = document.getElementById('tournament-format-setting').value;
     const halfTimeMinutes = parseInt(document.getElementById('half-time-minutes').value);
@@ -5533,6 +5959,97 @@ async function saveTournamentSettings() {
     } catch (error) {
         console.error('Error saving settings:', error);
         showNotification('Fehler beim Speichern der Einstellungen', 'error');
+    }
+}
+
+// Penalty Shootout Functions
+function startPenaltyShootout(matchId) {
+    createModal('Elfmeterschießen starten', `
+        <div class="penalty-shootout-info">
+            <i class="fas fa-futbol"></i>
+            <strong>Unentschieden nach Verlängerung:</strong> Das Spiel geht ins Elfmeterschießen.
+        </div>
+        <p>Bitte geben Sie die Anzahl der Schützen pro Team ein:</p>
+        
+        <div class="form-group">
+            <label for="shootersPerTeam">Schützen pro Team:</label>
+            <input type="number" id="shootersPerTeam" class="form-control" value="5" min="3" max="10">
+        </div>
+    `, [
+        { text: 'Elfmeterschießen starten', class: 'btn-primary', handler: (modalId) => startPenaltyShootoutConfirm(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function startPenaltyShootoutConfirm(matchId, modalId) {
+    const shootersPerTeam = parseInt(document.getElementById('shootersPerTeam').value);
+    
+    if (!shootersPerTeam || shootersPerTeam < 3 || shootersPerTeam > 10) {
+        showNotification('Schützen pro Team muss zwischen 3 und 10 liegen', 'error');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-penalty-shootout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                password: adminPassword,
+                matchId,
+                shootersPerTeam
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification('Elfmeterschießen wurde gestartet', 'success');
+            closeModal(modalId);
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            showNotification(data.error || 'Fehler beim Starten des Elfmeterschießens', 'error');
+        }
+    } catch (error) {
+        console.error('Error starting penalty shootout:', error);
+        showNotification('Fehler beim Starten des Elfmeterschießens', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function recordPenalty(matchId, scored) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/penalty-result', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                password: adminPassword,
+                matchId,
+                scored
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification(scored ? 'Tor erfasst' : 'Verschossen erfasst', 'success');
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            showNotification(data.error || 'Fehler beim Erfassen des Elfmeters', 'error');
+        }
+    } catch (error) {
+        console.error('Error recording penalty:', error);
+        showNotification('Fehler beim Erfassen des Elfmeters', 'error');
+    } finally {
+        showLoading(false);
     }
 }
 

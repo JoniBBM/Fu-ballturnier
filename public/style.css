@@ -1320,7 +1320,7 @@ tr:hover td {
     margin: 2rem 0;
     text-align: center;
     box-shadow: var(--shadow-lg);
-    animation: referee-highlight 3s ease-in-out infinite;
+    /* Removed aggressive animation for cleaner display */
 }
 
 @keyframes referee-highlight {
@@ -1329,8 +1329,8 @@ tr:hover td {
         box-shadow: var(--shadow-lg);
     }
     50% {
-        transform: scale(1.02);
-        box-shadow: 0 20px 25px -5px rgba(217, 119, 6, 0.3), 0 8px 10px -6px rgba(217, 119, 6, 0.2);
+        transform: scale(1.01);
+        box-shadow: 0 12px 20px -5px rgba(217, 119, 6, 0.2), 0 6px 8px -6px rgba(217, 119, 6, 0.15);
     }
 }
 
@@ -1374,7 +1374,7 @@ tr:hover td {
     padding: 1.5rem;
     margin: 2rem 0;
     text-align: center;
-    animation: referee-pulse 2s ease-in-out infinite;
+    /* Removed aggressive pulsing animation for cleaner display */
 }
 
 @keyframes referee-pulse {
@@ -1612,7 +1612,7 @@ tr:hover td {
     }
     
     .live-vs {
-        order: -1;
+        order: 0; /* Fixed: VS should be between teams, not above */
         width: 60px;
         height: 60px;
         font-size: 1.5rem;
@@ -2093,4 +2093,532 @@ tr:hover td {
         padding: 1rem;
     }
 }
+
+/* Penalty Shootout Display */
+.penalty-shootout-display {
+    background: var(--yellow-50);
+    border: 2px solid var(--yellow-200);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.penalty-shootout-header {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.penalty-shootout-header h3 {
+    color: var(--yellow-700);
+    margin: 0;
+    font-size: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.penalty-shootout-header i {
+    color: var(--yellow-600);
+    font-size: 1.75rem;
+}
+
+.penalty-shootout-score {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 2rem;
+    background: white;
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.penalty-team {
+    text-align: center;
+    min-width: 120px;
+}
+
+.penalty-team .team-name {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--dark);
+    margin-bottom: 0.5rem;
+}
+
+.penalty-team .penalty-score {
+    font-size: 3rem;
+    font-weight: 700;
+    color: var(--primary);
+    line-height: 1;
+}
+
+.penalty-vs {
+    font-size: 2rem;
+    color: var(--gray-400);
+    font-weight: 500;
+}
+
+.penalty-progress {
+    background: white;
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.team-penalties {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.team-penalties:last-child {
+    margin-bottom: 0;
+}
+
+.team-penalties .team-name {
+    font-weight: 600;
+    color: var(--dark);
+    min-width: 120px;
+    font-size: 1rem;
+}
+
+.penalties-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.penalty-result {
+    font-size: 1.5rem;
+    padding: 0.25rem;
+    border-radius: var(--radius-sm);
+    transition: all 0.3s ease;
+}
+
+.penalty-result.scored {
+    background: var(--green-100);
+    color: var(--green-700);
+}
+
+.penalty-result.missed {
+    background: var(--red-100);
+    color: var(--red-700);
+}
+
+.current-shooter {
+    text-align: center;
+    padding: 1rem;
+    background: var(--blue-50);
+    border: 2px solid var(--blue-200);
+    border-radius: var(--radius-md);
+    color: var(--blue-700);
+}
+
+.shooter-info {
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+}
+
+.shooter-info strong {
+    color: var(--blue-800);
+}
+
+.current-team {
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.shooter-number {
+    font-size: 1rem;
+    color: var(--blue-600);
+    font-weight: 500;
+}
+
+/* Penalty Shootout Animation */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Mobile responsiveness for penalty shootout */
+@media (max-width: 768px) {
+    .penalty-shootout-score {
+        gap: 1rem;
+        padding: 1rem;
+    }
+    
+    .penalty-team .penalty-score {
+        font-size: 2.5rem;
+    }
+    
+    .penalty-vs {
+        font-size: 1.5rem;
+    }
+    
+    .penalty-shootout-header h3 {
+        font-size: 1.25rem;
+    }
+    
+    .team-penalties {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .team-penalties .team-name {
+        min-width: auto;
+        margin-bottom: 0.25rem;
+    }
+    
+    .penalty-result {
+        font-size: 1.25rem;
+    }
+    
+    .current-shooter {
+        padding: 0.75rem;
+    }
+    
+    .shooter-info {
+        font-size: 1rem;
+    }
+}
+
+/* Winner and Penalty Results Styling */
+.winner-team {
+    font-weight: normal;
+    color: var(--dark);
+}
+
+.loser-team {
+    text-decoration: line-through;
+    color: var(--gray-500);
+    font-weight: normal;
+}
+
+.penalty-winner {
+    background: linear-gradient(135deg, var(--success-light), var(--success));
+    color: white !important;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.ko-team.winner {
+    font-weight: normal;
+    color: var(--dark);
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    border: none;
+}
+
+.ko-team.loser {
+    text-decoration: line-through;
+    color: var(--gray-500);
+    font-weight: normal;
+}
+
+.team-score.winner {
+    font-weight: 700;
+    color: var(--success);
+}
+
+.team-score.draw {
+    color: var(--warning);
+}
+
+.team-penalty.winner {
+    font-weight: 700;
+    color: var(--success);
+}
+
+.match-result-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.regular-score {
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.penalty-result {
+    font-size: 0.875rem;
+    color: var(--gray-600);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.penalty-label {
+    font-style: italic;
+    color: var(--gray-500);
+}
+
+.penalty-score {
+    font-weight: 600;
+}
+
+.score-separator {
+    margin: 0 0.25rem;
+    color: var(--gray-400);
+}
+
+/* Finished match fade-out animation */
+.finished-match-fade {
+    animation: finishedMatchFade 10s ease-out forwards;
+}
+
+@keyframes finishedMatchFade {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    85% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    100% {
+        opacity: 0.7;
+        transform: scale(0.98);
+    }
+}
+
+/* Finished Match Display */
+.finished-match-display {
+    text-align: center;
+    padding: 2rem;
+    background: linear-gradient(135deg, var(--success-light), var(--success-50));
+    border-radius: var(--radius-xl);
+    margin: 2rem auto;
+    max-width: 600px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    animation: finishedMatchAppear 0.5s ease-out;
+}
+
+.finished-match-header {
+    margin-bottom: 2rem;
+}
+
+.finished-indicator {
+    margin-bottom: 1rem;
+}
+
+.finished-indicator i {
+    font-size: 3rem;
+    color: var(--success);
+    margin-bottom: 0.5rem;
+}
+
+.finished-indicator h2 {
+    color: var(--success);
+    margin: 0;
+    font-size: 2rem;
+}
+
+.winner-announcement {
+    background: var(--success);
+    color: white;
+    padding: 1rem 2rem;
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    font-size: 1.25rem;
+}
+
+.winner-announcement i {
+    font-size: 1.5rem;
+    color: var(--warning);
+}
+
+.draw-announcement {
+    background: var(--warning);
+    color: white;
+    padding: 1rem 2rem;
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    font-size: 1.25rem;
+}
+
+.finished-match-info {
+    margin-bottom: 2rem;
+}
+
+.finished-teams {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.finished-team {
+    text-align: center;
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    background: white;
+    min-width: 120px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.finished-team.winner {
+    background: var(--success);
+    color: white;
+    transform: scale(1.05);
+    box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
+}
+
+.finished-team .team-name {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.finished-team .team-score {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.finished-vs {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--gray-100);
+    border-radius: var(--radius-full);
+    width: 80px;
+    height: 80px;
+}
+
+.final-label {
+    font-weight: 700;
+    color: var(--gray-600);
+    font-size: 0.875rem;
+}
+
+.penalty-final-result {
+    background: var(--yellow-50);
+    border: 1px solid var(--yellow-200);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.penalty-label {
+    font-size: 0.875rem;
+    color: var(--yellow-700);
+    font-style: italic;
+    margin-bottom: 0.5rem;
+}
+
+.penalty-final-score {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.penalty-team.winner {
+    color: var(--success);
+    font-weight: 700;
+}
+
+.match-group {
+    font-size: 1rem;
+    color: var(--gray-600);
+    font-weight: 500;
+}
+
+.next-match-countdown {
+    background: var(--blue-50);
+    border: 1px solid var(--blue-200);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.countdown-text {
+    font-size: 1rem;
+    color: var(--blue-700);
+}
+
+.countdown-timer {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--blue-600);
+    min-width: 3rem;
+    text-align: center;
+}
+
+.countdown-unit {
+    font-size: 1rem;
+    color: var(--blue-700);
+}
+
+@keyframes finishedMatchAppear {
+    from {
+        opacity: 0;
+        transform: translateY(30px) scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Mobile responsiveness for finished match */
+@media (max-width: 768px) {
+    .finished-match-display {
+        margin: 1rem;
+        padding: 1.5rem;
+    }
+    
+    .finished-teams {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .finished-vs {
+        width: 60px;
+        height: 60px;
+    }
+    
+    .finished-team {
+        min-width: auto;
+        width: 100%;
+    }
+    
+    .winner-announcement,
+    .draw-announcement {
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 1rem;
+    }
+    
+    .finished-indicator h2 {
+        font-size: 1.5rem;
+    }
+    
+    .next-match-countdown {
+        flex-direction: column;
+        gap: 0.25rem;
+    }
 }

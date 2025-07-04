@@ -108,7 +108,11 @@ function formatLiveMatchData(match) {
         extensionConfig: match.liveScore.extensionConfig,
         breakStartTime: match.liveScore.breakStartTime,
         breakDuration: match.liveScore.breakDuration,
-        phase: match.phase
+        phase: match.phase,
+        // Penalty shootout properties
+        liveScore: {
+            penaltyShootout: match.liveScore.penaltyShootout
+        }
     };
 }
 
@@ -1249,6 +1253,9 @@ async function generateFinalTableAndKnockoutMatches(customConfig = null) {
     const koMatches = generateKnockoutMatches(finalTable, knockoutConfig);
     
     if (koMatches.length > 0) {
+        // Weise Schiedsrichter für KO-Spiele zu
+        assignKOReferees(koMatches, teams);
+        
         matches.push(...koMatches);
         
         // Speichere finale Tabelle im Turnier
@@ -1638,6 +1645,64 @@ function assignReferees(matches, groups) {
     });
     
     return matches;
+}
+
+function assignKOReferees(koMatches, allTeams, koStageInfo = null) {
+    console.log('Assigning referees to KO matches...');
+    
+    // Sammle alle Teams aus dem Turnier
+    const availableTeams = allTeams.map(t => t.name);
+    
+    // Erstelle Referee-Counter für faire Verteilung
+    const refereeCount = {};
+    availableTeams.forEach(team => {
+        refereeCount[team] = 0;
+    });
+    
+    // Zähle bereits zugewiesene Schiedsrichter aus Gruppenphase
+    if (currentTournament?.matches) {
+        currentTournament.matches.forEach(match => {
+            if (match.referee && match.referee.team) {
+                if (refereeCount[match.referee.team] !== undefined) {
+                    refereeCount[match.referee.team]++;
+                }
+            }
+        });
+    }
+    
+    koMatches.forEach(match => {
+        // Finde verfügbare Schiedsrichter (nicht die spielenden Teams)
+        const availableReferees = [];
+        
+        availableTeams.forEach(team => {
+            // Team darf nicht selbst spielen und sollte im Turnier dabei sein
+            if (team !== match.team1 && team !== match.team2) {
+                availableReferees.push({
+                    team: team,
+                    count: refereeCount[team] || 0
+                });
+            }
+        });
+        
+        if (availableReferees.length > 0) {
+            // Sortiere nach Anzahl der Schiedsrichter-Einsätze (faire Verteilung)
+            availableReferees.sort((a, b) => a.count - b.count);
+            
+            // Wähle den am wenigsten eingesetzten Schiedsrichter
+            const selectedReferee = availableReferees[0];
+            match.referee = {
+                team: selectedReferee.team,
+                group: 'KO-Phase' // Markiere als KO-Phase Schiedsrichter
+            };
+            refereeCount[selectedReferee.team]++;
+            
+            console.log(`KO Match ${match.id}: ${match.team1} vs ${match.team2} - Referee: ${selectedReferee.team}`);
+        } else {
+            console.log(`No available referee for KO match ${match.id}: ${match.team1} vs ${match.team2}`);
+        }
+    });
+    
+    console.log('KO referee assignment completed');
 }
 
 function intelligentScheduling(matches, groups, startTime, matchDuration) {
@@ -2310,39 +2375,69 @@ function updateDependentKnockoutMatches(completedMatchId) {
     const completedMatch = matches.find(m => m.id === completedMatchId);
     if (!completedMatch || !completedMatch.completed) return;
     
+    console.log(`Updating dependent matches for completed match: ${completedMatchId}`);
+    console.log(`Match details:`, {
+        team1: completedMatch.team1,
+        team2: completedMatch.team2,
+        score1: completedMatch.score1,
+        score2: completedMatch.score2,
+        isPenaltyShootout: completedMatch.isPenaltyShootout,
+        penaltyWinner: completedMatch.penaltyWinner
+    });
+    
     // Bestimme Sieger und Verlierer (berücksichtige Elfmeterschießen)
     let winner, loser;
     
-    if (completedMatch.penaltyWinner) {
-        // Sieger durch Elfmeterschießen
-        winner = completedMatch.penaltyWinner === 1 ? completedMatch.team1 : completedMatch.team2;
-        loser = completedMatch.penaltyWinner === 1 ? completedMatch.team2 : completedMatch.team1;
+    if (completedMatch.isPenaltyShootout || completedMatch.penaltyWinner) {
+        // Sieger durch Elfmeterschießen - verwende die aktuellen Tore (inklusive Elfmeter)
+        if (completedMatch.penaltyWinner) {
+            // Legacy: penaltyWinner ist explizit gesetzt
+            winner = completedMatch.penaltyWinner === 1 ? completedMatch.team1 : completedMatch.team2;
+            loser = completedMatch.penaltyWinner === 1 ? completedMatch.team2 : completedMatch.team1;
+        } else {
+            // Neuer Weg: verwende score1/score2 (die bereits Elfmetertore enthalten)
+            winner = completedMatch.score1 > completedMatch.score2 ? completedMatch.team1 : completedMatch.team2;
+            loser = completedMatch.score1 > completedMatch.score2 ? completedMatch.team2 : completedMatch.team1;
+        }
+        console.log(`Penalty shootout winner: ${winner}, loser: ${loser}`);
     } else {
-        // Regulärer Sieger
+        // Regulärer Sieger (inklusive Verlängerung falls vorhanden)
         const totalScore1 = completedMatch.score1 + (completedMatch.liveScore?.overtime?.score1 || 0);
         const totalScore2 = completedMatch.score2 + (completedMatch.liveScore?.overtime?.score2 || 0);
         
         winner = totalScore1 > totalScore2 ? completedMatch.team1 : completedMatch.team2;
         loser = totalScore1 > totalScore2 ? completedMatch.team2 : completedMatch.team1;
+        console.log(`Regular time winner: ${winner}, loser: ${loser}`);
     }
     
     // Finde alle Spiele, die von diesem Spiel abhängen
     matches.forEach(match => {
         if (match.koInfo && match.koInfo.dependsOn && match.koInfo.dependsOn.includes(completedMatchId)) {
+            console.log(`Updating dependent match: ${match.id} (${match.team1} vs ${match.team2})`);
+            
             // Ersetze Platzhalter-Teams
             if (match.team1 === `Sieger ${completedMatchId}`) {
+                console.log(`Replacing team1 placeholder "Sieger ${completedMatchId}" with ${winner}`);
                 match.team1 = winner;
             } else if (match.team1 === `Verlierer ${completedMatchId}`) {
+                console.log(`Replacing team1 placeholder "Verlierer ${completedMatchId}" with ${loser}`);
                 match.team1 = loser;
             }
             
             if (match.team2 === `Sieger ${completedMatchId}`) {
+                console.log(`Replacing team2 placeholder "Sieger ${completedMatchId}" with ${winner}`);
                 match.team2 = winner;
             } else if (match.team2 === `Verlierer ${completedMatchId}`) {
+                console.log(`Replacing team2 placeholder "Verlierer ${completedMatchId}" with ${loser}`);
                 match.team2 = loser;
             }
+            
+            console.log(`Updated match: ${match.id} -> ${match.team1} vs ${match.team2}`);
         }
     });
+    
+    // Broadcast matches update to notify clients of knockout advancement
+    broadcastUpdate('matches-updated', { matches });
 }
 
 // Admin: Ergebnis bearbeiten
@@ -2380,6 +2475,8 @@ app.put('/api/admin/results/:matchId', async (req, res) => {
     }
     
     await autoSave();
+    // Send timer ended event for whistle sound when manually entering results
+    broadcastUpdate('timer-ended', { matchId, match, type: 'fulltime' });
     res.json({ success: true, match });
 });
 
@@ -3499,7 +3596,7 @@ app.post('/api/admin/pause-match', async (req, res) => {
         match.liveScore.pauseStartTime = new Date();
         
         await autoSave();
-        broadcastUpdate('match-paused', { matchId, match });
+        broadcastUpdate('match-paused', { matchId, match, pauseStartTime: match.liveScore.pauseStartTime });
         res.json({ success: true, message: 'Spiel pausiert' });
     } else {
         res.status(400).json({ error: 'Spiel ist bereits pausiert oder in Halbzeitpause' });
@@ -3526,7 +3623,7 @@ app.post('/api/admin/resume-match', async (req, res) => {
         delete match.liveScore.pauseStartTime;
         
         await autoSave();
-        broadcastUpdate('match-resumed', { matchId, match });
+        broadcastUpdate('match-resumed', { matchId, match, totalPausedTime: match.liveScore.pausedTime });
         res.json({ success: true, message: 'Spiel fortgesetzt' });
     } else {
         res.status(400).json({ error: 'Spiel ist nicht pausiert' });
@@ -3553,6 +3650,8 @@ app.post('/api/admin/halftime-break', async (req, res) => {
         
         await autoSave();
         broadcastUpdate('halftime-started', { matchId, match });
+        // Send timer ended event for whistle sound
+        broadcastUpdate('timer-ended', { matchId, match, type: 'halftime' });
         res.json({ success: true, message: 'Halbzeitpause gestartet' });
     } else {
         res.status(400).json({ error: 'Halbzeit nur nach der ersten Halbzeit möglich' });
@@ -3660,12 +3759,14 @@ app.post('/api/admin/finish-match', async (req, res) => {
         if (match.liveScore.penaltyShootout?.finished) {
             const penalty = match.liveScore.penaltyShootout;
             if (penalty.score1 > penalty.score2) {
-                match.score1 = totalScore1;
-                match.score2 = totalScore2;
+                // Use current live scores which include penalty goals
+                match.score1 = match.liveScore.score1;
+                match.score2 = match.liveScore.score2;
                 match.penaltyWinner = 1;
             } else {
-                match.score1 = totalScore1;
-                match.score2 = totalScore2;
+                // Use current live scores which include penalty goals
+                match.score1 = match.liveScore.score1;
+                match.score2 = match.liveScore.score2;
                 match.penaltyWinner = 2;
             }
         }
@@ -3677,6 +3778,11 @@ app.post('/api/admin/finish-match', async (req, res) => {
     match.completed = true;
     match.liveScore.isLive = false;
     match.liveScore.finishedAt = new Date();
+    
+    // Mark as penalty shootout if one occurred
+    if (match.liveScore.penaltyShootout?.finished) {
+        match.isPenaltyShootout = true;
+    }
     
     if (match.phase === 'group' || match.phase === 'swiss') {
         console.log(`Updating table for ${match.phase} match in group: ${match.group}`);
@@ -3706,6 +3812,8 @@ app.post('/api/admin/finish-match', async (req, res) => {
     
     await autoSave();
     broadcastUpdate('match-finished', { matchId, match });
+    // Send timer ended event for whistle sound
+    broadcastUpdate('timer-ended', { matchId, match, type: 'fulltime' });
     res.json({ success: true, match });
 });
 
@@ -3780,6 +3888,8 @@ app.post('/api/admin/start-overtime', async (req, res) => {
     
     await autoSave();
     broadcastUpdate('overtime-started', { matchId, match });
+    // Send timer started event for whistle sound
+    broadcastUpdate('timer-ended', { matchId, match, type: 'overtime-start' });
     res.json({ success: true, message: 'Verlängerung gestartet' });
 });
 
@@ -3802,6 +3912,8 @@ app.post('/api/admin/overtime-halftime', async (req, res) => {
         
         await autoSave();
         broadcastUpdate('overtime-halftime', { matchId, match });
+        // Send timer ended event for whistle sound
+        broadcastUpdate('timer-ended', { matchId, match, type: 'overtime' });
         res.json({ success: true, message: 'Verlängerung Halbzeitpause' });
     } else {
         res.status(400).json({ error: 'Halbzeit nur nach der ersten Halbzeit der Verlängerung möglich' });
@@ -3900,10 +4012,18 @@ app.post('/api/admin/penalty-result', async (req, res) => {
     // Füge Elfmeter zu entsprechendem Team hinzu
     if (penalty.currentTeam === 1) {
         penalty.penalties1.push({ scored: isScored });
-        if (isScored) penalty.score1++;
+        if (isScored) {
+            penalty.score1++;
+            // Update main live score for real-time display
+            match.liveScore.score1++;
+        }
     } else {
         penalty.penalties2.push({ scored: isScored });
-        if (isScored) penalty.score2++;
+        if (isScored) {
+            penalty.score2++;
+            // Update main live score for real-time display
+            match.liveScore.score2++;
+        }
     }
     
     // Wechsel zum nächsten Schützen/Team
@@ -3919,18 +4039,80 @@ app.post('/api/admin/penalty-result', async (req, res) => {
     const penaltiesTaken2 = penalty.penalties2.length;
     const maxPenalties = penalty.shootersPerTeam;
     
-    // Beide Teams haben gleich viele geschossen und mindestens die Mindestanzahl
+    // Prüfe auf vorzeitigen Sieg (wenn ein Team nicht mehr aufholen kann)
+    const remainingPenalties1 = Math.max(0, maxPenalties - penaltiesTaken1);
+    const remainingPenalties2 = Math.max(0, maxPenalties - penaltiesTaken2);
+    const maxPossibleScore1 = penalty.score1 + remainingPenalties1;
+    const maxPossibleScore2 = penalty.score2 + remainingPenalties2;
+    
+    let shouldFinish = false;
+    
+    // Vorzeitiger Sieg in der regulären Phase
+    if (penaltiesTaken1 < maxPenalties || penaltiesTaken2 < maxPenalties) {
+        if (penalty.score1 > maxPossibleScore2 || penalty.score2 > maxPossibleScore1) {
+            shouldFinish = true;
+        }
+    }
+    
+    // Nach der regulären Phase: Sudden Death oder Entscheidung
     if (penaltiesTaken1 >= maxPenalties && penaltiesTaken2 >= maxPenalties && penaltiesTaken1 === penaltiesTaken2) {
         if (penalty.score1 !== penalty.score2) {
-            // Sieger ermittelt
-            penalty.finished = true;
-            penalty.isActive = false;
+            shouldFinish = true;
         }
         // Bei weiterem Unentschieden: Sudden Death (wird automatisch fortgesetzt)
     }
     
+    // Sudden Death: Entscheidung nach jedem Durchgang
+    if (penaltiesTaken1 > maxPenalties && penaltiesTaken2 > maxPenalties && penaltiesTaken1 === penaltiesTaken2) {
+        if (penalty.score1 !== penalty.score2) {
+            shouldFinish = true;
+        }
+    }
+    
+    if (shouldFinish) {
+        penalty.finished = true;
+        penalty.isActive = false;
+        
+        // Setze Penalty-Gewinner
+        if (penalty.score1 > penalty.score2) {
+            match.penaltyWinner = 1;
+        } else {
+            match.penaltyWinner = 2;
+        }
+        
+        // Automatisch Spiel beenden wenn Penalty-Shootout beendet
+        // Use current live scores which now include penalty goals
+        match.score1 = match.liveScore.score1;
+        match.score2 = match.liveScore.score2;
+        match.completed = true;
+        match.liveScore.isLive = false;
+        match.liveScore.finishedAt = new Date();
+        match.isPenaltyShootout = true;
+        
+        // Update dependent knockout matches after penalty shootout
+        if (match.phase !== 'group' && match.phase !== 'swiss') {
+            console.log(`Penalty shootout completed: ${matchId}, updating dependent knockout matches`);
+            updateDependentKnockoutMatches(matchId);
+        }
+        
+        broadcastUpdate('match-finished', { matchId, match });
+        // Send timer ended event for whistle sound
+        broadcastUpdate('timer-ended', { matchId, match, type: 'fulltime' });
+    }
+    
     await autoSave();
     broadcastUpdate('penalty-result', { matchId, match, scored: isScored });
+    
+    // Broadcast live score update for real-time display
+    if (isScored) {
+        broadcastUpdate('live-score-update', { 
+            matchId, 
+            score1: match.liveScore.score1, 
+            score2: match.liveScore.score2, 
+            match 
+        });
+    }
+    
     res.json({ success: true, penalty });
 });
 
@@ -3982,6 +4164,8 @@ app.post('/api/admin/result', async (req, res) => {
     
     await autoSave();
     broadcastUpdate('match-result-added', { matchId, match, score1, score2 });
+    // Send timer ended event for whistle sound when manually entering results
+    broadcastUpdate('timer-ended', { matchId, match, type: 'fulltime' });
     res.json({ success: true, match });
 });
 
@@ -4473,7 +4657,13 @@ function broadcastUpdate(event, data) {
     lastBroadcast[key] = now;
     
     try {
-        io.emit(event, data);
+        // Add server timestamp to all broadcasts for synchronization
+        const broadcastData = {
+            ...data,
+            serverTime: new Date().toISOString(),
+            serverTimestamp: Date.now()
+        };
+        io.emit(event, broadcastData);
     } catch (error) {
         console.error('Error broadcasting update:', error);
     }

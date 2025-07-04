@@ -2594,3 +2594,163 @@
         min-width: 200px;
     }
 }
+
+/* Penalty Shootout Controls */
+.penalty-shootout-controls {
+    background: var(--yellow-50);
+    border: 2px solid var(--yellow-200);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.penalty-shootout-controls h4 {
+    color: var(--yellow-700);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.penalty-shootout-controls h4 i {
+    color: var(--yellow-600);
+}
+
+.penalty-status {
+    background: white;
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.penalty-score {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.penalty-score .team-name {
+    color: var(--dark);
+    min-width: 120px;
+    text-align: center;
+}
+
+.penalty-score .score {
+    font-size: 2rem;
+    color: var(--primary);
+    font-weight: 700;
+}
+
+.penalty-score .separator {
+    color: var(--gray-400);
+    font-size: 1.5rem;
+}
+
+.penalty-progress {
+    border-top: 1px solid var(--gray-200);
+    padding-top: 1rem;
+    margin-bottom: 1rem;
+}
+
+.team-penalties {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.team-penalties strong {
+    min-width: 120px;
+    font-size: 0.875rem;
+    color: var(--dark);
+}
+
+.team-penalties span {
+    font-size: 1.2rem;
+    margin-right: 0.5rem;
+}
+
+.current-shooter {
+    text-align: center;
+    padding: 0.75rem;
+    background: var(--blue-50);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--blue-200);
+    color: var(--blue-700);
+    font-weight: 500;
+}
+
+.penalty-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.penalty-buttons .btn {
+    min-width: 150px;
+    font-size: 1.125rem;
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-content: center;
+}
+
+.penalty-buttons .btn i {
+    font-size: 1.25rem;
+}
+
+/* Penalty Shootout Info Modal */
+.penalty-shootout-info {
+    background: var(--yellow-50);
+    border: 1px solid var(--yellow-200);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--yellow-700);
+}
+
+.penalty-shootout-info i {
+    font-size: 1.5rem;
+    color: var(--yellow-600);
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .penalty-score {
+        font-size: 1.25rem;
+    }
+    
+    .penalty-score .score {
+        font-size: 1.75rem;
+    }
+    
+    .penalty-buttons {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+    
+    .penalty-buttons .btn {
+        min-width: auto;
+    }
+    
+    .team-penalties {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .team-penalties strong {
+        min-width: auto;
+    }
+}
