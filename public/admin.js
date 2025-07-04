@@ -4066,7 +4066,7 @@ async function loadLiveControl() {
                                     return `<button class="btn btn-info btn-large" onclick="startHalfTime('${liveMatch.id}')">
                                         <i class="fas fa-clock"></i> Halbzeit einläuten
                                     </button>`;
-                                } else if (liveMatch.halfTimeBreak || isFirstHalfExpired) {
+                                } else if ((liveMatch.halfTimeBreak || isFirstHalfExpired) && !liveMatch.extensionStarted) {
                                     return `<button class="btn btn-success btn-large" onclick="startSecondHalf('${liveMatch.id}')">
                                         <i class="fas fa-play"></i> 2. Halbzeit starten
                                     </button>`;
@@ -4074,10 +4074,36 @@ async function loadLiveControl() {
                                 return '';
                             })()}
                             
-                            ${liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak ? `
+                            ${liveMatch.currentHalf === 2 && !liveMatch.halfTimeBreak && !liveMatch.extensionStarted ? `
                                 <button class="btn btn-primary btn-large" onclick="endMatch('${liveMatch.id}')">
-                                    <i class="fas fa-flag-checkered"></i> Spiel beenden
+                                    <i class="fas fa-flag-checkered"></i> ${isKnockoutMatch(liveMatch) ? '2. Halbzeit beenden' : 'Spiel beenden'}
                                 </button>
+                            ` : ''}
+                            
+                            ${liveMatch.extensionStarted ? `
+                                <div class="extension-controls">
+                                    <h4>Verlängerung</h4>
+                                    ${liveMatch.extensionMainBreak ? `
+                                        <button class="btn btn-success btn-large" onclick="startExtensionFirstHalf('${liveMatch.id}')">
+                                            <i class="fas fa-play"></i> 1. Verlängerung starten
+                                        </button>
+                                    ` : ''}
+                                    ${liveMatch.currentHalf === 3 && liveMatch.halfTimeBreak ? `
+                                        <button class="btn btn-success btn-large" onclick="startExtensionSecondHalf('${liveMatch.id}')">
+                                            <i class="fas fa-play"></i> 2. Verlängerung starten
+                                        </button>
+                                    ` : ''}
+                                    ${liveMatch.currentHalf === 4 && !liveMatch.halfTimeBreak ? `
+                                        <button class="btn btn-primary btn-large" onclick="endMatch('${liveMatch.id}')">
+                                            <i class="fas fa-flag-checkered"></i> Spiel beenden
+                                        </button>
+                                    ` : ''}
+                                    ${liveMatch.currentHalf === 3 && !liveMatch.halfTimeBreak ? `
+                                        <button class="btn btn-info btn-large" onclick="startExtensionHalfTime('${liveMatch.id}')">
+                                            <i class="fas fa-clock"></i> Verlängerung Halbzeit
+                                        </button>
+                                    ` : ''}
+                                </div>
                             ` : ''}
                         </div>
                         
@@ -4517,6 +4543,8 @@ function calculateLiveTime(liveMatch) {
         } else if (liveMatch.currentHalf === 2 && liveMatch.secondHalfStartTime) {
             const secondHalfStart = new Date(liveMatch.secondHalfStartTime);
             elapsedTime = pauseStartTime - secondHalfStart - (liveMatch.pausedTime || 0);
+        } else if ((liveMatch.currentHalf === 3 || liveMatch.currentHalf === 4) && liveMatch.extensionStarted) {
+            elapsedTime = pauseStartTime - startTime - (liveMatch.pausedTime || 0);
         }
         
         const totalSeconds = Math.floor(elapsedTime / 1000);
@@ -4531,15 +4559,50 @@ function calculateLiveTime(liveMatch) {
         };
     }
     
-    // Halbzeitpause
+    // Halbzeitpause oder Verlängerungspause
     if (liveMatch.halfTimeBreak) {
-        const halftimeBreakMinutes = liveMatch.halftimeBreakMinutes || 1;
+        let breakMinutes, breakInfo, nextHalfInfo;
         
-        // Berechne verbleibende Halbzeitpause
-        if (liveMatch.firstHalfEndTime) {
+        if (liveMatch.extensionMainBreak) {
+            // Hauptpause vor Verlängerung
+            breakMinutes = liveMatch.extensionConfig?.mainBreakMinutes || 10;
+            breakInfo = 'PAUSE VOR VERLÄNGERUNG';
+            nextHalfInfo = '1. VERLÄNGERUNG BEREIT';
+        } else if (liveMatch.currentHalf === 3 && liveMatch.extensionStarted) {
+            // Pause zwischen Verlängerungshalbzeiten
+            breakMinutes = liveMatch.extensionConfig?.breakMinutes || 5;
+            breakInfo = 'VERLÄNGERUNG HALBZEITPAUSE';
+            nextHalfInfo = '2. VERLÄNGERUNG BEREIT';
+        } else {
+            // Normale Halbzeitpause
+            breakMinutes = liveMatch.halftimeBreakMinutes || 1;
+            breakInfo = 'HALBZEITPAUSE';
+            nextHalfInfo = '2. HALBZEIT BEREIT';
+        }
+        
+        // Berechne verbleibende Pause
+        if (liveMatch.breakStartTime) {
+            const breakStart = new Date(liveMatch.breakStartTime);
+            const breakElapsed = Math.floor((now - breakStart) / 1000);
+            const breakTotal = breakMinutes * 60;
+            const breakRemaining = Math.max(0, breakTotal - breakElapsed);
+            
+            const remainingMinutes = Math.floor(breakRemaining / 60);
+            const remainingSeconds = breakRemaining % 60;
+            
+            if (breakRemaining > 0) {
+                return {
+                    displayTime: formatTime(remainingMinutes, remainingSeconds),
+                    halfInfo: breakInfo,
+                    currentMinute: remainingMinutes,
+                    currentSecond: remainingSeconds
+                };
+            }
+        } else if (liveMatch.firstHalfEndTime) {
+            // Fallback für normale Halbzeitpause
             const firstHalfEnd = new Date(liveMatch.firstHalfEndTime);
             const halftimeElapsed = Math.floor((now - firstHalfEnd) / 1000);
-            const halftimeTotal = halftimeBreakMinutes * 60;
+            const halftimeTotal = breakMinutes * 60;
             const halftimeRemaining = Math.max(0, halftimeTotal - halftimeElapsed);
             
             const remainingMinutes = Math.floor(halftimeRemaining / 60);
@@ -4548,17 +4611,17 @@ function calculateLiveTime(liveMatch) {
             if (halftimeRemaining > 0) {
                 return {
                     displayTime: formatTime(remainingMinutes, remainingSeconds),
-                    halfInfo: 'HALBZEITPAUSE',
+                    halfInfo: breakInfo,
                     currentMinute: remainingMinutes,
                     currentSecond: remainingSeconds
                 };
             }
         }
         
-        // Wenn Halbzeitpause abgelaufen ist
+        // Wenn Pause abgelaufen ist
         return {
             displayTime: '00:00',
-            halfInfo: '2. HALBZEIT BEREIT',
+            halfInfo: nextHalfInfo,
             currentMinute: 0,
             currentSecond: 0
         };
@@ -4594,9 +4657,39 @@ function calculateLiveTime(liveMatch) {
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
             currentSecond = 0;
-            halfInfo = 'SPIEL ENDE';
+            halfInfo = liveMatch.extensionStarted ? '2. HALBZEIT ENDE' : 'SPIEL ENDE';
         } else {
             halfInfo = '2. HALBZEIT';
+        }
+    } else if (liveMatch.currentHalf === 3 && liveMatch.extensionStarted) {
+        // Erste Verlängerung
+        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        const extensionHalfTime = liveMatch.extensionConfig?.halfTimeMinutes || 15;
+        if (currentMinute >= extensionHalfTime) {
+            currentMinute = extensionHalfTime;
+            currentSecond = 0;
+            halfInfo = '1. VERLÄNGERUNG ENDE';
+        } else {
+            halfInfo = '1. VERLÄNGERUNG';
+        }
+    } else if (liveMatch.currentHalf === 4 && liveMatch.extensionStarted) {
+        // Zweite Verlängerung
+        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        const extensionHalfTime = liveMatch.extensionConfig?.halfTimeMinutes || 15;
+        if (currentMinute >= extensionHalfTime) {
+            currentMinute = extensionHalfTime;
+            currentSecond = 0;
+            halfInfo = 'VERLÄNGERUNG ENDE';
+        } else {
+            halfInfo = '2. VERLÄNGERUNG';
         }
     }
     
@@ -4792,17 +4885,191 @@ async function startSecondHalf(matchId) {
     }
 }
 
+// Helper function to check if a match is a knockout match
+function isKnockoutMatch(match) {
+    return match.phase === 'quarterfinal' || match.phase === 'semifinal' || match.phase === 'final' || match.id === 'third_place';
+}
+
 async function endMatch(matchId) {
-    createModal('Spiel beenden', `
+    const match = matches.find(m => m.id === matchId);
+    if (!match) {
+        showNotification('Spiel nicht gefunden', 'error');
+        return;
+    }
+    
+    // Use server-side logic to determine match ending behavior
+    // The title will be determined based on match type
+    const title = isKnockoutMatch(match) ? '2. Halbzeit beenden' : 'Spiel beenden';
+    createModal(title, `
         <div class="warning-box" style="background: #fef3c7; border: 1px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
             <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
-            <strong>Spiel regulär beenden:</strong> Das Ergebnis wird gespeichert und das Spiel als abgeschlossen markiert.
+            <strong>${title}:</strong> Das Ergebnis wird gespeichert und das Spiel als abgeschlossen markiert.
         </div>
         <p>Das Live-Spiel wird beendet und das aktuelle Ergebnis gespeichert.</p>
+        ${isKnockoutMatch(match) ? '<p><small>Hinweis: Bei Unentschieden wird automatisch die Verlängerung konfiguriert.</small></p>' : ''}
     `, [
-        { text: 'Spiel beenden', class: 'btn-success', handler: (modalId) => executeEndMatch(matchId, modalId) },
+        { text: title, class: 'btn-success', handler: (modalId) => executeEndMatch(matchId, modalId) },
         { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
     ]);
+}
+
+function showExtensionTimeModal(matchId) {
+    createModal('Verlängerung konfigurieren', `
+        <div class="info-box" style="background: #e0f2fe; border: 1px solid #0ea5e9; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-info-circle" style="color: #0ea5e9;"></i>
+            <strong>Unentschieden nach 2. Halbzeit:</strong> Das Spiel geht in die Verlängerung.
+        </div>
+        <p>Bitte geben Sie die Verlängerungszeiten ein:</p>
+        
+        <div class="form-group">
+            <label for="extensionHalfTime">Dauer einer Verlängerungshalbzeit (Minuten):</label>
+            <input type="number" id="extensionHalfTime" class="form-control" value="15" min="5" max="30">
+        </div>
+        
+        <div class="form-group">
+            <label for="extensionBreakTime">Pause zwischen den Verlängerungshalbzeiten (Minuten):</label>
+            <input type="number" id="extensionBreakTime" class="form-control" value="5" min="1" max="10">
+        </div>
+        
+        <div class="form-group">
+            <label for="extensionMainBreak">Pause vor der Verlängerung (Minuten):</label>
+            <input type="number" id="extensionMainBreak" class="form-control" value="10" min="5" max="15">
+        </div>
+    `, [
+        { text: 'Verlängerung starten', class: 'btn-primary', handler: (modalId) => startExtensionTime(matchId, modalId) },
+        { text: 'Abbrechen', class: 'btn-outline', handler: (modalId) => closeModal(modalId) }
+    ]);
+}
+
+async function startExtensionTime(matchId, modalId) {
+    const extensionHalfTime = parseInt(document.getElementById('extensionHalfTime').value);
+    const extensionBreakTime = parseInt(document.getElementById('extensionBreakTime').value);
+    const extensionMainBreak = parseInt(document.getElementById('extensionMainBreak').value);
+    
+    if (!extensionHalfTime || !extensionBreakTime || !extensionMainBreak) {
+        showNotification('Bitte alle Zeitangaben eingeben', 'error');
+        return;
+    }
+    
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-extension', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                matchId,
+                extensionHalfTime,
+                extensionBreakTime,
+                extensionMainBreak
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification('Verlängerung wird gestartet...', 'success');
+            closeModal(modalId);
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            console.error('Extension start failed:', response.status, data);
+            showNotification(data.error || 'Fehler beim Starten der Verlängerung', 'error');
+            if (data.details) {
+                console.error('Server error details:', data.details);
+            }
+        }
+    } catch (error) {
+        console.error('Fehler beim Starten der Verlängerung:', error);
+        showNotification('Fehler beim Starten der Verlängerung', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function startExtensionFirstHalf(matchId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-extension-first-half', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification('1. Verlängerung gestartet', 'success');
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            showNotification(data.error || 'Fehler beim Starten der 1. Verlängerung', 'error');
+        }
+    } catch (error) {
+        console.error('Fehler beim Starten der 1. Verlängerung:', error);
+        showNotification('Fehler beim Starten der 1. Verlängerung', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function startExtensionHalfTime(matchId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-extension-halftime', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification('Verlängerung Halbzeitpause gestartet', 'success');
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            showNotification(data.error || 'Fehler beim Starten der Halbzeitpause', 'error');
+        }
+    } catch (error) {
+        console.error('Fehler beim Starten der Halbzeitpause:', error);
+        showNotification('Fehler beim Starten der Halbzeitpause', 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function startExtensionSecondHalf(matchId) {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/admin/start-extension-second-half', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ matchId })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification('2. Verlängerung gestartet', 'success');
+            // Refresh will happen automatically via WebSocket updates
+        } else {
+            showNotification(data.error || 'Fehler beim Starten der 2. Verlängerung', 'error');
+        }
+    } catch (error) {
+        console.error('Fehler beim Starten der 2. Verlängerung:', error);
+        showNotification('Fehler beim Starten der 2. Verlängerung', 'error');
+    } finally {
+        showLoading(false);
+    }
 }
 
 async function executeEndMatch(matchId, modalId) {
@@ -4820,6 +5087,14 @@ async function executeEndMatch(matchId, modalId) {
         // Handle non-success HTTP status codes
         if (!response.ok) {
             console.error(`HTTP ${response.status} error:`, data);
+            
+            // Special case: unentschieden KO match needs extension
+            if (data.error === 'unentschieden_ko' && data.requiresOvertime) {
+                closeModal(modalId);
+                showExtensionTimeModal(matchId);
+                return;
+            }
+            
             throw new Error(data.message || data.error || `Server returned ${response.status}`);
         }
         
@@ -4890,7 +5165,7 @@ async function executeStopMatch(matchId, modalId) {
     showLoading(true);
     
     try {
-        const response = await fetch('/api/admin/live-match/stop', {
+        const response = await fetch('/api/admin/stop-match', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ password: adminPassword, matchId })

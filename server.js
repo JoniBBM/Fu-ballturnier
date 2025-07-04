@@ -78,6 +78,40 @@ const AVAILABLE_COLORS = [
     { name: 'Braun', value: 'brown', hex: '#92400e' }
 ];
 
+// Helper function to format live match data for client
+function formatLiveMatchData(match) {
+    if (!match || !match.liveScore) {
+        return null;
+    }
+    
+    return {
+        id: match.id,
+        team1: match.team1,
+        team2: match.team2,
+        score1: match.liveScore.score1,
+        score2: match.liveScore.score2,
+        startTime: match.liveScore.startTime,
+        halfTimeMinutes: match.liveScore.halfTimeMinutes,
+        halftimeBreakMinutes: match.liveScore.halftimeBreakMinutes || 1,
+        currentHalf: match.liveScore.currentHalf,
+        halfTimeBreak: match.liveScore.halfTimeBreak,
+        isPaused: match.liveScore.isPaused,
+        pausedTime: match.liveScore.pausedTime || 0,
+        firstHalfEndTime: match.liveScore.firstHalfEndTime,
+        secondHalfStartTime: match.liveScore.secondHalfStartTime,
+        minute: match.liveScore.minute || 0,
+        group: match.group,
+        pauseStartTime: match.liveScore.pauseStartTime,
+        // Extension properties
+        extensionStarted: match.liveScore.extensionStarted,
+        extensionMainBreak: match.liveScore.extensionMainBreak,
+        extensionConfig: match.liveScore.extensionConfig,
+        breakStartTime: match.liveScore.breakStartTime,
+        breakDuration: match.liveScore.breakDuration,
+        phase: match.phase
+    };
+}
+
 // Daten für bestimmtes Jahr laden
 async function loadDataForYear(year) {
     const filename = path.join(SAVES_DIR, `${year}.json`);
@@ -3356,25 +3390,7 @@ app.get('/api/live-match', (req, res) => {
     }
     
     res.json({ 
-        liveMatch: {
-            id: liveMatch.id,
-            team1: liveMatch.team1,
-            team2: liveMatch.team2,
-            score1: liveMatch.liveScore.score1,
-            score2: liveMatch.liveScore.score2,
-            startTime: liveMatch.liveScore.startTime,
-            halfTimeMinutes: liveMatch.liveScore.halfTimeMinutes,
-            halftimeBreakMinutes: liveMatch.liveScore.halftimeBreakMinutes || 1,
-            currentHalf: liveMatch.liveScore.currentHalf,
-            halfTimeBreak: liveMatch.liveScore.halfTimeBreak,
-            isPaused: liveMatch.liveScore.isPaused,
-            pausedTime: liveMatch.liveScore.pausedTime || 0,
-            firstHalfEndTime: liveMatch.liveScore.firstHalfEndTime,
-            secondHalfStartTime: liveMatch.liveScore.secondHalfStartTime,
-            minute: liveMatch.liveScore.minute || 0,
-            group: liveMatch.group,
-            pauseStartTime: liveMatch.liveScore.pauseStartTime
-        }
+        liveMatch: formatLiveMatchData(liveMatch)
     });
 });
 
@@ -4021,6 +4037,300 @@ app.post('/api/admin/update-settings', async (req, res) => {
     } catch (error) {
         console.error('Update settings error:', error);
         res.status(500).json({ error: 'Server-Fehler beim Aktualisieren der Einstellungen' });
+    }
+});
+
+// Admin: Start extension time for KO matches
+app.post('/api/admin/start-extension', async (req, res) => {
+    try {
+        console.log('Start extension request:', req.body);
+        const { matchId, extensionHalfTime, extensionBreakTime, extensionMainBreak } = req.body;
+        
+        if (!matchId || !extensionHalfTime || !extensionBreakTime || !extensionMainBreak) {
+            console.log('Missing parameters:', { matchId, extensionHalfTime, extensionBreakTime, extensionMainBreak });
+            return res.status(400).json({ error: 'Alle Parameter sind erforderlich' });
+        }
+        
+        if (!currentTournament) {
+            return res.status(400).json({ error: 'Kein aktives Turnier gefunden' });
+        }
+        
+        console.log('currentTournament:', !!currentTournament);
+        console.log('currentTournament.matches:', !!currentTournament.matches);
+        console.log('global matches length:', matches?.length);
+        
+        // Use global matches array instead of currentTournament.matches
+        if (!matches || matches.length === 0) {
+            return res.status(400).json({ error: 'Keine Spiele gefunden' });
+        }
+        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) {
+            return res.status(404).json({ error: 'Spiel nicht gefunden' });
+        }
+        
+        // Check if this is a knockout match
+        console.log('Match phase:', match.phase, 'Match ID:', match.id);
+        if (!(match.phase === 'quarterfinal' || match.phase === 'semifinal' || match.phase === 'final' || match.id === 'third_place')) {
+            return res.status(400).json({ error: 'Verlängerung nur für K.O.-Spiele möglich' });
+        }
+        
+        // Check if match has live score
+        if (!match.liveScore || !match.liveScore.isLive) {
+            return res.status(400).json({ error: 'Kein aktives Live-Spiel gefunden' });
+        }
+        
+        // Check if match is tied
+        if (match.liveScore.score1 !== match.liveScore.score2) {
+            return res.status(400).json({ error: 'Verlängerung nur bei Unentschieden möglich' });
+        }
+        
+        // Check if match is currently in second half and not already in a break
+        console.log('Extension check - currentHalf:', match.liveScore.currentHalf, 'halfTimeBreak:', match.liveScore.halfTimeBreak, 'extensionStarted:', match.liveScore.extensionStarted);
+        
+        if (match.liveScore.currentHalf !== 2) {
+            console.log('ERROR: currentHalf is not 2, it is:', match.liveScore.currentHalf);
+            return res.status(400).json({ error: 'Verlängerung nur in der 2. Halbzeit möglich' });
+        }
+        
+        if (match.liveScore.extensionStarted) {
+            return res.status(400).json({ error: 'Verlängerung bereits gestartet' });
+        }
+        
+        // Set extension configuration
+        match.liveScore.extensionConfig = {
+            halfTimeMinutes: extensionHalfTime,
+            breakMinutes: extensionBreakTime,
+            mainBreakMinutes: extensionMainBreak
+        };
+        
+        // Start main break before extension
+        match.liveScore.currentHalf = 2;
+        match.liveScore.halfTimeBreak = true;
+        match.liveScore.extensionMainBreak = true;
+        match.liveScore.extensionStarted = true;
+        match.liveScore.breakStartTime = Date.now();
+        match.liveScore.breakDuration = extensionMainBreak * 60 * 1000;
+        
+        await autoSave();
+        
+        // Emit live update
+        io.emit('matchUpdate', {
+            matchId: match.id,
+            match: formatLiveMatchData(match),
+            type: 'extension_break_start'
+        });
+        
+        res.json({ success: true, message: 'Verlängerung wurde gestartet' });
+    } catch (error) {
+        console.error('Start extension error:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ error: 'Server-Fehler beim Starten der Verlängerung', details: error.message });
+    }
+});
+
+// Admin: Stop/abort live match (emergency)
+app.post('/api/admin/stop-match', async (req, res) => {
+    try {
+        const { password, matchId } = req.body;
+        
+        if (password !== ADMIN_PASSWORD) {
+            return res.status(401).json({ error: 'Ungültiges Passwort' });
+        }
+        
+        if (!matchId) {
+            return res.status(400).json({ error: 'MatchId ist erforderlich' });
+        }
+        
+        // Use global matches array
+        if (!matches || matches.length === 0) {
+            return res.status(400).json({ error: 'Keine Spiele gefunden' });
+        }
+        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) {
+            return res.status(404).json({ error: 'Spiel nicht gefunden' });
+        }
+        
+        // Check if match has live score
+        if (!match.liveScore || !match.liveScore.isLive) {
+            return res.status(400).json({ error: 'Kein aktives Live-Spiel gefunden' });
+        }
+        
+        console.log(`Emergency stop for match ${matchId}`);
+        
+        // Stop the live match but don't mark as completed
+        match.liveScore.isLive = false;
+        match.liveScore.isPaused = false;
+        match.liveScore.stoppedManually = true;
+        match.liveScore.stopTime = new Date();
+        
+        // Clear any extension states
+        if (match.liveScore.extensionStarted) {
+            match.liveScore.extensionStarted = false;
+            match.liveScore.extensionMainBreak = false;
+        }
+        
+        await autoSave();
+        
+        // Emit live update to stop live displays
+        io.emit('matchUpdate', {
+            matchId: match.id,
+            match: formatLiveMatchData(match),
+            type: 'match_stopped'
+        });
+        
+        res.json({ success: true, message: 'Spiel wurde gestoppt (nicht abgeschlossen)' });
+    } catch (error) {
+        console.error('Stop match error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Stoppen des Spiels' });
+    }
+});
+
+// Admin: Start extension first half
+app.post('/api/admin/start-extension-first-half', async (req, res) => {
+    try {
+        const { matchId } = req.body;
+        
+        if (!matchId) {
+            return res.status(400).json({ error: 'MatchId ist erforderlich' });
+        }
+        
+        // Use global matches array
+        if (!matches || matches.length === 0) {
+            return res.status(400).json({ error: 'Keine Spiele gefunden' });
+        }
+        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) {
+            return res.status(404).json({ error: 'Spiel nicht gefunden' });
+        }
+        
+        if (!match.liveScore || !match.liveScore.isLive) {
+            return res.status(400).json({ error: 'Kein aktives Live-Spiel gefunden' });
+        }
+        
+        if (!match.liveScore.extensionStarted || !match.liveScore.extensionMainBreak) {
+            return res.status(400).json({ error: 'Verlängerung nicht gestartet oder Hauptpause nicht aktiv' });
+        }
+        
+        // Start first extension half
+        match.liveScore.currentHalf = 3;
+        match.liveScore.halfTimeBreak = false;
+        match.liveScore.extensionMainBreak = false;
+        match.liveScore.isPaused = false;
+        match.liveScore.startTime = Date.now();
+        
+        await autoSave();
+        
+        // Emit live update
+        io.emit('matchUpdate', {
+            matchId: match.id,
+            match: formatLiveMatchData(match),
+            type: 'extension_first_half_start'
+        });
+        
+        res.json({ success: true, message: '1. Verlängerung gestartet' });
+    } catch (error) {
+        console.error('Start extension first half error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Starten der 1. Verlängerung' });
+    }
+});
+
+// Admin: Start extension halftime
+app.post('/api/admin/start-extension-halftime', async (req, res) => {
+    try {
+        const { matchId } = req.body;
+        
+        if (!matchId) {
+            return res.status(400).json({ error: 'MatchId ist erforderlich' });
+        }
+        
+        // Use global matches array
+        if (!matches || matches.length === 0) {
+            return res.status(400).json({ error: 'Keine Spiele gefunden' });
+        }
+        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) {
+            return res.status(404).json({ error: 'Spiel nicht gefunden' });
+        }
+        
+        if (!match.liveScore || !match.liveScore.isLive) {
+            return res.status(400).json({ error: 'Kein aktives Live-Spiel gefunden' });
+        }
+        
+        if (match.liveScore.currentHalf !== 3 || match.liveScore.halfTimeBreak) {
+            return res.status(400).json({ error: 'Verlängerung Halbzeit nur nach der 1. Verlängerung möglich' });
+        }
+        
+        // Start extension halftime break
+        match.liveScore.halfTimeBreak = true;
+        match.liveScore.breakStartTime = Date.now();
+        match.liveScore.breakDuration = (match.liveScore.extensionConfig?.breakMinutes || 5) * 60 * 1000;
+        
+        await autoSave();
+        
+        // Emit live update
+        io.emit('matchUpdate', {
+            matchId: match.id,
+            match: formatLiveMatchData(match),
+            type: 'extension_halftime_start'
+        });
+        
+        res.json({ success: true, message: 'Verlängerung Halbzeitpause gestartet' });
+    } catch (error) {
+        console.error('Start extension halftime error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Starten der Halbzeitpause' });
+    }
+});
+
+// Admin: Start extension second half
+app.post('/api/admin/start-extension-second-half', async (req, res) => {
+    try {
+        const { matchId } = req.body;
+        
+        if (!matchId) {
+            return res.status(400).json({ error: 'MatchId ist erforderlich' });
+        }
+        
+        // Use global matches array
+        if (!matches || matches.length === 0) {
+            return res.status(400).json({ error: 'Keine Spiele gefunden' });
+        }
+        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) {
+            return res.status(404).json({ error: 'Spiel nicht gefunden' });
+        }
+        
+        if (!match.liveScore || !match.liveScore.isLive) {
+            return res.status(400).json({ error: 'Kein aktives Live-Spiel gefunden' });
+        }
+        
+        if (match.liveScore.currentHalf !== 3 || !match.liveScore.halfTimeBreak) {
+            return res.status(400).json({ error: '2. Verlängerung nur nach der Halbzeitpause möglich' });
+        }
+        
+        // Start second extension half
+        match.liveScore.currentHalf = 4;
+        match.liveScore.halfTimeBreak = false;
+        match.liveScore.isPaused = false;
+        match.liveScore.startTime = Date.now();
+        
+        await autoSave();
+        
+        // Emit live update
+        io.emit('matchUpdate', {
+            matchId: match.id,
+            match: formatLiveMatchData(match),
+            type: 'extension_second_half_start'
+        });
+        
+        res.json({ success: true, message: '2. Verlängerung gestartet' });
+    } catch (error) {
+        console.error('Start extension second half error:', error);
+        res.status(500).json({ error: 'Server-Fehler beim Starten der 2. Verlängerung' });
     }
 });
 

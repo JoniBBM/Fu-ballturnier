@@ -387,6 +387,36 @@ function setupWebSocketEventListeners() {
         }
     });
 
+    // Handle match updates (for extension events, match state changes, etc.)
+    socket.on('matchUpdate', (data) => {
+        console.log('Match update received:', data);
+        
+        if (data && data.match) {
+            // Check if this is the current live match
+            if (currentLiveMatch && currentLiveMatch.id === data.matchId) {
+                // Update the current live match data with new state
+                Object.assign(currentLiveMatch, data.match);
+                
+                // If we're on the live tab, refresh the live content to show new state
+                if (currentActiveTab === 'live') {
+                    console.log('Refreshing live content due to match update');
+                    loadLiveMatch();
+                }
+            }
+            
+            // Also update schedule tab if it's active (to show updated match states)
+            if (currentActiveTab === 'schedule') {
+                console.log('Refreshing schedule tab due to match update');
+                loadSchedule();
+            }
+            
+            // Update tables if this was a match completion event
+            if (data.type === 'match_completed' && currentActiveTab === 'tables') {
+                setTimeout(() => loadTables(), 2000);
+            }
+        }
+    });
+
     // Match Started - refresh live tab and home statistics
     socket.on('match-started', (data) => {
         console.log('Match started:', data);
@@ -991,15 +1021,50 @@ function calculateLiveTime(liveMatch) {
         };
     }
     
-    // Halbzeitpause
+    // Halbzeitpause oder Verlängerungspause
     if (liveMatch.halfTimeBreak) {
-        const halftimeBreakMinutes = liveMatch.halftimeBreakMinutes || 1;
+        let breakMinutes, breakInfo, nextHalfInfo;
         
-        // Berechne verbleibende Halbzeitpause
-        if (liveMatch.firstHalfEndTime) {
+        if (liveMatch.extensionMainBreak) {
+            // Hauptpause vor Verlängerung
+            breakMinutes = liveMatch.extensionConfig?.mainBreakMinutes || 10;
+            breakInfo = 'PAUSE VOR VERLÄNGERUNG';
+            nextHalfInfo = '1. VERLÄNGERUNG BEREIT';
+        } else if (liveMatch.currentHalf === 3 && liveMatch.extensionStarted) {
+            // Pause zwischen Verlängerungshalbzeiten
+            breakMinutes = liveMatch.extensionConfig?.breakMinutes || 5;
+            breakInfo = 'VERLÄNGERUNG HALBZEITPAUSE';
+            nextHalfInfo = '2. VERLÄNGERUNG BEREIT';
+        } else {
+            // Normale Halbzeitpause
+            breakMinutes = liveMatch.halftimeBreakMinutes || 1;
+            breakInfo = 'HALBZEITPAUSE';
+            nextHalfInfo = '2. HALBZEIT BEREIT';
+        }
+        
+        // Berechne verbleibende Pause
+        if (liveMatch.breakStartTime) {
+            const breakStart = new Date(liveMatch.breakStartTime);
+            const breakElapsed = Math.floor((now - breakStart) / 1000);
+            const breakTotal = breakMinutes * 60;
+            const breakRemaining = Math.max(0, breakTotal - breakElapsed);
+            
+            const remainingMinutes = Math.floor(breakRemaining / 60);
+            const remainingSeconds = breakRemaining % 60;
+            
+            if (breakRemaining > 0) {
+                return {
+                    displayTime: formatTime(remainingMinutes, remainingSeconds),
+                    halfInfo: breakInfo,
+                    currentMinute: remainingMinutes,
+                    currentSecond: remainingSeconds
+                };
+            }
+        } else if (liveMatch.firstHalfEndTime) {
+            // Fallback für normale Halbzeitpause
             const firstHalfEnd = new Date(liveMatch.firstHalfEndTime);
             const halftimeElapsed = Math.floor((now - firstHalfEnd) / 1000);
-            const halftimeTotal = halftimeBreakMinutes * 60;
+            const halftimeTotal = breakMinutes * 60;
             const halftimeRemaining = Math.max(0, halftimeTotal - halftimeElapsed);
             
             const remainingMinutes = Math.floor(halftimeRemaining / 60);
@@ -1008,17 +1073,17 @@ function calculateLiveTime(liveMatch) {
             if (halftimeRemaining > 0) {
                 return {
                     displayTime: formatTime(remainingMinutes, remainingSeconds),
-                    halfInfo: 'HALBZEITPAUSE',
+                    halfInfo: breakInfo,
                     currentMinute: remainingMinutes,
                     currentSecond: remainingSeconds
                 };
             }
         }
         
-        // Wenn Halbzeitpause abgelaufen ist
+        // Wenn Pause abgelaufen ist
         return {
             displayTime: '00:00',
-            halfInfo: '2. HALBZEIT BEREIT',
+            halfInfo: nextHalfInfo,
             currentMinute: 0,
             currentSecond: 0
         };
@@ -1054,9 +1119,39 @@ function calculateLiveTime(liveMatch) {
         if (currentMinute >= halfTimeMinutes) {
             currentMinute = halfTimeMinutes;
             currentSecond = 0;
-            halfInfo = 'SPIEL ENDE';
+            halfInfo = liveMatch.extensionStarted ? '2. HALBZEIT ENDE' : 'SPIEL ENDE';
         } else {
             halfInfo = '2. HALBZEIT';
+        }
+    } else if (liveMatch.currentHalf === 3 && liveMatch.extensionStarted) {
+        // Erste Verlängerung
+        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        const extensionHalfTime = liveMatch.extensionConfig?.halfTimeMinutes || 15;
+        if (currentMinute >= extensionHalfTime) {
+            currentMinute = extensionHalfTime;
+            currentSecond = 0;
+            halfInfo = '1. VERLÄNGERUNG ENDE';
+        } else {
+            halfInfo = '1. VERLÄNGERUNG';
+        }
+    } else if (liveMatch.currentHalf === 4 && liveMatch.extensionStarted) {
+        // Zweite Verlängerung
+        elapsedTime = now - startTime - (liveMatch.pausedTime || 0);
+        const totalSeconds = Math.floor(elapsedTime / 1000);
+        currentMinute = Math.floor(totalSeconds / 60);
+        currentSecond = totalSeconds % 60;
+        
+        const extensionHalfTime = liveMatch.extensionConfig?.halfTimeMinutes || 15;
+        if (currentMinute >= extensionHalfTime) {
+            currentMinute = extensionHalfTime;
+            currentSecond = 0;
+            halfInfo = 'VERLÄNGERUNG ENDE';
+        } else {
+            halfInfo = '2. VERLÄNGERUNG';
         }
     }
     
