@@ -46,6 +46,131 @@ let isUpdating = false;
 let pendingUpdate = false;
 let lastWebSocketUpdate = 0;
 
+// Sound Manager
+let audioContext = null;
+let soundEnabled = true;
+let audioInitialized = false;
+
+function initAudio() {
+    if (audioInitialized) return;
+    
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioInitialized = true;
+        console.log('Audio context initialized');
+    } catch (e) {
+        console.warn('Audio context not supported:', e);
+        soundEnabled = false;
+    }
+}
+
+function playWhistle(eventType = 'default') {
+    if (!soundEnabled || !audioInitialized) return;
+    
+    // Only play whistle for legitimate game events, not page refreshes
+    const validEvents = ['match-start', 'halftime', 'fulltime', 'pause', 'resume', 'overtime', 'overtime-start'];
+    if (!validEvents.includes(eventType)) return;
+    
+    try {
+        // Resume audio context if needed (for user interaction requirement)
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
+        const audio = new Audio('/sounds/pfeife.mp3');
+        audio.volume = 0.8; // 80% volume
+        
+        // Mobile audio fix: Set additional properties
+        audio.preload = 'auto';
+        audio.crossOrigin = 'anonymous';
+        
+        // Multiple attempt strategy for mobile
+        const playAttempt = () => {
+            return audio.play().then(() => {
+                console.log(`Whistle sound played successfully for: ${eventType}`);
+                
+                // Different notifications for different events
+                let message = '🔊 Pfiff!';
+                let type = 'info';
+                
+                switch(eventType) {
+                    case 'match-start':
+                        message = '🔊 Spielbeginn!';
+                        type = 'success';
+                        break;
+                    case 'halftime':
+                        message = '🔊 Halbzeit-Pfiff!';
+                        type = 'info';
+                        break;
+                    case 'fulltime':
+                        message = '🔊 Spielende!';
+                        type = 'success';
+                        break;
+                    case 'pause':
+                        message = '🔊 Spiel pausiert!';
+                        type = 'warning';
+                        break;
+                    case 'resume':
+                        message = '🔊 Spiel fortgesetzt!';
+                        type = 'success';
+                        break;
+                    case 'overtime':
+                        message = '🔊 Verlängerung beendet!';
+                        type = 'warning';
+                        break;
+                    case 'overtime-start':
+                        message = '🔊 Verlängerung startet!';
+                        type = 'warning';
+                        break;
+                }
+                
+                showNotification(message, type);
+            }).catch(error => {
+                console.warn('Could not play whistle sound:', error);
+                // Fallback: Just show notification without sound
+                showNotification('🔇 Sound nicht verfügbar', 'warning');
+            });
+        };
+        
+        // Try to play immediately
+        playAttempt();
+        
+    } catch (error) {
+        console.warn('Error playing whistle sound:', error);
+    }
+}
+
+// Initialize audio on page load
+document.addEventListener('DOMContentLoaded', function() {
+    initAudio();
+    
+    // Enhanced mobile audio initialization
+    const enableAudio = function() {
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
+        // Pre-load audio for mobile devices
+        try {
+            const testAudio = new Audio('/sounds/pfeife.mp3');
+            testAudio.volume = 0;
+            testAudio.play().then(() => {
+                testAudio.pause();
+                console.log('Audio pre-loaded successfully');
+            }).catch(() => {
+                console.log('Audio pre-load failed, but context enabled');
+            });
+        } catch (e) {
+            console.log('Audio pre-load not supported');
+        }
+    };
+    
+    // Listen for multiple interaction types (mobile compatibility)
+    ['click', 'touchstart', 'touchend'].forEach(eventType => {
+        document.addEventListener(eventType, enableAudio, { once: true });
+    });
+});
+
 // Utility Functions
 function showNotification(message, type = 'success') {
     notification.textContent = message;
@@ -61,6 +186,69 @@ function formatScore(score1, score2) {
         return '<span class="match-pending">Ausstehend</span>';
     }
     return `<span class="match-score">${score1} : ${score2}</span>`;
+}
+
+function formatMatchResult(match) {
+    if (!match.completed) {
+        if (match.liveScore?.isLive) {
+            return `<span class="live-score">LIVE ${match.liveScore.score1} : ${match.liveScore.score2}</span>`;
+        }
+        return '<span class="pending">Ausstehend</span>';
+    }
+    
+    // Completed match
+    let result = '';
+    const score1 = match.score1;
+    const score2 = match.score2;
+    
+    // Check for penalty shootout
+    if (match.isPenaltyShootout && match.liveScore?.penaltyShootout) {
+        const penalty = match.liveScore.penaltyShootout;
+        const winner = match.penaltyWinner;
+        
+        result = `
+            <div class="match-result-container">
+                <div class="regular-score">
+                    <span class="team-score ${winner === 1 ? 'winner' : ''}">${score1}</span>
+                    <span class="score-separator">:</span>
+                    <span class="team-score ${winner === 2 ? 'winner' : ''}">${score2}</span>
+                </div>
+                <div class="penalty-result">
+                    <span class="penalty-label">n.E.</span>
+                    <span class="penalty-score">
+                        <span class="team-penalty ${winner === 1 ? 'winner' : ''}">${penalty.score1}</span>
+                        :
+                        <span class="team-penalty ${winner === 2 ? 'winner' : ''}">${penalty.score2}</span>
+                    </span>
+                </div>
+            </div>
+        `;
+    } else {
+        // Regular match result
+        const winner = score1 > score2 ? 1 : score2 > score1 ? 2 : 0;
+        result = `
+            <span class="final-score">
+                <span class="team-score ${winner === 1 ? 'winner' : winner === 0 ? 'draw' : ''}">${score1}</span>
+                <span class="score-separator">:</span>
+                <span class="team-score ${winner === 2 ? 'winner' : winner === 0 ? 'draw' : ''}">${score2}</span>
+            </span>
+        `;
+    }
+    
+    return result;
+}
+
+function formatTeamName(teamName, isWinner, isPenaltyWinner = false, isLoser = false) {
+    let classes = 'team-name';
+    if (isWinner) {
+        classes += ' winner-team';
+        if (isPenaltyWinner) {
+            classes += ' penalty-winner';
+        }
+    } else if (isLoser) {
+        classes += ' loser-team';
+    }
+    return `<span class="${classes}">${teamName}</span>`;
 }
 
 function updateStats() {
@@ -420,7 +608,7 @@ function setupWebSocketEventListeners() {
     // Match Started - refresh live tab and home statistics
     socket.on('match-started', (data) => {
         console.log('Match started:', data);
-        showNotification(`Spiel gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        playWhistle('match-start'); // Play whistle when match starts
         
         if (currentActiveTab === 'live') {
             // Immediately start timer with new match data
@@ -438,14 +626,30 @@ function setupWebSocketEventListeners() {
     // Match Finished - refresh multiple tabs
     socket.on('match-finished', (data) => {
         console.log('Match finished:', data);
-        showNotification(`Spiel beendet: ${data.match.team1} vs ${data.match.team2}`, 'success');
+        playWhistle('fulltime'); // Play whistle when match ends
+        const finishedMatch = data.match;
+        
+        // Show notification
+        let notificationText = `Spiel beendet: ${finishedMatch.team1} vs ${finishedMatch.team2}`;
+        if (finishedMatch.isPenaltyShootout) {
+            const winner = finishedMatch.penaltyWinner === 1 ? finishedMatch.team1 : finishedMatch.team2;
+            notificationText += ` - ${winner} gewinnt im Elfmeterschießen!`;
+        }
+        showNotification(notificationText, 'success');
         
         // Stop local timer since match ended
         stopLocalLiveTimer();
         currentLiveMatch = null;
         
-        // Smart update for relevant tabs INCLUDING tables
-        smartUpdate(['live', 'home', 'schedule', 'tables']);
+        // Show finished match for 10 seconds on live tab
+        if (currentActiveTab === 'live') {
+            showFinishedMatchDisplay(finishedMatch);
+        }
+        
+        // Smart update for relevant tabs INCLUDING tables (delayed for live tab)
+        setTimeout(() => {
+            smartUpdate(['live', 'home', 'schedule', 'tables']);
+        }, currentActiveTab === 'live' ? 10000 : 0); // 10 seconds delay for live tab
         
         // Force table update if on tables tab
         if (currentActiveTab === 'tables') {
@@ -483,45 +687,45 @@ function setupWebSocketEventListeners() {
     // Match Paused
     socket.on('match-paused', (data) => {
         console.log('Match paused:', data);
-        if (currentActiveTab === 'live' && currentLiveMatch) {
-            // Update local match data
+        playWhistle('pause'); // Play whistle when match is paused
+        // Update live match data globally, not just on live tab
+        if (currentLiveMatch && currentLiveMatch.id === data.matchId) {
             currentLiveMatch.isPaused = true;
             currentLiveMatch.pauseStartTime = data.pauseStartTime;
-            showNotification(`Spiel pausiert: ${data.match.team1} vs ${data.match.team2}`, 'info');
         }
     });
 
     // Match Resumed
     socket.on('match-resumed', (data) => {
         console.log('Match resumed:', data);
-        if (currentActiveTab === 'live' && currentLiveMatch) {
-            // Update local match data
+        playWhistle('resume'); // Play whistle when match is resumed
+        // Update live match data globally, not just on live tab
+        if (currentLiveMatch && currentLiveMatch.id === data.matchId) {
             currentLiveMatch.isPaused = false;
             currentLiveMatch.pausedTime = data.totalPausedTime;
-            showNotification(`Spiel fortgesetzt: ${data.match.team1} vs ${data.match.team2}`, 'success');
         }
     });
 
     // Halftime Started
     socket.on('halftime-started', (data) => {
         console.log('Halftime started:', data);
+        playWhistle('halftime'); // Play whistle on halftime
         if (currentActiveTab === 'live' && currentLiveMatch) {
             currentLiveMatch.halfTimeBreak = true;
             currentLiveMatch.firstHalfEndTime = data.firstHalfEndTime;
-            showNotification(`Halbzeit: ${data.match.team1} vs ${data.match.team2}`, 'info');
         }
     });
 
     // Second Half Started
     socket.on('second-half-started', (data) => {
         console.log('Second half started:', data);
+        playWhistle('resume'); // Play whistle when second half starts
         if (currentActiveTab === 'live') {
             if (currentLiveMatch) {
                 currentLiveMatch.halfTimeBreak = false;
                 currentLiveMatch.currentHalf = 2;
                 currentLiveMatch.secondHalfStartTime = data.secondHalfStartTime;
             }
-            showNotification(`2. Halbzeit gestartet: ${data.match.team1} vs ${data.match.team2}`, 'success');
             // Reload live display to show correct UI
             coordinatedUpdate(() => loadLiveMatch(), 500);
         }
@@ -578,6 +782,30 @@ function setupWebSocketEventListeners() {
         // Also refresh matches tab to show updated schedule
         smartUpdate(['matches', 'home']);
     });
+    
+    // Penalty Shootout Started
+    socket.on('penalty-shootout-started', (data) => {
+        console.log('Penalty shootout started:', data);
+        showNotification(`Elfmeterschießen gestartet: ${data.match.team1} vs ${data.match.team2}`, 'info');
+        if (currentActiveTab === 'live') {
+            // Reload live match to show penalty display
+            coordinatedUpdate(() => loadLiveMatch(), 200);
+        }
+    });
+    
+    // Penalty Result
+    socket.on('penalty-result', (data) => {
+        console.log('Penalty result:', data);
+        if (currentActiveTab === 'live') {
+            updatePenaltyDisplay(data);
+        }
+    });
+    
+    // Timer End Events
+    socket.on('timer-ended', (data) => {
+        console.log('Timer ended event:', data);
+        playWhistle(data.type || 'fulltime');
+    });
 }
 
 // Helper function to update live score display without full reload
@@ -623,6 +851,174 @@ function updateLiveScoreDisplay(data) {
         }
     } catch (error) {
         console.error('Error updating live score display:', error);
+    }
+}
+
+// Update penalty shootout display in real-time
+function updatePenaltyDisplay(data) {
+    try {
+        const { match } = data;
+        
+        if (!match || !match.liveScore?.penaltyShootout) {
+            return;
+        }
+        
+        const penalty = match.liveScore.penaltyShootout;
+        
+        // Update penalty scores
+        const penaltyTeam1Score = document.querySelector('.penalty-team:first-child .penalty-score');
+        const penaltyTeam2Score = document.querySelector('.penalty-team:last-child .penalty-score');
+        
+        if (penaltyTeam1Score) {
+            penaltyTeam1Score.textContent = penalty.score1;
+        }
+        if (penaltyTeam2Score) {
+            penaltyTeam2Score.textContent = penalty.score2;
+        }
+        
+        // Update penalty progress
+        const team1PenaltiesRow = document.querySelector('.team-penalties:first-child .penalties-row');
+        const team2PenaltiesRow = document.querySelector('.team-penalties:last-child .penalties-row');
+        
+        if (team1PenaltiesRow) {
+            team1PenaltiesRow.innerHTML = penalty.penalties1.map(p => `
+                <span class="penalty-result ${p.scored ? 'scored' : 'missed'}">
+                    ${p.scored ? '⚽' : '❌'}
+                </span>
+            `).join('');
+        }
+        
+        if (team2PenaltiesRow) {
+            team2PenaltiesRow.innerHTML = penalty.penalties2.map(p => `
+                <span class="penalty-result ${p.scored ? 'scored' : 'missed'}">
+                    ${p.scored ? '⚽' : '❌'}
+                </span>
+            `).join('');
+        }
+        
+        // Update current shooter
+        const currentShooterDiv = document.querySelector('.current-shooter');
+        if (currentShooterDiv) {
+            const currentTeamName = penalty.currentTeam === 1 ? match.team1 : match.team2;
+            currentShooterDiv.innerHTML = `
+                <div class="shooter-info">
+                    <strong>Aktueller Schütze:</strong>
+                    <span class="current-team">${currentTeamName}</span>
+                </div>
+                <div class="shooter-number">
+                    ${penalty.currentShooter}. Schütze
+                </div>
+            `;
+        }
+        
+        // Check if penalty shootout is finished and reload if necessary
+        if (penalty.finished) {
+            setTimeout(() => {
+                if (currentActiveTab === 'live') {
+                    loadLiveMatch();
+                }
+            }, 3000); // Give time to see the final result
+        }
+        
+        console.log('Updated penalty display:', penalty);
+    } catch (error) {
+        console.error('Error updating penalty display:', error);
+    }
+}
+
+// Show finished match for 10 seconds before switching to next match
+function showFinishedMatchDisplay(finishedMatch) {
+    try {
+        const liveContent = document.getElementById('live-content');
+        
+        // Determine winner
+        let winner = 0;
+        let winnerName = '';
+        if (finishedMatch.isPenaltyShootout) {
+            winner = finishedMatch.penaltyWinner;
+            winnerName = winner === 1 ? finishedMatch.team1 : finishedMatch.team2;
+        } else {
+            winner = finishedMatch.score1 > finishedMatch.score2 ? 1 : finishedMatch.score2 > finishedMatch.score1 ? 2 : 0;
+            if (winner === 1) winnerName = finishedMatch.team1;
+            else if (winner === 2) winnerName = finishedMatch.team2;
+        }
+        
+        const html = `
+            <div class="finished-match-display">
+                <div class="finished-match-header">
+                    <div class="finished-indicator">
+                        <i class="fas fa-flag-checkered"></i>
+                        <h2>Spiel beendet!</h2>
+                    </div>
+                    ${winner > 0 ? `
+                        <div class="winner-announcement">
+                            <i class="fas fa-trophy"></i>
+                            <span class="winner-text">Sieger: <strong>${winnerName}</strong></span>
+                        </div>
+                    ` : `
+                        <div class="draw-announcement">
+                            <i class="fas fa-handshake"></i>
+                            <span class="draw-text">Unentschieden</span>
+                        </div>
+                    `}
+                </div>
+                
+                <div class="finished-match-info">
+                    <div class="finished-teams">
+                        <div class="finished-team ${winner === 1 ? 'winner' : ''}">
+                            <div class="team-name">${finishedMatch.team1}</div>
+                            <div class="team-score">${finishedMatch.score1}</div>
+                        </div>
+                        
+                        <div class="finished-vs">
+                            <span class="final-label">FINAL</span>
+                        </div>
+                        
+                        <div class="finished-team ${winner === 2 ? 'winner' : ''}">
+                            <div class="team-name">${finishedMatch.team2}</div>
+                            <div class="team-score">${finishedMatch.score2}</div>
+                        </div>
+                    </div>
+                    
+                    ${finishedMatch.isPenaltyShootout && finishedMatch.liveScore?.penaltyShootout ? `
+                        <div class="penalty-final-result">
+                            <div class="penalty-label">Nach Elfmeterschießen</div>
+                            <div class="penalty-final-score">
+                                <span class="penalty-team ${winner === 1 ? 'winner' : ''}">${finishedMatch.liveScore.penaltyShootout.score1}</span>
+                                :
+                                <span class="penalty-team ${winner === 2 ? 'winner' : ''}">${finishedMatch.liveScore.penaltyShootout.score2}</span>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="match-group">${finishedMatch.group}</div>
+                </div>
+                
+                <div class="next-match-countdown">
+                    <div class="countdown-text">Nächstes Spiel in</div>
+                    <div class="countdown-timer" id="next-match-countdown">10</div>
+                    <div class="countdown-unit">Sekunden</div>
+                </div>
+            </div>
+        `;
+        
+        liveContent.innerHTML = html;
+        
+        // Start countdown
+        let seconds = 10;
+        const countdownElement = document.getElementById('next-match-countdown');
+        const countdownInterval = setInterval(() => {
+            seconds--;
+            if (countdownElement) {
+                countdownElement.textContent = seconds;
+            }
+            if (seconds <= 0) {
+                clearInterval(countdownInterval);
+            }
+        }, 1000);
+        
+    } catch (error) {
+        console.error('Error showing finished match display:', error);
     }
 }
 
@@ -1153,6 +1549,11 @@ function calculateLiveTime(liveMatch) {
         } else {
             halfInfo = '2. VERLÄNGERUNG';
         }
+    } else if (liveMatch.currentHalf === 5 && liveMatch.liveScore?.penaltyShootout?.isActive) {
+        // Elfmeterschießen
+        currentMinute = 0;
+        currentSecond = 0;
+        halfInfo = 'ELFMETERSCHIEßEN';
     }
     
     const displayTime = formatTime(Math.max(0, currentMinute), Math.max(0, currentSecond));
@@ -1221,6 +1622,60 @@ async function loadLiveMatch() {
                             <i class="fas fa-circle"></i> LIVE
                         </span>
                     </div>
+                    
+                    ${liveMatch.liveScore?.penaltyShootout?.isActive ? `
+                        <div class="penalty-shootout-display">
+                            <div class="penalty-shootout-header">
+                                <i class="fas fa-futbol"></i>
+                                <h3>Elfmeterschießen</h3>
+                            </div>
+                            
+                            <div class="penalty-shootout-score">
+                                <div class="penalty-team">
+                                    <div class="team-name">${liveMatch.team1}</div>
+                                    <div class="penalty-score">${liveMatch.liveScore.penaltyShootout.score1}</div>
+                                </div>
+                                <div class="penalty-vs">:</div>
+                                <div class="penalty-team">
+                                    <div class="team-name">${liveMatch.team2}</div>
+                                    <div class="penalty-score">${liveMatch.liveScore.penaltyShootout.score2}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="penalty-progress">
+                                <div class="team-penalties">
+                                    <div class="team-name">${liveMatch.team1}</div>
+                                    <div class="penalties-row">
+                                        ${liveMatch.liveScore.penaltyShootout.penalties1.map(p => `
+                                            <span class="penalty-result ${p.scored ? 'scored' : 'missed'}">
+                                                ${p.scored ? '⚽' : '❌'}
+                                            </span>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                                <div class="team-penalties">
+                                    <div class="team-name">${liveMatch.team2}</div>
+                                    <div class="penalties-row">
+                                        ${liveMatch.liveScore.penaltyShootout.penalties2.map(p => `
+                                            <span class="penalty-result ${p.scored ? 'scored' : 'missed'}">
+                                                ${p.scored ? '⚽' : '❌'}
+                                            </span>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="current-shooter">
+                                <div class="shooter-info">
+                                    <strong>Aktueller Schütze:</strong>
+                                    <span class="current-team">${liveMatch.liveScore.penaltyShootout.currentTeam === 1 ? liveMatch.team1 : liveMatch.team2}</span>
+                                </div>
+                                <div class="shooter-number">
+                                    ${liveMatch.liveScore.penaltyShootout.currentShooter}. Schütze
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
                 </div>
             `;
             
@@ -1841,9 +2296,28 @@ async function loadSchedule() {
                         
                         <div class="match-info">
                             <div class="match-teams">
-                                <span class="team-name">${match.team1}</span>
-                                <span class="vs">vs</span>
-                                <span class="team-name">${match.team2}</span>
+                                ${isCompleted ? (() => {
+                                    let winner = 0;
+                                    if (match.isPenaltyShootout && match.penaltyWinner) {
+                                        winner = match.penaltyWinner;
+                                    } else if (match.isPenaltyShootout && match.liveScore?.penaltyShootout) {
+                                        // Fallback: determine from penalty scores if penaltyWinner not set
+                                        const penalty = match.liveScore.penaltyShootout;
+                                        winner = penalty.score1 > penalty.score2 ? 1 : penalty.score2 > penalty.score1 ? 2 : 0;
+                                    } else {
+                                        // Regular match
+                                        winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                    }
+                                    return `
+                                        ${formatTeamName(match.team1, winner === 1, match.isPenaltyShootout, winner === 2)}
+                                        <span class="vs">vs</span>
+                                        ${formatTeamName(match.team2, winner === 2, match.isPenaltyShootout, winner === 1)}
+                                    `;
+                                })() : `
+                                    <span class="team-name">${match.team1}</span>
+                                    <span class="vs">vs</span>
+                                    <span class="team-name">${match.team2}</span>
+                                `}
                             </div>
                             
                             <div class="match-group">${match.group}</div>
@@ -1857,12 +2331,7 @@ async function loadSchedule() {
                         </div>
                         
                         <div class="match-result">
-                            ${isCompleted ? 
-                                `<span class="final-score">${match.score1} : ${match.score2}</span>` : 
-                                isLive ? 
-                                    `<span class="live-score">LIVE ${match.liveScore.score1} : ${match.liveScore.score2}</span>` :
-                                    '<span class="pending">Ausstehend</span>'
-                            }
+                            ${formatMatchResult(match)}
                         </div>
                     </div>
                 `;
@@ -1890,12 +2359,26 @@ async function loadSchedule() {
                     html += `
                         <div class="match-card ${match.completed ? 'completed' : ''}">
                             <div class="match-teams">
-                                <span class="team-name">${match.team1}</span>
-                                <span class="vs">vs</span>
-                                <span class="team-name">${match.team2}</span>
+                                ${match.completed ? (() => {
+                                    let winner = 0;
+                                    if (match.isPenaltyShootout) {
+                                        winner = match.penaltyWinner;
+                                    } else {
+                                        winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                    }
+                                    return `
+                                        ${formatTeamName(match.team1, winner === 1, match.isPenaltyShootout, winner === 2)}
+                                        <span class="vs">vs</span>
+                                        ${formatTeamName(match.team2, winner === 2, match.isPenaltyShootout, winner === 1)}
+                                    `;
+                                })() : `
+                                    <span class="team-name">${match.team1}</span>
+                                    <span class="vs">vs</span>
+                                    <span class="team-name">${match.team2}</span>
+                                `}
                             </div>
                             <div class="match-result">
-                                ${formatScore(match.score1, match.score2)}
+                                ${formatMatchResult(match)}
                             </div>
                             ${match.referee ? `
                                 <div class="match-referee">
@@ -2441,12 +2924,34 @@ async function loadKnockoutMatches() {
                             ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
                         </div>
                         <div class="ko-match-teams">
-                            <div class="ko-team">${match.team1}</div>
-                            <div class="ko-match-score">
-                                ${match.completed ? `${match.score1}:${match.score2}` : 
-                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
-                            </div>
-                            <div class="ko-team">${match.team2}</div>
+                            ${match.completed ? (() => {
+                                let winner = 0;
+                                if (match.isPenaltyShootout && match.penaltyWinner) {
+                                    winner = match.penaltyWinner;
+                                    console.log('Penalty shootout detected:', match.team1, 'vs', match.team2, 'Winner:', winner, 'penaltyWinner field:', match.penaltyWinner);
+                                } else if (match.isPenaltyShootout && match.liveScore?.penaltyShootout) {
+                                    // Fallback: determine from penalty scores if penaltyWinner not set
+                                    const penalty = match.liveScore.penaltyShootout;
+                                    winner = penalty.score1 > penalty.score2 ? 1 : penalty.score2 > penalty.score1 ? 2 : 0;
+                                    console.log('Penalty fallback used:', match.team1, 'vs', match.team2, 'Penalty scores:', penalty.score1, ':', penalty.score2, 'Winner:', winner);
+                                } else {
+                                    // Regular match
+                                    winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                }
+                                return `
+                                    <div class="ko-team ${winner === 1 ? 'winner' : winner === 2 ? 'loser' : ''}">${match.team1}</div>
+                                    <div class="ko-match-score">
+                                        ${formatMatchResult(match)}
+                                    </div>
+                                    <div class="ko-team ${winner === 2 ? 'winner' : winner === 1 ? 'loser' : ''}">${match.team2}</div>
+                                `;
+                            })() : `
+                                <div class="ko-team">${match.team1}</div>
+                                <div class="ko-match-score">
+                                    ${match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                                </div>
+                                <div class="ko-team">${match.team2}</div>
+                            `}
                         </div>
                         ${matchTime ? `
                             <div class="ko-match-time">
@@ -2490,12 +2995,34 @@ async function loadKnockoutMatches() {
                             ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
                         </div>
                         <div class="ko-match-teams">
-                            <div class="ko-team">${match.team1}</div>
-                            <div class="ko-match-score">
-                                ${match.completed ? `${match.score1}:${match.score2}` : 
-                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
-                            </div>
-                            <div class="ko-team">${match.team2}</div>
+                            ${match.completed ? (() => {
+                                let winner = 0;
+                                if (match.isPenaltyShootout && match.penaltyWinner) {
+                                    winner = match.penaltyWinner;
+                                    console.log('Penalty shootout detected:', match.team1, 'vs', match.team2, 'Winner:', winner, 'penaltyWinner field:', match.penaltyWinner);
+                                } else if (match.isPenaltyShootout && match.liveScore?.penaltyShootout) {
+                                    // Fallback: determine from penalty scores if penaltyWinner not set
+                                    const penalty = match.liveScore.penaltyShootout;
+                                    winner = penalty.score1 > penalty.score2 ? 1 : penalty.score2 > penalty.score1 ? 2 : 0;
+                                    console.log('Penalty fallback used:', match.team1, 'vs', match.team2, 'Penalty scores:', penalty.score1, ':', penalty.score2, 'Winner:', winner);
+                                } else {
+                                    // Regular match
+                                    winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                }
+                                return `
+                                    <div class="ko-team ${winner === 1 ? 'winner' : winner === 2 ? 'loser' : ''}">${match.team1}</div>
+                                    <div class="ko-match-score">
+                                        ${formatMatchResult(match)}
+                                    </div>
+                                    <div class="ko-team ${winner === 2 ? 'winner' : winner === 1 ? 'loser' : ''}">${match.team2}</div>
+                                `;
+                            })() : `
+                                <div class="ko-team">${match.team1}</div>
+                                <div class="ko-match-score">
+                                    ${match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                                </div>
+                                <div class="ko-team">${match.team2}</div>
+                            `}
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
@@ -2537,12 +3064,34 @@ async function loadKnockoutMatches() {
                             ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
                         </div>
                         <div class="ko-match-teams">
-                            <div class="ko-team">${match.team1}</div>
-                            <div class="ko-match-score">
-                                ${match.completed ? `${match.score1}:${match.score2}` : 
-                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
-                            </div>
-                            <div class="ko-team">${match.team2}</div>
+                            ${match.completed ? (() => {
+                                let winner = 0;
+                                if (match.isPenaltyShootout && match.penaltyWinner) {
+                                    winner = match.penaltyWinner;
+                                    console.log('Penalty shootout detected:', match.team1, 'vs', match.team2, 'Winner:', winner, 'penaltyWinner field:', match.penaltyWinner);
+                                } else if (match.isPenaltyShootout && match.liveScore?.penaltyShootout) {
+                                    // Fallback: determine from penalty scores if penaltyWinner not set
+                                    const penalty = match.liveScore.penaltyShootout;
+                                    winner = penalty.score1 > penalty.score2 ? 1 : penalty.score2 > penalty.score1 ? 2 : 0;
+                                    console.log('Penalty fallback used:', match.team1, 'vs', match.team2, 'Penalty scores:', penalty.score1, ':', penalty.score2, 'Winner:', winner);
+                                } else {
+                                    // Regular match
+                                    winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                }
+                                return `
+                                    <div class="ko-team ${winner === 1 ? 'winner' : winner === 2 ? 'loser' : ''}">${match.team1}</div>
+                                    <div class="ko-match-score">
+                                        ${formatMatchResult(match)}
+                                    </div>
+                                    <div class="ko-team ${winner === 2 ? 'winner' : winner === 1 ? 'loser' : ''}">${match.team2}</div>
+                                `;
+                            })() : `
+                                <div class="ko-team">${match.team1}</div>
+                                <div class="ko-match-score">
+                                    ${match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                                </div>
+                                <div class="ko-team">${match.team2}</div>
+                            `}
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
@@ -2584,12 +3133,27 @@ async function loadKnockoutMatches() {
                             ${match.liveScore?.isLive ? '<span class="live-badge">LIVE</span>' : ''}
                         </div>
                         <div class="ko-match-teams finale-teams">
-                            <div class="ko-team finale-team">${match.team1}</div>
-                            <div class="ko-match-score finale-score">
-                                ${match.completed ? `${match.score1}:${match.score2}` : 
-                                  match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
-                            </div>
-                            <div class="ko-team finale-team">${match.team2}</div>
+                            ${match.completed ? (() => {
+                                let winner = 0;
+                                if (match.isPenaltyShootout) {
+                                    winner = match.penaltyWinner;
+                                } else {
+                                    winner = match.score1 > match.score2 ? 1 : match.score2 > match.score1 ? 2 : 0;
+                                }
+                                return `
+                                    <div class="ko-team finale-team ${winner === 1 ? 'winner' : ''}">${match.team1}</div>
+                                    <div class="ko-match-score finale-score">
+                                        ${formatMatchResult(match)}
+                                    </div>
+                                    <div class="ko-team finale-team ${winner === 2 ? 'winner' : ''}">${match.team2}</div>
+                                `;
+                            })() : `
+                                <div class="ko-team finale-team">${match.team1}</div>
+                                <div class="ko-match-score finale-score">
+                                    ${match.liveScore?.isLive ? `${match.liveScore.score1}:${match.liveScore.score2}` : 'vs'}
+                                </div>
+                                <div class="ko-team finale-team">${match.team2}</div>
+                            `}
                         </div>
                         <div class="ko-match-time">
                             <i class="fas fa-clock"></i>
