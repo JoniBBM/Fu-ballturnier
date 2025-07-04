@@ -358,9 +358,29 @@ function setupWebSocketEventListeners() {
     // Live Score Updates - update live display immediately
     socket.on('live-score-update', (data) => {
         console.log('Live score update received:', data);
-        if (currentActiveTab === 'live' && data && data.match) {
+        console.log('Data check:', {
+            hasData: !!data,
+            hasMatch: !!(data && data.match),
+            currentTab: currentActiveTab
+        });
+        
+        if (data && data.match) {
+            console.log('Calling updateLiveScoreDisplay');
             updateLiveScoreDisplay(data);
+            // If we're on the live tab and the elements don't exist yet, refresh the live content
+            if (currentActiveTab === 'live' && !document.getElementById('live-score1')) {
+                console.log('Refreshing live content because elements not found');
+                loadLiveMatch();
+            }
+            // Also update schedule tab if it's active (to show updated live scores)
+            if (currentActiveTab === 'schedule') {
+                console.log('Refreshing schedule tab');
+                loadSchedule();
+            }
+        } else {
+            console.log('Skipping updateLiveScoreDisplay - no data or match');
         }
+        
         // Also update tables if match is completed with this score update
         if (data && data.match && data.match.completed && currentActiveTab === 'tables') {
             setTimeout(() => loadTables(), 2000);
@@ -533,27 +553,43 @@ function setupWebSocketEventListeners() {
 // Helper function to update live score display without full reload
 function updateLiveScoreDisplay(data) {
     try {
-        if (!data || !data.match) return;
+        console.log('updateLiveScoreDisplay called with data:', data);
+        if (!data || !data.match) {
+            console.log('No data or match found');
+            return;
+        }
         
         // Update display elements
         const score1Element = document.getElementById('live-score1');
         const score2Element = document.getElementById('live-score2');
         
-        if (score1Element && data.match.score1 !== null && data.match.score1 !== undefined) {
-            score1Element.textContent = data.match.score1;
+        console.log('Score elements found:', {
+            score1Element: !!score1Element,
+            score2Element: !!score2Element,
+            score1: data.score1,
+            score2: data.score2
+        });
+        
+        if (score1Element && data.score1 !== null && data.score1 !== undefined) {
+            score1Element.textContent = data.score1;
+            console.log('Updated score1 element to:', data.score1);
         }
-        if (score2Element && data.match.score2 !== null && data.match.score2 !== undefined) {
-            score2Element.textContent = data.match.score2;
+        if (score2Element && data.score2 !== null && data.score2 !== undefined) {
+            score2Element.textContent = data.score2;
+            console.log('Updated score2 element to:', data.score2);
         }
         
         // Update local match data for timer calculations
-        if (currentLiveMatch && data.match) {
-            currentLiveMatch.score1 = data.match.score1;
-            currentLiveMatch.score2 = data.match.score2;
-            // Update other match properties if available
-            if (data.match.isPaused !== undefined) currentLiveMatch.isPaused = data.match.isPaused;
-            if (data.match.currentHalf !== undefined) currentLiveMatch.currentHalf = data.match.currentHalf;
-            if (data.match.halfTimeBreak !== undefined) currentLiveMatch.halfTimeBreak = data.match.halfTimeBreak;
+        if (currentLiveMatch) {
+            currentLiveMatch.score1 = data.score1;
+            currentLiveMatch.score2 = data.score2;
+            // Update other match properties if available from data.match
+            if (data.match) {
+                if (data.match.isPaused !== undefined) currentLiveMatch.isPaused = data.match.isPaused;
+                if (data.match.currentHalf !== undefined) currentLiveMatch.currentHalf = data.match.currentHalf;
+                if (data.match.halfTimeBreak !== undefined) currentLiveMatch.halfTimeBreak = data.match.halfTimeBreak;
+            }
+            console.log('Updated currentLiveMatch scores:', currentLiveMatch.score1, currentLiveMatch.score2);
         }
     } catch (error) {
         console.error('Error updating live score display:', error);

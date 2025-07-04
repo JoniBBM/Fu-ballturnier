@@ -14,7 +14,7 @@ const io = new Server(server, {
     },
     pingTimeout: 60000,
     pingInterval: 25000,
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     allowEIO3: true
 });
 const PORT = process.env.PORT || 5678;
@@ -26,6 +26,9 @@ app.use(express.json({
     type: 'application/json'
 }));
 app.use(express.static('public'));
+
+// Handle favicon.ico requests
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // JSON Error Handling Middleware
 app.use((error, req, res, next) => {
@@ -2865,19 +2868,21 @@ app.post('/api/admin/matches/schedule-all', async (req, res) => {
         // Sortiere KO-Spiele in der richtigen Reihenfolge:
         // 1. Gruppenphasenspiele
         // 2. Halbfinale
-        // 3. Finale
-        // 4. Platzierungsspiele (von unten nach oben: 7, 5, 3)
+        // 3. Platzierungsspiele (von unten nach oben: 7, 5, 3)
+        // 4. Finale (als letztes!)
         unscheduledMatches.sort((a, b) => {
             const getMatchPriority = (match) => {
                 if (match.phase === 'group') return 1;
-                if (match.phase === 'semifinal') return 2;
-                if (match.phase === 'final') return 3;
-                if (match.phase === 'quarterfinal') return 4;
+                if (match.phase === 'quarterfinal') return 2;
+                if (match.phase === 'semifinal') return 3;
                 
                 // Platzierungsspiele nach Position sortieren
-                if (match.group?.toLowerCase().includes('platz 7')) return 5;
-                if (match.group?.toLowerCase().includes('platz 5')) return 6;
-                if (match.group?.toLowerCase().includes('platz 3')) return 7;
+                if (match.group?.toLowerCase().includes('platz 7')) return 4;
+                if (match.group?.toLowerCase().includes('platz 5')) return 5;
+                if (match.group?.toLowerCase().includes('platz 3')) return 6;
+                
+                // Finale als absolut letztes Spiel
+                if (match.phase === 'final') return 7;
                 
                 return 8; // Andere Spiele zuletzt
             };
@@ -3102,79 +3107,6 @@ app.post('/api/admin/schedule', async (req, res) => {
     res.json({ success: true, match });
 });
 
-// Admin: Alle Spiele automatisch planen (intelligenter Algorithmus)
-// Admin: K.O.-Spiele intelligent planen
-app.post('/api/admin/schedule-knockout', async (req, res) => {
-    const { password, startTime, matchDuration, breakBetweenRounds } = req.body;
-    
-    if (password !== ADMIN_PASSWORD) {
-        return res.status(401).json({ error: 'Ungültiges Passwort' });
-    }
-    
-    if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
-        return res.status(400).json({ error: 'Ungültiges Zeitformat. Bitte HH:MM verwenden.' });
-    }
-    
-    const koMatches = matches.filter(m => m.phase !== 'group');
-    const schedulableMatches = koMatches.filter(m => !m.scheduled && !isPlaceholderMatch(m));
-    
-    if (schedulableMatches.length === 0) {
-        return res.status(400).json({ error: 'Keine K.O.-Spiele zum Planen verfügbar' });
-    }
-    
-    const [hours, minutes] = startTime.split(':').map(num => parseInt(num));
-    const today = new Date();
-    let currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0, 0);
-    
-    // Sortiere nach Phasen: quarterfinals -> semifinals -> placement (von unten nach oben) -> finals
-    const phaseOrder = { 'quarterfinal': 1, 'semifinal': 2, 'placement': 3, 'final': 5 };
-    schedulableMatches.sort((a, b) => {
-        const phaseComparison = phaseOrder[a.phase] - phaseOrder[b.phase];
-        if (phaseComparison !== 0) return phaseComparison;
-        
-        // Innerhalb der Platzierungsspiele: von unten nach oben (7., 5., 3. Platz)
-        if (a.phase === 'placement' && b.phase === 'placement') {
-            const getPlacementPriority = (matchId) => {
-                if (matchId.includes('seventh_place')) return 1; // 7. Platz zuerst
-                if (matchId.includes('fifth_place')) return 2;   // 5. Platz als zweites
-                if (matchId.includes('third_place')) return 3;   // 3. Platz als letztes
-                return 4; // Andere Platzierungsspiele
-            };
-            return getPlacementPriority(a.id) - getPlacementPriority(b.id);
-        }
-        
-        return 0;
-    });
-    
-    let scheduledCount = 0;
-    let currentPhase = null;
-    
-    schedulableMatches.forEach(match => {
-        // Neue Phase = längere Pause
-        if (currentPhase && currentPhase !== match.phase) {
-            currentTime = new Date(currentTime.getTime() + (breakBetweenRounds || 30) * 60000);
-        }
-        
-        match.scheduled = {
-            datetime: new Date(currentTime)
-        };
-        
-        currentTime = new Date(currentTime.getTime() + parseInt(matchDuration) * 60000);
-        currentPhase = match.phase;
-        scheduledCount++;
-    });
-    
-    if (currentTournament) {
-        currentTournament.lastUpdated = new Date().toISOString();
-    }
-    
-    await autoSave();
-    res.json({ 
-        success: true, 
-        scheduledMatches: scheduledCount,
-        message: `${scheduledCount} K.O.-Spiele geplant`
-    });
-});
 
 // Admin: KO-Spiele komplett zurücksetzen (löschen)
 app.post('/api/admin/reset-ko-schedules', async (req, res) => {
