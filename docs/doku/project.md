@@ -1,6 +1,6 @@
 ---
-id: jonibbm-fu-ballturnier
-name: Jonibbm Fu Ballturnier
+id: fu-ballturnier
+name: Fu-ballturnier
 summary: TODO Ein Satz, was diese App macht.
 tech: []
 # repo: https://github.com/org/repo
