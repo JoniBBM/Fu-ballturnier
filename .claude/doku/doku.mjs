@@ -969,6 +969,8 @@ export function embedAssets(project, root) {
   return out;
 }
 const PRETOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash';
+export const QUESTIONS_FILE = '.claude/doku/questions.json';
+export const ANSWERS_FILE = '.claude/doku/answers.json';
 const RULE_MODES = new Set(['freeze', 'approval', 'instruction']);
 const activeRule = (r) => r && RULE_MODES.has(r.mode) && (!r.until || new Date(r.until) > new Date()) && r.active !== false;
 
@@ -1297,6 +1299,10 @@ Prüfen & Bauen:
   doku protected [datei…]        Ist eine Datei geschützt, gibt es eine Genehmigung?
   doku rules                     Regeln für die KI (im Portal festgelegt)
 
+Rückfragen (im Portal zu Meldungen gestellt):
+  doku ask                       Offene Rückfragen anzeigen
+  doku ask reply <id> "Antwort" [--verdict ok|doku|problem|unklar] [--resolve]
+
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
 function out(s) { process.stdout.write(s.endsWith('\n') ? s : s + '\n'); }
@@ -1391,7 +1397,7 @@ async function main(argv) {
       const url = (flags.url || process.env.DOKU_URL || '').replace(/\/+$/, '');
       const token = flags.token || process.env.DOKU_TOKEN;
       if (!url || !token) { console.error('doku push braucht --url und --token (oder DOKU_URL / DOKU_TOKEN).'); return 1; }
-      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(flags['no-assets'] ? p : { ...p, assetData: embedAssets(p, root) }) });
+      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...p, ...(flags['no-assets'] ? {} : { assetData: embedAssets(p, root) }), answers: readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [] }) });
       const txt = await res.text();
       if (!res.ok) { console.error(`Push fehlgeschlagen (${res.status}): ${txt}`); return 1; }
       out(`Gesendet: ${p.id} → ${url} (${p.stats.components} Komponenten, ${p.stats.errors} Fehler)`);
@@ -1461,6 +1467,10 @@ async function main(argv) {
       return 0;
     }
     case 'screen': return captureScreen(needRoot(), docDir, pos[0], flags);
+    case 'ask': {
+      const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
+      return askCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
+    }
     case 'hook': return hook(pos[0], flags);
     default: console.error(`Unbekannter Befehl "${cmd}".\n\n${HELP}`); return 1;
   }
@@ -1474,6 +1484,58 @@ export function formatRules(rules, cli = 'doku') {
   }
   if (rules.some((r) => r.mode === 'approval')) L.push(`Antrag: node ${cli} change new "<Titel>" --affects <bereich>, dann change submit.`);
   return L.join('\n');
+}
+
+// ───────────────────────── Rückfragen aus dem Portal ─────────────────────────
+
+const readJsonFile = (f, fallback) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fallback; } };
+/** Offene Rückfragen: vom Server ins Repository gelegt (questions.json) und – mit Portal-Token – live. Schon lokal beantwortete fallen weg. */
+export async function readQuestions(root, project, { live = true } = {}) {
+  const map = new Map();
+  for (const q of readJsonFile(path.join(root, QUESTIONS_FILE), {}).questions || []) map.set(q.id, q);
+  const cfg = portalConfig(root);
+  if (live && cfg.url && cfg.token) {
+    try {
+      const j = await portal(root, 'GET', `/api/threads?project=${encodeURIComponent(project.id)}&waiting=1`);
+      map.clear();
+      for (const t of j.threads || []) {
+        const lastHuman = [...t.messages].reverse().find((m) => m.role === 'human');
+        const lastAi = [...t.messages].reverse().find((m) => m.role === 'ai');
+        map.set(t.id, { id: t.id, subject: t.subject, question: lastHuman ? lastHuman.text : '', by: lastHuman ? lastHuman.by : '', askedAt: lastHuman ? lastHuman.at : 0, previous: lastAi ? lastAi.text.slice(0, 600) : '' });
+      }
+    } catch { /* offline: Datei gilt */ }
+  }
+  const answered = readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [];
+  return [...map.values()].filter((q) => !answered.some((a) => a.id === q.id && a.at >= (q.askedAt || 0)));
+}
+function formatQuestion(q) {
+  const s = q.subject || {};
+  return [`### ${q.id} – ${s.title || s.kind || 'Rückfrage'}`, s.text ? `Meldung: ${s.text}` : '', s.refs && s.refs.length ? `Betrifft: ${s.refs.join(', ')}` : '',
+    q.previous ? `Bisherige KI-Antwort: ${q.previous}` : '', `Frage${q.by ? ' von ' + q.by : ''}: ${q.question}`].filter(Boolean).join('\n');
+}
+async function askCommand(root, project, pos, flags, cli) {
+  if (pos[0] !== 'reply') {
+    const qs = await readQuestions(root, project);
+    if (!qs.length) { out('Keine offenen Rückfragen.'); return 0; }
+    out([`${qs.length} offene Rückfrage(n) aus dem Portal. Prüfe Code und Doku, antworte knapp (für Nicht-Programmierer) und korrigiere die Doku, falls sie falsch ist:`, '', ...qs.map(formatQuestion).flatMap((x) => [x, '']),
+      `Antworten: node ${cli} ask reply <id> "Antwort" [--verdict ok|doku|problem|unklar] [--resolve]`].join('\n'));
+    return 0;
+  }
+  const id = pos[1]; const text = pos.slice(2).join(' ').trim() || (typeof flags.text === 'string' ? flags.text : '');
+  if (!id || !text) { console.error('doku ask reply <id> "Antwort" [--verdict ok|doku|problem|unklar] [--resolve]'); return 1; }
+  const verdict = ['ok', 'doku', 'problem', 'unklar'].includes(flags.verdict) ? flags.verdict : undefined;
+  const cfg = portalConfig(root);
+  if (cfg.url && cfg.token) {
+    try { await portal(root, 'POST', `/api/threads/${encodeURIComponent(id)}/reply`, { text, verdict, resolve: Boolean(flags.resolve) }); out(`Antwort auf ${id} im Portal gespeichert.`); return 0; }
+    catch (e) { console.error(`${e.message} – speichere die Antwort im Repository.`); }
+  }
+  const f = path.join(root, ANSWERS_FILE);
+  const data = readJsonFile(f, { answers: [] });
+  data.answers = (data.answers || []).concat({ id, aid: 'a' + crypto.createHash('sha256').update(id + '\n' + text).digest('hex').slice(0, 16), text: text.slice(0, 4000), verdict, resolve: Boolean(flags.resolve) || undefined, at: Date.now() }).slice(-200);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(data, null, 1) + '\n');
+  out(`Antwort auf ${id} in ${ANSWERS_FILE} gespeichert. Mit committen – das Portal übernimmt sie, sobald der Commit im Hauptzweig ist.`);
+  return 0;
 }
 
 // ───────────────────────── Änderungsanträge ─────────────────────────
@@ -1570,6 +1632,7 @@ async function readStdin() {
 // Shell-Befehle, die Dateien schreiben, verschieben oder löschen können
 const BASH_WRITE = /(^|[^<>&])>{1,2}(?!&)|\btee\b|\bsed\b[^|;&]*\s-[a-zA-Z]*i|\bperl\b[^|;&]*\s-[a-zA-Z]*i|\b(mv|rm|cp|truncate|dd|install|ln|chmod|patch|unlink)\b|\bgit\s+(checkout|restore|rm|mv|apply|reset|stash)\b|\b(python3?|node|ruby|php)\b/;
 async function pretoolBash(root, flags, cmd, cwd) {
+  cmd = cmd.replace(/\bnode\s+("?)[^\s"]*doku\.mjs\1[^;&|\n]*/g, ' ');   // eigene CLI-Aufrufe (check, ask reply …) sind erlaubt
   if (!BASH_WRITE.test(cmd)) return 0;
   let p;
   try { p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false }); } catch { return 0; }
@@ -1613,6 +1676,8 @@ async function hook(kind, flags) {
       const p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false });
       const rules = await readRules(root, p);
       if (rules.length) out(formatRules(rules, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')));
+      const qs = await readQuestions(root, p);
+      if (qs.length) out(`doku: ${qs.length} Rückfrage(n) aus dem Portal warten auf Antwort (${qs.slice(0, 3).map((q) => `„${String((q.subject && q.subject.title) || q.question).slice(0, 60)}“`).join(', ')}${qs.length > 3 ? ' …' : ''}). Nebenbei beantworten: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} ask`);
       if (!p.components.length) {
         const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
         out([

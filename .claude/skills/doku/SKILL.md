@@ -41,6 +41,11 @@ Steht in project.md `protected: [...]`, darfst du dort erst nach Genehmigung dur
 4. Fertig: `node .claude/doku/doku.mjs change done <nr>`
 Nie den Status selbst auf approved setzen – die Genehmigung zählt nur im Portal.
 
+## Sicherheits-Auffälligkeiten und Rückfragen
+
+Die Auffälligkeiten im Portal werden **aus der Doku abgeleitet**, nicht aus dem Code. Bevor du sie als Sicherheitslücke bezeichnest: im Code/der Konfiguration prüfen. Meist fehlt nur eine Angabe (`[local]`, `[tls]`, `zone`, `security:`) – dann die Doku korrigieren und das so sagen. Nur was im Code wirklich so ist, ist ein Risiko.
+Fragen aus dem Portal zeigt der Start-Hook in einer Zeile. Details: `node .claude/doku/doku.mjs ask`; antworten: `node .claude/doku/doku.mjs ask reply <id> "kurze Antwort für Nicht-Programmierer" --verdict ok|doku|problem|unklar` (ok = kein Problem, doku = Doku war falsch und ist korrigiert, problem = echtes Problem). Antwort mitcommitten.
+
 ## Regeln vom Nutzer (verbindlich)
 
 Der Nutzer legt im Portal Regeln fest; sie stehen in `.claude/doku/rules.json` und werden dir beim Sitzungsstart angezeigt. Nachsehen: `node .claude/doku/doku.mjs rules`.
@@ -79,7 +84,7 @@ security:
 Herzstück des Checkouts: legt Bestellungen an und stößt die Zahlung an. Ablauf: [[checkout]].
 ```
 
-`uses`: `ziel: protokoll beschreibung [sicherheit]`. Protokolle: http grpc graphql ws sql cache file event queue call exec smtp. Sicherheit: `tls`, `plain`, `mtls`, `auth=<wie>`, `auth=none`, `port=<n>`, sonstige Hinweise frei.
+`uses`: `ziel: protokoll beschreibung [sicherheit]`. Protokolle: http grpc graphql ws sql cache file event queue call exec smtp. Sicherheit: `tls`, `plain`, `mtls`, `auth=<wie>`, `auth=none`, `port=<n>`, `local` (bleibt auf derselben Maschine: localhost, Unix-Socket – z. B. Tunnel-Connector → App), `tunnel`/`vpn` (verschlüsselt durch Tunnel), sonstige Hinweise frei. Beschreibe jede Strecke so, wie sie wirklich läuft: Cloudflare → Server ist `[tls, tunnel]`, cloudflared → App auf localhost ist `[local, port=3000]` – sonst meldet das Portal falsche Risiken.
 `security`-Arten: auth access transport storage network secrets input ratelimit headers logging backup privacy other.
 Optional: `name`, `id`, `summary`, `status` (active planned experimental deprecated), `tags`, `owner`, `links`. Der erste Satz des Texts wird zur Kurzbeschreibung.
 
