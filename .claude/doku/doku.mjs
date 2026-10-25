@@ -20,6 +20,7 @@ const PROJECT_FIELDS = new Set(['id', 'name', 'summary', 'repo', 'repoPath', 'br
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
 const CHANGE_STATUSES = new Set(['draft', 'proposed', 'approved', 'rejected', 'implemented', 'cancelled']);
 const GUIDE_FIELDS = new Set(['id', 'title', 'order', 'audience', 'tags', 'summary']);
+const SCREEN_FIELDS = new Set(['id', 'title', 'image', 'order', 'url', 'components', 'hotspots', 'tags', 'summary']);
 const STATUSES = new Set(['active', 'planned', 'experimental', 'deprecated', 'removed']);
 const DECISION_STATUSES = new Set(['proposed', 'accepted', 'rejected', 'deprecated', 'superseded']);
 const ID_RE = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -341,8 +342,10 @@ export function loadProject(root, opts = {}) {
     status: asStr(pdata.status) || 'active', owner: asStr(pdata.owner), layers: layerKeys, layerLabels, zones: zoneKeys, zoneLabels, zone: asStr(pdata.zone).toLowerCase(),
     security: asItems(pdata.security).map(parseMeasure), protected: asList(pdata.protected), tags: asList(pdata.tags),
     links: asItems(pdata.links), docDir, file: pfile, git: gitInfo ? { commit: gitInfo.commit, date: gitInfo.date, dirty: gitInfo.dirty } : null,
-    components: [], flows: [], decisions: [], changes: [], guides: [], issues,
+    components: [], flows: [], decisions: [], changes: [], guides: [], screens: [], issues,
   };
+  project.assets = listAssets(root, docDir);
+  try { project.rules = (JSON.parse(fs.readFileSync(path.join(root, RULES_FILE), 'utf8')).rules || []).filter(activeRule); } catch { project.rules = []; }
   const ignoreExtra = asList(pdata.ignore);
 
   // Komponenten
@@ -436,9 +439,24 @@ export function loadProject(root, opts = {}) {
       summary: asStr(d.data.summary) || firstSentence(d.body.replace(/^#\s+.+$/m, '')), body: d.body, file: d.file });
   }
   project.guides.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'de'));
+  // Bildschirme (Oberfläche zum Durchklicken)
+  for (const rel of docFiles.filter((f) => f.startsWith('screens/'))) {
+    const d = read(rel); checkFields(d, SCREEN_FIELDS);
+    const sid = slug(asStr(d.data.id) || path.basename(rel, '.md').replace(/^\d+-/, ''));
+    claim('Bildschirm', sid, d.file);
+    const hotspots = [];
+    for (const h of asItems(d.data.hotspots)) {
+      const hs = parseHotspot(h);
+      if (hs) hotspots.push(hs); else issue('error', d.file, `hotspots: "${h}" – erwartet "x,y,b,h: ziel, screen:x, flow:y \"Erklärung\"" (Werte in Prozent)`, 0, 'bad-hotspot');
+    }
+    project.screens.push({ id: sid, title: asStr(d.data.title) || (d.body.match(/^#\s+(.+)$/m)?.[1] ?? titleCase(sid)), image: resolveDocPath(docDir, rel, asStr(d.data.image)),
+      order: Number(asStr(d.data.order)) || 100, url: asStr(d.data.url), components: asList(d.data.components), tags: asList(d.data.tags), hotspots,
+      summary: asStr(d.data.summary) || firstSentence(d.body.replace(/^#\s+.+$/m, '')), body: d.body, file: d.file });
+  }
+  project.screens.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'de'));
   project.changes.sort((a, b) => b.id.localeCompare(a.id));
   for (const rel of docFiles) {
-    if (rel === 'project.md' || rel === 'README.md' || /^(components|flows|decisions|changes|guides)\//.test(rel)) continue;
+    if (rel === 'project.md' || rel === 'README.md' || /^(components|flows|decisions|changes|guides|screens)\//.test(rel)) continue;
     issue('warn', `${docDir}/${rel}`, 'Datei liegt außerhalb von components/, flows/, decisions/ und wird ignoriert', 0, 'stray');
   }
 
@@ -483,6 +501,17 @@ export function loadProject(root, opts = {}) {
   for (const f of project.flows) anyIds.set(f.id.toLowerCase(), f);
   for (const d of project.decisions) anyIds.set(d.id.toLowerCase(), d);
   for (const g of project.guides) anyIds.set(g.id.toLowerCase(), g);
+  const screenIds = new Map(project.screens.map((x) => [x.id, x]));
+  const flowIds = new Map(project.flows.map((x) => [x.id.toLowerCase(), x]));
+  for (const sc of project.screens) {
+    if (!sc.image) issue('warn', sc.file, 'image: fehlt (Bildschirmfoto in assets/screens/ ablegen)', 0, 'missing-image');
+    else if (!project.assets.some((a) => a.path === sc.image)) issue('warn', sc.file, `image: "${sc.image}" nicht gefunden`, 0, 'missing-image');
+    for (const c of sc.components) if (!compIds.has(c.toLowerCase())) issue('error', sc.file, `components: "${c}" ist keine Komponente${suggest(c, compIds)}`, 0, 'unknown-ref');
+    for (const h of sc.hotspots) for (const r of h.refs) {
+      const ok = r.kind === 'screen' ? screenIds.has(r.id) : r.kind === 'flow' ? flowIds.has(r.id.toLowerCase()) : compIds.has(r.id.toLowerCase());
+      if (!ok) issue('error', sc.file, `hotspots: Ziel "${r.kind === 'c' ? '' : r.kind + ':'}${r.id}" unbekannt${suggest(r.id, r.kind === 'screen' ? screenIds : r.kind === 'flow' ? flowIds : compIds)}`, 0, 'unknown-ref');
+    }
+  }
   for (const ch of project.changes) anyIds.set(ch.id.toLowerCase(), ch);
   for (const ch of project.changes) for (const a of ch.affects) {
     if (/^(layer|zone):/.test(a) || /[/*]/.test(a)) continue;
@@ -492,6 +521,17 @@ export function loadProject(root, opts = {}) {
   for (const pr of project.protected) {
     if (/^(layer|zone):/.test(pr) || /[/*]/.test(pr)) continue;
     if (!compIds.has(pr.toLowerCase())) issue('error', pfile || docDir, `protected: "${pr}" ist keine Komponente${suggest(pr, compIds)}`, 0, 'unknown-protected');
+  }
+  // Bilder im Text müssen im Doku-Ordner liegen
+  const assetSet = new Set(project.assets.map((a) => a.path));
+  for (const d of [project, ...project.components, ...project.flows, ...project.decisions, ...project.changes, ...project.guides]) {
+    for (const m of String(d.body || '').matchAll(/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) {
+      let src = m[1];
+      if (/^(https?:|data:|\/\/)/i.test(src)) continue;
+      src = src.replace(/^\/+/, ''); while (/^\.\.?\//.test(src)) src = src.replace(/^\.\.?\//, '');
+      const rel = src.startsWith(docDir + '/') ? src : `${docDir}/${src}`;
+      if (!assetSet.has(rel)) issue('warn', d.file || pfile || docDir, `Bild "${m[1]}" nicht gefunden (Bilder gehören nach ${docDir}/assets/)`, 0, 'missing-image');
+    }
   }
   for (const d of project.decisions) {
     d.affects = d.affects.map((a) => {
@@ -869,12 +909,109 @@ async function approvedInPortal(root, project) {
   return project.changes.filter((c) => ok.get(c.id) === c.hash);
 }
 /** Prüft Dateien gegen geschützte Bereiche. → [{file, areas, covered}] */
-async function checkProtected(root, project, files) {
-  const hits = files.map((f) => ({ file: f, areas: protectedBy(project, f) })).filter((x) => x.areas.length);
+// ── Regeln für die KI: im Portal von Admins festgelegt, vom Server als .claude/doku/rules.json ins Repository gelegt ──
+export const RULES_FILE = '.claude/doku/rules.json';
+
+// ───────────────────────── Bilder in der Doku ─────────────────────────
+/** Pfad aus einer Doku-Datei (relativ zu ihr oder zum Doku-Ordner) → Pfad relativ zum Projekt */
+export function resolveDocPath(docDir, fileRel, src) {
+  let s = String(src || '').trim();
+  if (!s || /^(https?:|data:|\/\/)/i.test(s)) return s;
+  s = s.replace(/^\/+/, '');
+  if (s.startsWith(docDir + '/')) return path.posix.normalize(s);
+  if (/^\.\.?\//.test(s)) {   // relativ zur Datei (wie auf GitHub)
+    const viaFile = path.posix.normalize(path.posix.join(docDir, path.posix.dirname(fileRel), s));
+    if (viaFile.startsWith(docDir + '/')) return viaFile;
+    while (/^\.\.?\//.test(s)) s = s.replace(/^\.\.?\//, '');
+  }
+  return path.posix.normalize(`${docDir}/${s}`);   // sonst relativ zum Doku-Ordner
+}
+/** "12,40,30,8: login-ui, flow:passkey-login, screen:start \"Erklärung\"" → { x, y, w, h, refs, text } */
+export function parseHotspot(raw) {
+  const m = String(raw).match(/^\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*:\s*(.*)$/s);
+  if (!m) return null;
+  const [x, y, w, h] = m.slice(1, 5).map(Number);
+  if ([x, y, w, h].some((n) => !Number.isFinite(n) || n < 0 || n > 100)) return null;
+  let rest = m[5].trim(); let text = '';
+  const q = rest.match(/"([^"]*)"\s*$/);
+  if (q) { text = q[1]; rest = rest.slice(0, q.index).trim(); }
+  const refs = rest.split(',').map((t) => t.trim()).filter(Boolean).map((t) => {
+    const k = t.match(/^(screen|flow|bildschirm|ablauf)\s*:\s*(.+)$/i);
+    return k ? { kind: /^(screen|bildschirm)$/i.test(k[1]) ? 'screen' : 'flow', id: k[2].trim() } : { kind: 'c', id: t };
+  });
+  return { x, y, w, h, refs, text };
+}
+export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+export const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
+export const ASSET_LIMITS = { file: 3 * 1024 * 1024, total: 15 * 1024 * 1024 };
+/** Alle Bilder im Doku-Ordner (Pfade relativ zum Projekt). */
+function listAssets(root, docDir) {
+  const out = [];
+  const walk = (dir, depth) => {
+    let es = []; try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of es.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.name.startsWith('.')) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory() && depth < 6) walk(p, depth + 1);
+      else if (e.isFile() && IMAGE_EXT.test(e.name) && out.length < 500) out.push({ path: path.relative(root, p).split(path.sep).join('/'), size: fs.statSync(p).size });
+    }
+  };
+  walk(path.join(root, docDir), 0);
+  return out;
+}
+/** Bilder als data:-URLs (für statische Seiten und doku push), mit Größengrenzen. */
+export function embedAssets(project, root) {
+  const out = {}; let total = 0;
+  for (const a of project.assets || []) {
+    if (a.size > ASSET_LIMITS.file || total + a.size > ASSET_LIMITS.total) continue;
+    try { out[a.path] = `data:${IMAGE_MIME[a.path.split('.').pop().toLowerCase()]};base64,${fs.readFileSync(path.join(root, a.path)).toString('base64')}`; total += a.size; } catch { /* weg */ }
+  }
+  return out;
+}
+const PRETOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash';
+const RULE_MODES = new Set(['freeze', 'approval', 'instruction']);
+const activeRule = (r) => r && RULE_MODES.has(r.mode) && (!r.until || new Date(r.until) > new Date()) && r.active !== false;
+
+/** Regeln aus dem Repository (vom Server gepflegt) und – falls eingerichtet – live aus dem Portal (kurz gecacht). */
+export async function readRules(root, project, { live = true } = {}) {
+  const map = new Map();
+  try { for (const r of JSON.parse(fs.readFileSync(path.join(root, RULES_FILE), 'utf8')).rules || []) map.set(r.id, r); } catch { /* keine Datei */ }
+  const cfg = portalConfig(root);
+  if (live && cfg.url && cfg.token) {
+    const cacheFile = statePath(root) ? statePath(root).replace(/doku-state\.json$/, 'doku-rules-cache.json') : null;
+    let cache = null;
+    try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { /* leer */ }
+    if (!cache || Date.now() - cache.at > 120_000) {
+      try {
+        const j = await portal(root, 'GET', `/api/rules?project=${encodeURIComponent(project.id)}`);
+        cache = { at: Date.now(), rules: j.rules || [] };
+        if (cacheFile) try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch { /* egal */ }
+      } catch { /* offline: Repository-Datei und alter Cache gelten */ }
+    }
+    for (const r of (cache && cache.rules) || []) map.set(r.id, r);
+  }
+  return [...map.values()].filter(activeRule);
+}
+export function ruleMatches(project, rule, file) { return (rule.area || []).some((a) => areaMatches(project, a, file)); }
+
+/** Prüft Dateien gegen geschützte Bereiche (project.md) und Portal-Regeln. → { hits: [{file, areas, covered, freeze, reasons}], error } */
+async function checkProtected(root, project, files, rules) {
+  rules ||= await readRules(root, project);
+  const locks = rules.filter((r) => r.mode === 'freeze' || r.mode === 'approval');
+  const hits = [];
+  for (const f of files) {
+    if (f.startsWith(project.docDir + '/') || f.startsWith('.claude/') || f === 'CLAUDE.md') continue;
+    const areas = [...protectedBy(project, f)];
+    const matched = locks.filter((r) => ruleMatches(project, r, f));
+    for (const r of matched) areas.push(...r.area);
+    if (!areas.length) continue;
+    const freeze = matched.filter((r) => r.mode === 'freeze');
+    hits.push({ file: f, areas: [...new Set(areas)], freeze: freeze.length > 0, reasons: matched.map((r) => r.text).filter(Boolean), rules: matched.map((r) => r.id) });
+  }
   if (!hits.length) return { hits: [], error: null };
   let approved = []; let error = null;
-  try { approved = await approvedInPortal(root, project); } catch (e) { error = e.message; }
-  for (const h of hits) h.covered = approved.filter((c) => c.affects.some((a) => areaMatches(project, a, h.file))).map((c) => c.id);
+  if (hits.some((h) => !h.freeze)) { try { approved = await approvedInPortal(root, project); } catch (e) { error = e.message; } }
+  for (const h of hits) h.covered = h.freeze ? [] : approved.filter((c) => c.affects.some((a) => areaMatches(project, a, h.file))).map((c) => c.id);
   return { hits, error };
 }
 
@@ -953,6 +1090,89 @@ export function buildSite(bundle, { out, single = false, title } = {}) {
   return out;
 }
 
+// ───────────────────────── Bildschirmfotos (doku screen) ─────────────────────────
+
+async function loadPlaywright(root) {
+  const { createRequire } = await import('node:module');
+  for (const base of [root, process.cwd()]) { try { return createRequire(path.join(base, 'noop.js'))('playwright'); } catch { /* weiter */ } }
+  try { return await import('playwright'); } catch { return null; }
+}
+const fmtNum = (n) => String(Math.round(n * 10) / 10);
+/** Frontmatter-Feld setzen oder Liste ersetzen (einfache Textbearbeitung, Rest bleibt unverändert). */
+function setFrontmatter(text, key, value) {
+  const m = text.match(/^---\n([\s\S]*?)\n---/);
+  const lines = m ? m[1].split('\n') : [];
+  const start = lines.findIndex((l) => l.startsWith(key + ':'));
+  let end = start + 1;
+  if (start >= 0) while (end < lines.length && /^\s+-|^\s*$/.test(lines[end]) && lines[end].trim() !== '') end++;
+  const repl = Array.isArray(value) ? [`${key}:`, ...value.map((v) => `  - ${v}`)] : [`${key}: ${value}`];
+  if (start >= 0) lines.splice(start, end - start, ...repl); else lines.push(...repl);
+  const fm = `---\n${lines.join('\n')}\n---`;
+  return m ? text.replace(/^---\n[\s\S]*?\n---/, () => fm) : `${fm}\n${text}`;
+}
+async function captureScreen(root, docDir, id, flags) {
+  if (!id || !flags.url) { console.error('doku screen <id> --url <adresse> [--hotspot "css => ziel | Erklärung"]…'); return 1; }
+  id = slug(id);
+  const pw = await loadPlaywright(root);
+  if (!pw) { console.error('doku screen braucht Playwright (npm i -D playwright && npx playwright install chromium). Ohne Playwright: Bildschirmfoto selbst nach ' + docDir + '/assets/screens/ legen und screens/' + id + '.md von Hand schreiben.'); return 1; }
+  const list = (v) => (v == null || v === true ? [] : [].concat(v));
+  const width = Number(flags.width) || 1280; const height = Number(flags.height) || 800; const full = Boolean(flags.full);
+  const ext = flags.jpg ? 'jpg' : 'png';
+  const browser = await pw.chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: Number(flags.scale) || 1 });
+    await page.goto(String(flags.url), { waitUntil: 'networkidle', timeout: 30_000 });
+    for (const sel of list(flags.click)) { await page.locator(String(sel)).first().click(); await page.waitForTimeout(400); }
+    if (flags.wait) await page.locator(String(flags.wait)).first().waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(Number(flags.delay) || 500);
+    const dims = await page.evaluate((f) => ({ w: f ? document.documentElement.scrollWidth : innerWidth, h: f ? document.documentElement.scrollHeight : innerHeight, sx: f ? scrollX : 0, sy: f ? scrollY : 0 }), full);
+    const pct = (r) => {   // Prozent der Bildgröße, auf das Bild beschnitten
+      const cl = (n) => Math.min(100, Math.max(0, n));
+      const x1 = cl(r.x / dims.w * 100); const y1 = cl(r.y / dims.h * 100);
+      return [x1, y1, cl((r.x + r.width) / dims.w * 100) - x1, cl((r.y + r.height) / dims.h * 100) - y1];
+    };
+    const hotspots = [];
+    for (const spec of list(flags.hotspot)) {
+      const [sel, rest = ''] = String(spec).split(/\s*=>\s*/);
+      const [refs = '', text = ''] = rest.split(/\s*\|\s*/);
+      const box = await page.locator(sel).first().boundingBox().catch(() => null);
+      if (!box) { console.error(`Hotspot "${sel}" nicht gefunden – übersprungen.`); continue; }
+      hotspots.push({ box: pct({ x: box.x + dims.sx, y: box.y + dims.sy, width: box.width, height: box.height }), refs: refs.trim(), text: text.trim() });
+    }
+    const imgRel = `${docDir}/assets/screens/${id}.${ext}`;
+    fs.mkdirSync(path.join(root, path.dirname(imgRel)), { recursive: true });
+    await page.screenshot({ path: path.join(root, imgRel), fullPage: full, type: ext === 'jpg' ? 'jpeg' : 'png', ...(ext === 'jpg' ? { quality: 82 } : {}) });
+    const mdFile = path.join(root, docDir, 'screens', `${id}.md`);
+    const exists = fs.existsSync(mdFile);
+    if (!hotspots.length && (!exists || flags.auto)) {
+      const found = await page.evaluate(() => {
+        const out = []; const seen = new Set();
+        const kind = (el) => (el.tagName === 'A' ? 'Link' : /^(INPUT|TEXTAREA)$/.test(el.tagName) ? 'Eingabefeld' : el.tagName === 'SELECT' ? 'Auswahl' : 'Knopf');
+        for (const el of document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], summary')) {
+          const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
+          if (r.width < 4 || r.height < 4 || st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) === 0) continue;
+          if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
+          const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || el.name || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+          const key = `${Math.round(r.x)}:${Math.round(r.y)}`; if (seen.has(key)) continue; seen.add(key);
+          out.push({ x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height, text: `${kind(el)}${label ? ` „${label}“` : ''}` });
+        }
+        return out.slice(0, 40);
+      });
+      for (const f of found) hotspots.push({ box: pct({ ...f, x: f.x - (full ? 0 : dims.sx), y: f.y - (full ? 0 : dims.sy) }), refs: '', text: f.text });
+    }
+    const lines = hotspots.map((h) => `${h.box.map(fmtNum).join(',')}:${h.refs ? ' ' + h.refs : ''} "${h.text.replace(/"/g, "'")}"`);
+    let text = exists ? fs.readFileSync(mdFile, 'utf8') : `---\ntitle: ${String(flags.title || titleCase(id)).replace(/[\n:#]/g, ' ')}\nurl: ${(() => { const u = new URL(String(flags.url)); return u.pathname + u.hash; })()}\ncomponents: []\n---\nWas man auf diesem Bildschirm sieht und tun kann.\n`;
+    text = setFrontmatter(text, 'image', `assets/screens/${id}.${ext}`);
+    if (flags.title && exists) text = setFrontmatter(text, 'title', String(flags.title).replace(/[\n:#]/g, ' '));
+    if (lines.length) text = setFrontmatter(text, 'hotspots', lines);
+    fs.mkdirSync(path.dirname(mdFile), { recursive: true });
+    fs.writeFileSync(mdFile, text);
+    out(`Bildschirm ${id}: ${path.relative(root, mdFile)} + ${imgRel}${lines.length ? `, ${lines.length} Hotspots` : ' (Hotspots unverändert)'}.`);
+    if (lines.length && hotspots.some((h) => !h.refs)) out('Hotspots ohne Ziel: Baustein-ID, screen:<id> (führt zu Bildschirm) oder flow:<id> vor die Erklärung schreiben, Unwichtiges löschen.');
+    return 0;
+  } finally { await browser.close(); }
+}
+
 // ───────────────────────── Textausgaben (für Claude kompakt) ─────────────────────────
 
 const secStr = (x) => (x ? ` [${[x.tls === true && 'tls', x.tls === false && 'plain', x.auth && 'auth=' + x.auth, x.port && 'port=' + x.port, ...x.notes].filter(Boolean).join(', ')}]` : '');
@@ -981,6 +1201,7 @@ export function formatSummary(p, { brief = false } = {}) {
   }
   if (p.flows.length) L.push(`Flows: ${p.flows.map((f) => `${f.id} (${f.steps.length})`).join(', ')}`);
   if (p.decisions.length) L.push(`Entscheidungen: ${p.decisions.map((d) => `${d.id} [${d.status}]`).join(', ')}`);
+  if (p.screens && p.screens.length) L.push(`Bildschirme: ${p.screens.map((x) => `${x.id} (${x.hotspots.length})`).join(', ')}`);
   L.push(`Doku: ${p.docDir}/  Prüfen: doku check`);
   return L.join('\n');
 }
@@ -1056,13 +1277,15 @@ Lesen (kompakt, für Claude):
 Schreiben:
   doku new component <id> [--type t] [--layer l] [--path p] [--uses "ziel: proto text"]…
   doku new flow <id>  |  doku new decision "<titel>"  |  doku new guide "<titel>"
+  doku screen <id> --url <adresse> [--title T] [--click css]… [--hotspot "css => ziel, screen:x | Erklärung"]…
+                                  Bildschirmfoto + klickbare Bereiche (braucht Playwright; ohne --hotspot: automatisch erkennen)
 
 Prüfen & Bauen:
   doku check [--changed] [--strict] [--with ../anderes-projekt]…  Validieren (Exit 1 bei Fehlern)
   doku build [--out datei.json] [--no-code]  Projektmodell als JSON (inkl. Code-Analyse)
   doku push [--url U] [--token T]   An Portal senden (oder DOKU_URL / DOKU_TOKEN)
   doku site [roots…] --out dir | --single datei.html   Statische Seite (nur im dokusystem-Repo)
-  doku init [ziel] [--no-ci]        doku in ein Projekt installieren (nur im dokusystem-Repo)
+  doku init [ziel] [--no-ci] [--id x] [--name "X"]  doku in ein Projekt installieren (nur im dokusystem-Repo)
   doku hook start|stop|pretool       Claude-Code-Hooks
 
 Änderungsanträge (für geschützte Bereiche, project.md: protected: [...]):
@@ -1072,6 +1295,7 @@ Prüfen & Bauen:
   doku change done <id>          Als umgesetzt markieren (Changelog)
   doku change list | verify [--base <ref>]   Übersicht | CI-Prüfung
   doku protected [datei…]        Ist eine Datei geschützt, gibt es eine Genehmigung?
+  doku rules                     Regeln für die KI (im Portal festgelegt)
 
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
@@ -1101,6 +1325,9 @@ async function main(argv) {
         if (c) { out(formatComponent(p, c)); continue; }
         const f = p.flows.find((x) => x.id.toLowerCase() === lc);
         if (f) { out([`## Flow ${f.id} — ${f.name}`, `Doku: ${f.file}`, f.summary, ...f.steps.map((s) => `  ${s.kind === 'section' ? '== ' + s.label : s.kind === 'note' ? `note ${s.over.join(',')}: ${s.label}` : `${s.from} ${s.kind === 'call' ? '->' : s.kind === 'async' ? '->>' : '-->'} ${s.to}: ${s.label}`}`)].join('\n')); continue; }
+        const sc = p.screens.find((x) => x.id === lc);
+        if (sc) { out([`## Bildschirm ${sc.id} — ${sc.title}${sc.url ? ' (' + sc.url + ')' : ''}`, `Doku: ${sc.file}  Bild: ${sc.image || '–'}`, sc.components.length ? `Dahinter: ${sc.components.join(', ')}` : '',
+          ...sc.hotspots.map((h) => `  [${[h.x, h.y, h.w, h.h].join(',')}] ${h.refs.map((r) => (r.kind === 'c' ? '' : r.kind + ':') + r.id).join(', ') || '–'} ${h.text}`)].filter(Boolean).join('\n')); continue; }
         const d = p.decisions.find((x) => x.id.toLowerCase() === lc);
         if (d) { out([`## Entscheidung ${d.id} — ${d.title} [${d.status}${d.date ? ', ' + d.date : ''}]`, `Doku: ${d.file}`, d.affects.length ? `Betrifft: ${d.affects.join(', ')}` : '', '', d.body].filter((x) => x !== '').join('\n')); continue; }
         console.error(`"${q}" nicht gefunden.${suggest(q, new Map([...p.components, ...p.flows, ...p.decisions].map((x) => [x.id.toLowerCase(), x])))}`);
@@ -1164,7 +1391,7 @@ async function main(argv) {
       const url = (flags.url || process.env.DOKU_URL || '').replace(/\/+$/, '');
       const token = flags.token || process.env.DOKU_TOKEN;
       if (!url || !token) { console.error('doku push braucht --url und --token (oder DOKU_URL / DOKU_TOKEN).'); return 1; }
-      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(p) });
+      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(flags['no-assets'] ? p : { ...p, assetData: embedAssets(p, root) }) });
       const txt = await res.text();
       if (!res.ok) { console.error(`Push fehlgeschlagen (${res.status}): ${txt}`); return 1; }
       out(`Gesendet: ${p.id} → ${url} (${p.stats.components} Komponenten, ${p.stats.errors} Fehler)`);
@@ -1173,7 +1400,7 @@ async function main(argv) {
 
     case 'site': {
       const roots = pos.length ? pos.map((r) => path.resolve(r)) : [needRoot()];
-      const projects = roots.map((r) => loadProject(r, { docDir, code: !flags['no-code'] }));
+      const projects = roots.map((r) => { const p = loadProject(r, { docDir, code: !flags['no-code'] }); p.assetData = embedAssets(p, r); return p; });
       const bundle = makeBundle(projects, { title: flags.title || undefined });
       const target = flags.single || flags.out || 'doku-site';
       buildSite(bundle, { out: typeof target === 'string' ? target : 'doku-site', single: Boolean(flags.single), title: flags.title });
@@ -1210,10 +1437,18 @@ async function main(argv) {
 
     case 'init': return init(pos[0] ? path.resolve(pos[0]) : process.cwd(), flags);
     case 'change': case 'changes': return changeCmd(needRoot(), pos, flags, docDir);
+    case 'rules': {
+      const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
+      const rules = await readRules(root, p);
+      out(rules.length ? formatRules(rules, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')) : 'Keine Regeln für die KI (werden im Portal unter Änderungen festgelegt).');
+      return 0;
+    }
     case 'protected': {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false });
-      if (!p.protected.length) { out('Keine geschützten Bereiche (project.md: protected: [...]).'); return 0; }
-      out(`Geschützt: ${p.protected.join(', ')}`);
+      const rl = await readRules(root, p);
+      if (!p.protected.length && !rl.some((x) => x.mode !== 'instruction')) { out('Keine geschützten oder gesperrten Bereiche.'); return 0; }
+      if (p.protected.length) out(`Geschützt (project.md): ${p.protected.join(', ')}`);
+      for (const x of rl.filter((y) => y.mode !== 'instruction')) out(`${x.mode === 'freeze' ? 'Gesperrt' : 'Nur mit Antrag'} (Portal): ${x.area.join(', ')}${x.text ? ' – ' + x.text : ''}`);
       const files = pos.map((f) => path.relative(root, path.resolve(f)).split(path.sep).join('/'));
       if (files.length) {
         const r = await checkProtected(root, p, files);
@@ -1225,9 +1460,20 @@ async function main(argv) {
       }
       return 0;
     }
+    case 'screen': return captureScreen(needRoot(), docDir, pos[0], flags);
     case 'hook': return hook(pos[0], flags);
     default: console.error(`Unbekannter Befehl "${cmd}".\n\n${HELP}`); return 1;
   }
+}
+
+export function formatRules(rules, cli = 'doku') {
+  const L = ['doku: Regeln für die KI in diesem Projekt (im Portal von Menschen festgelegt – verbindlich):'];
+  const by = { freeze: 'GESPERRT – nicht ändern, auch nicht mit Antrag', approval: 'NUR MIT GENEHMIGTEM ANTRAG', instruction: 'VORGABE' };
+  for (const m of ['freeze', 'approval', 'instruction']) for (const r of rules.filter((x) => x.mode === m)) {
+    L.push(`- ${by[m]}${r.area && r.area.length ? ` [${r.area.join(', ')}]` : ''}${r.text ? ': ' + r.text : ''}${r.until ? ` (bis ${String(r.until).slice(0, 10)})` : ''}`);
+  }
+  if (rules.some((r) => r.mode === 'approval')) L.push(`Antrag: node ${cli} change new "<Titel>" --affects <bereich>, dann change submit.`);
+  return L.join('\n');
 }
 
 // ───────────────────────── Änderungsanträge ─────────────────────────
@@ -1321,6 +1567,34 @@ async function readStdin() {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 
+// Shell-Befehle, die Dateien schreiben, verschieben oder löschen können
+const BASH_WRITE = /(^|[^<>&])>{1,2}(?!&)|\btee\b|\bsed\b[^|;&]*\s-[a-zA-Z]*i|\bperl\b[^|;&]*\s-[a-zA-Z]*i|\b(mv|rm|cp|truncate|dd|install|ln|chmod|patch|unlink)\b|\bgit\s+(checkout|restore|rm|mv|apply|reset|stash)\b|\b(python3?|node|ruby|php)\b/;
+async function pretoolBash(root, flags, cmd, cwd) {
+  if (!BASH_WRITE.test(cmd)) return 0;
+  let p;
+  try { p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false }); } catch { return 0; }
+  const rules = await readRules(root, p);
+  if (!rules.length && !p.protected.length && !cmd.includes('rules.json')) return 0;
+  const base = cwd && fs.existsSync(cwd) ? cwd : root;
+  const rels = [...new Set((cmd.match(/[\w.\/@+-]*[\w][\w.\/@+-]*/g) || []).filter((t) => t.includes('/') || t.includes('.'))
+    .map((t) => path.relative(root, path.resolve(base, t)).split(path.sep).join('/')).filter((r) => r && !r.startsWith('..')))];
+  if (rels.some((r) => r === RULES_FILE || r === 'rules.json' && base === path.join(root, '.claude/doku'))) {
+    console.error('doku: Die Regeln für die KI werden im Portal von Menschen verwaltet. Diese Datei darfst du auch per Shell nicht ändern.'); return 2;
+  }
+  if (rules.length && rels.some((r) => r === '.claude/settings.json' || r === '.claude/doku/doku.mjs')) {
+    console.error('doku: .claude/settings.json und .claude/doku/doku.mjs setzen die Regeln für die KI durch und dürfen nicht verändert werden. Bitte den Nutzer, das selbst zu tun.'); return 2;
+  }
+  if (!p.protected.length && !rules.some((x) => x.mode !== 'instruction')) return 0;
+  const r = await checkProtected(root, p, rels, rules);
+  const bad = r.hits.filter((h) => !(h.covered && h.covered.length));
+  if (!bad.length) return 0;
+  const frozen = bad.filter((h) => h.freeze);
+  console.error(frozen.length
+    ? `doku: Dieser Befehl würde gesperrte Dateien verändern (${frozen.map((h) => h.file).join(', ')}). Gesperrt heißt: nicht ändern, auch nicht über die Shell. Sag dem Nutzer, was du vorhattest.`
+    : `doku: Dieser Befehl würde geschützte Dateien ohne genehmigten Antrag verändern (${bad.map((h) => h.file).join(', ')}). Erst einen Antrag stellen (change new/submit) und auf Genehmigung warten.`);
+  return 2;
+}
+
 async function hook(kind, flags) {
   const input = await readStdin();
   const root = findRoot(process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd(), flags.dir || DEFAULT_DOC_DIR);
@@ -1337,6 +1611,8 @@ async function hook(kind, flags) {
     // Leere Doku (nur Gerüst, z. B. frisch automatisch eingerichtet): Claude soll zuerst dokumentieren.
     try {
       const p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false });
+      const rules = await readRules(root, p);
+      if (rules.length) out(formatRules(rules, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')));
       if (!p.components.length) {
         const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
         out([
@@ -1350,18 +1626,30 @@ async function hook(kind, flags) {
   }
   if (kind === 'pretool') {
     const ti = input.tool_input || {};
+    if (input.tool_name === 'Bash') return pretoolBash(root, flags, String(ti.command || ''), input.cwd);
     const target = ti.file_path || ti.notebook_path || ti.path;
     if (!target) return 0;
     let p;
     try { p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false }); } catch { return 0; }
-    if (!p.protected.length) return 0;
     const rel = path.relative(root, path.resolve(root, target)).split(path.sep).join('/');
     if (rel.startsWith('..')) return 0;
-    const r = await checkProtected(root, p, [rel]);
+    const rules = await readRules(root, p);
+    if (rel === RULES_FILE) { console.error('doku: Die Regeln für die KI werden im Portal von Menschen verwaltet und vom Server ins Repository gelegt. Diese Datei darfst du nicht bearbeiten.'); return 2; }
+    if (rules.length && (rel === '.claude/settings.json' || rel === '.claude/doku/doku.mjs')) { console.error(`doku: ${rel} sorgt dafür, dass die Regeln für die KI eingehalten werden, und darf nicht bearbeitet werden. Bitte den Nutzer, das selbst zu tun.`); return 2; }
+    if (!p.protected.length && !rules.some((x) => x.mode !== 'instruction')) return 0;
+    const r = await checkProtected(root, p, [rel], rules);
     const h = r.hits[0];
     if (!h || (h.covered && h.covered.length)) return 0;
     const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
-    console.error([
+    if (h.freeze) {
+      console.error([
+        `doku: ${rel} ist gesperrt (${h.areas.join(', ')}). Diese Stelle darf die KI nicht ändern – auch nicht mit Antrag.`,
+        ...h.reasons.map((x) => `Begründung: ${x}`),
+        'Ändere die Datei nicht und suche keinen Umweg. Sag dem Nutzer, was du hier ändern wolltest und warum; nur ein Admin kann die Sperre im Portal aufheben.',
+      ].join('\n'));
+      return 2;
+    }
+    console.error([...h.reasons.map((x) => `Regel: ${x}`),
       `doku: ${rel} liegt im geschützten Bereich (${h.areas.join(', ')}). Änderungen hier brauchen einen genehmigten Antrag.`,
       r.error ? `Portal nicht erreichbar: ${r.error}` : 'Es gibt keinen genehmigten Antrag, der diese Datei abdeckt.',
       `1. node ${cli} change new "<Titel>" --affects ${h.areas[0]}  und Warum/Was/Risiko ausfüllen`,
@@ -1386,8 +1674,9 @@ async function hook(kind, flags) {
   const stale = r.stale.map((s) => ({ ...s, files: s.files.filter((f) => !ack.has(`stale:${s.comp.id}:${f}`)) })).filter((s) => s.files.length);
   const uncovered = r.uncovered.filter((f) => !ack.has(`uncovered:${f}`));
   let unapproved = [];
-  if (p.protected.length) {
-    const pr = await checkProtected(root, p, r.changes.map((c) => c.file));
+  const stopRules = await readRules(root, p);
+  if (p.protected.length || stopRules.some((x) => x.mode !== 'instruction')) {
+    const pr = await checkProtected(root, p, r.changes.map((c) => c.file), stopRules);
     unapproved = pr.hits.filter((h) => !(h.covered && h.covered.length)).filter((h) => !ack.has(`prot:${h.file}`));
   }
   if (!errors.length && !stale.length && !uncovered.length && !unapproved.length) return 0;
@@ -1397,7 +1686,7 @@ async function hook(kind, flags) {
   if (errors.length) { L.push('Fehler:'); cap(errors.map((e) => `  ${e.file}: ${e.msg}`)).forEach((x) => L.push(x)); }
   if (stale.length) { L.push('Neue/gelöschte Dateien oder Manifeste, Doku unverändert:'); cap(stale.map((s) => `  ${s.comp.id} (${s.comp.file}): ${cap(s.files, 5).join(' ')}`)).forEach((x) => L.push(x)); }
   if (uncovered.length) { L.push('Keiner Komponente zugeordnet (path ergänzen oder neue Komponente):'); L.push('  ' + cap(uncovered, 10).join(' ')); }
-  if (unapproved.length) { L.push('Geschützte Dateien ohne genehmigten Antrag geändert (rückgängig machen oder Antrag stellen: change new/submit):'); L.push('  ' + cap(unapproved.map((h) => h.file), 10).join(' ')); }
+  if (unapproved.length) { L.push('Gesperrte oder geschützte Dateien ohne Genehmigung geändert – rückgängig machen (git checkout -- <datei>) und dem Nutzer Bescheid geben, bei "nur mit Antrag" stattdessen Antrag stellen (change new/submit):'); L.push('  ' + cap(unapproved.map((h) => `${h.file}${h.freeze ? ' [gesperrt]' : ''}`), 10).join(' ')); }
   L.push(`Hilfe: node ${cli} context <datei> | summary | check`);
   st.pending = [...stale.flatMap((s) => s.files.map((f) => `stale:${s.comp.id}:${f}`)), ...uncovered.map((f) => `uncovered:${f}`), ...unapproved.map((h) => `prot:${h.file}`)];
   writeState(root, st);
@@ -1418,9 +1707,10 @@ function init(target, flags) {
     if (fs.existsSync(dest) && !overwrite) return;
     fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, content); done.push(rel(dest));
   };
+  const projectBase = flags.id ? String(flags.id) : path.basename(target);
   const cliRel = '.claude/doku/doku.mjs';
   const fill = (s) => s.replaceAll('{{DOKU}}', `node ${cliRel}`).replaceAll('{{DOKU_PATH}}', cliRel).replaceAll('{{DOC_DIR}}', docDir)
-    .replaceAll('{{PROJECT_ID}}', slug(path.basename(target))).replaceAll('{{PROJECT_NAME}}', titleCase(slug(path.basename(target))));
+    .replaceAll('{{PROJECT_ID}}', slug(projectBase)).replaceAll('{{PROJECT_NAME}}', flags.name ? String(flags.name).replace(/[\n:#]/g, ' ').trim() : titleCase(slug(projectBase)));
   // CLI (immer aktualisieren)
   put(path.join(target, cliRel), fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'), { overwrite: true });
   try { fs.chmodSync(path.join(target, cliRel), 0o755); } catch { /* egal */ }
@@ -1429,7 +1719,7 @@ function init(target, flags) {
   // Doku-Gerüst
   const abs = path.join(target, docDir);
   if (!fs.existsSync(path.join(abs, 'project.md'))) put(path.join(abs, 'project.md'), fill(fs.readFileSync(path.join(tpl, 'project.md'), 'utf8')));
-  for (const d of ['components', 'flows', 'decisions', 'guides', 'changes']) fs.mkdirSync(path.join(abs, d), { recursive: true });
+  for (const d of ['components', 'flows', 'decisions', 'guides', 'changes', 'screens', 'assets']) fs.mkdirSync(path.join(abs, d), { recursive: true });
   // Hooks in .claude/settings.json zusammenführen
   const sp = path.join(target, '.claude/settings.json');
   let settings = {};
@@ -1443,9 +1733,9 @@ function init(target, flags) {
   addHook('SessionStart', `node "$CLAUDE_PROJECT_DIR/${cliRel}" hook start`);
   addHook('Stop', `node "$CLAUDE_PROJECT_DIR/${cliRel}" hook stop`);
   settings.hooks.PreToolUse ||= [];
-  if (!settings.hooks.PreToolUse.some((g) => (g.hooks || []).some((h) => String(h.command || '').includes('doku.mjs')))) {
-    settings.hooks.PreToolUse.push({ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: `node "$CLAUDE_PROJECT_DIR/${cliRel}" hook pretool`, timeout: 15 }] });
-  }
+  const pre = settings.hooks.PreToolUse.find((g) => (g.hooks || []).some((h) => String(h.command || '').includes('doku.mjs')));
+  if (!pre) settings.hooks.PreToolUse.push({ matcher: PRETOOL_MATCHER, hooks: [{ type: 'command', command: `node "$CLAUDE_PROJECT_DIR/${cliRel}" hook pretool`, timeout: 15 }] });
+  else if (pre.matcher === 'Edit|Write|MultiEdit|NotebookEdit') pre.matcher = PRETOOL_MATCHER;   // ältere Einrichtung: Shell-Befehle mitprüfen
   fs.mkdirSync(path.dirname(sp), { recursive: true }); fs.writeFileSync(sp, JSON.stringify(settings, null, 2) + '\n'); done.push(rel(sp));
   // CLAUDE.md
   const cm = path.join(target, 'CLAUDE.md');
