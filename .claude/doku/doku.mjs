@@ -1302,6 +1302,7 @@ Prüfen & Bauen:
 Rückfragen (im Portal zu Meldungen gestellt):
   doku ask                       Offene Rückfragen anzeigen
   doku ask reply <id> "Antwort" [--verdict ok|doku|problem|unklar] [--resolve]
+  doku todo [done <id> "Notiz"]  To-dos aus dem Portal, die Claude erledigen soll
 
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
@@ -1397,7 +1398,7 @@ async function main(argv) {
       const url = (flags.url || process.env.DOKU_URL || '').replace(/\/+$/, '');
       const token = flags.token || process.env.DOKU_TOKEN;
       if (!url || !token) { console.error('doku push braucht --url und --token (oder DOKU_URL / DOKU_TOKEN).'); return 1; }
-      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...p, ...(flags['no-assets'] ? {} : { assetData: embedAssets(p, root) }), answers: readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [] }) });
+      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...p, ...(flags['no-assets'] ? {} : { assetData: embedAssets(p, root) }), answers: readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [], todosDone: readJsonFile(path.join(root, ANSWERS_FILE), {}).todos || [] }) });
       const txt = await res.text();
       if (!res.ok) { console.error(`Push fehlgeschlagen (${res.status}): ${txt}`); return 1; }
       out(`Gesendet: ${p.id} → ${url} (${p.stats.components} Komponenten, ${p.stats.errors} Fehler)`);
@@ -1467,6 +1468,10 @@ async function main(argv) {
       return 0;
     }
     case 'screen': return captureScreen(needRoot(), docDir, pos[0], flags);
+    case 'todo': case 'todos': {
+      const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
+      return todoCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
+    }
     case 'ask': {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
       return askCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
@@ -1507,6 +1512,39 @@ export async function readQuestions(root, project, { live = true } = {}) {
   }
   const answered = readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [];
   return [...map.values()].filter((q) => !answered.some((a) => a.id === q.id && a.at >= (q.askedAt || 0)));
+}
+/** Offene To-dos für Claude: aus questions.json (vom Server) und – mit Portal-Token – live. Lokal erledigte fallen weg. */
+export async function readTodos(root, project, { live = true } = {}) {
+  let list = readJsonFile(path.join(root, QUESTIONS_FILE), {}).todos || [];
+  const cfg = portalConfig(root);
+  if (live && cfg.url && cfg.token) {
+    try { list = (await portal(root, 'GET', `/api/todos?project=${encodeURIComponent(project.id)}&for=claude`)).todos || []; } catch { /* offline */ }
+  }
+  const done = readJsonFile(path.join(root, ANSWERS_FILE), {}).todos || [];
+  return list.filter((t) => !done.some((d) => d.id === t.id));
+}
+async function todoCommand(root, project, pos, flags, cli) {
+  if (pos[0] !== 'done') {
+    const ts = await readTodos(root, project);
+    if (!ts.length) { out('Keine offenen To-dos für Claude.'); return 0; }
+    out([`${ts.length} To-do(s) aus dem Portal, die Claude erledigen soll:`, ...ts.map((t) => `- ${t.id}: ${t.text}${t.createdBy ? ` (von ${t.createdBy})` : ''}`), '',
+      `Erledigt melden: node ${cli} todo done <id> "kurze Notiz, was gemacht wurde"`].join('\n'));
+    return 0;
+  }
+  const id = pos[1]; const note = pos.slice(2).join(' ').trim();
+  if (!id) { console.error('doku todo done <id> "Notiz"'); return 1; }
+  const cfg = portalConfig(root);
+  if (cfg.url && cfg.token) {
+    try { await portal(root, 'POST', `/api/todos/${encodeURIComponent(id)}`, { done: true, note }); out(`To-do ${id} im Portal als erledigt markiert.`); return 0; }
+    catch (e) { console.error(`${e.message} – speichere im Repository.`); }
+  }
+  const f = path.join(root, ANSWERS_FILE);
+  const data = readJsonFile(f, {});
+  data.todos = (data.todos || []).filter((d) => d.id !== id).concat({ id, note: note.slice(0, 500), at: Date.now() }).slice(-200);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(data, null, 1) + '\n');
+  out(`To-do ${id} in ${ANSWERS_FILE} als erledigt vermerkt. Mit committen – das Portal übernimmt es, sobald der Commit im Hauptzweig ist.`);
+  return 0;
 }
 function formatQuestion(q) {
   const s = q.subject || {};
@@ -1676,6 +1714,8 @@ async function hook(kind, flags) {
       const p = loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false });
       const rules = await readRules(root, p);
       if (rules.length) out(formatRules(rules, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')));
+      const todos = await readTodos(root, p);
+      if (todos.length) out(`doku: ${todos.length} To-do(s) aus dem Portal für Claude (${todos.slice(0, 3).map((t) => `„${String(t.text).slice(0, 60)}“`).join(', ')}${todos.length > 3 ? ' …' : ''}). Erst mit dem Nutzer abstimmen, ob sie jetzt dran sind. Details: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} todo`);
       const qs = await readQuestions(root, p);
       if (qs.length) out(`doku: ${qs.length} Rückfrage(n) aus dem Portal warten auf Antwort (${qs.slice(0, 3).map((q) => `„${String((q.subject && q.subject.title) || q.question).slice(0, 60)}“`).join(', ')}${qs.length > 3 ? ' …' : ''}). Nebenbei beantworten: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} ask`);
       if (!p.components.length) {

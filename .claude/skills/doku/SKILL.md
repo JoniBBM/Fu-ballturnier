@@ -45,6 +45,7 @@ Nie den Status selbst auf approved setzen – die Genehmigung zählt nur im Port
 
 Die Auffälligkeiten im Portal werden **aus der Doku abgeleitet**, nicht aus dem Code. Bevor du sie als Sicherheitslücke bezeichnest: im Code/der Konfiguration prüfen. Meist fehlt nur eine Angabe (`[local]`, `[tls]`, `zone`, `security:`) – dann die Doku korrigieren und das so sagen. Nur was im Code wirklich so ist, ist ein Risiko.
 Fragen aus dem Portal zeigt der Start-Hook in einer Zeile. Details: `node .claude/doku/doku.mjs ask`; antworten: `node .claude/doku/doku.mjs ask reply <id> "kurze Antwort für Nicht-Programmierer" --verdict ok|doku|problem|unklar` (ok = kein Problem, doku = Doku war falsch und ist korrigiert, problem = echtes Problem). Antwort mitcommitten.
+To-dos, die im Portal Claude zugewiesen wurden, zeigt der Start-Hook ebenfalls in einer Zeile: erst mit dem Nutzer klären, ob sie jetzt dran sind; Details `node .claude/doku/doku.mjs todo`, erledigt melden `node .claude/doku/doku.mjs todo done <id> "was gemacht wurde"`.
 
 ## Regeln vom Nutzer (verbindlich)
 
