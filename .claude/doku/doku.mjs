@@ -16,7 +16,19 @@ const COMPONENT_FIELDS = new Set(['id', 'name', 'type', 'layer', 'path', 'files'
 const EXPOSURES = new Set(['public', 'internal', 'local', 'none']);
 const FLOW_FIELDS = new Set(['id', 'name', 'summary', 'trigger', 'steps', 'actors', 'tags', 'status']);
 const DECISION_FIELDS = new Set(['id', 'title', 'date', 'status', 'affects', 'tags', 'summary', 'supersedes']);
-const PROJECT_FIELDS = new Set(['id', 'name', 'summary', 'repo', 'repoPath', 'branch', 'url', 'tech', 'status', 'owner', 'layers', 'zones', 'zone', 'security', 'protected', 'tags', 'ignore', 'links']);
+const PROJECT_FIELDS = new Set(['id', 'name', 'summary', 'repo', 'repoPath', 'branch', 'url', 'tech', 'status', 'owner', 'layers', 'zones', 'zone', 'security', 'protected', 'tags', 'ignore', 'links', 'standard']);
+
+// Neu in den Doku-Vorgaben: Jedes Projekt merkt sich in project.md (standard: N), welchen Stand es umsetzt.
+// Claude bekommt beim Start nur die Punkte, die für das Projekt neu sind, und zieht sie beim nächsten Dokumentieren nach.
+export const STANDARDS = [
+  { n: 1, date: '2026-10-24', text: 'Grundformat: Bausteine mit path, files: (Erklärung je Datei), uses, provides, Sicherheit; Abläufe, Entscheidungen, Anleitungen, Änderungen.' },
+  { n: 2, date: '2026-10-25', text: 'Sicherheitsangaben genau: Strecken auf derselben Maschine [local], durch Tunnel/VPN [tls, tunnel] – sonst meldet das Portal falsche Risiken. Auffälligkeiten erst im Code prüfen, bevor du von einer Lücke sprichst.' },
+  { n: 3, date: '2026-10-25', text: 'Oberfläche: Bilder in assets/, Bildschirme in screens/ mit klickbaren Bereichen (doku screen).' },
+  { n: 4, date: '2026-10-26', text: 'Abläufe für jede Funktion, die mehrere Bausteine berührt (typisch 5–15 pro App); doku coverage zeigt Bausteine und Endpunkte ohne Ablauf.' },
+  { n: 5, date: '2026-10-26', text: 'Vollständige Grafik: jede Datenbank, jeder Cache, jede Warteschlange, jeder Fremddienst und jeder Aufruf zwischen Bausteinen/Apps steht in uses; doku coverage zeigt Verbindungen aus dem Code, die fehlen.' },
+  { n: 6, date: '2026-10-26', text: 'Bildschirm für jede Seite und jeden wichtigen Zustand (doku screen --crawl, --click); jeder Baustein hat eine Beschreibung (summary), jede Datei eine Erklärung in files:. Ziel: doku coverage ohne Lücken.' },
+];
+export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
 const CHANGE_STATUSES = new Set(['draft', 'proposed', 'approved', 'rejected', 'implemented', 'cancelled']);
 const GUIDE_FIELDS = new Set(['id', 'title', 'order', 'audience', 'tags', 'summary']);
@@ -342,6 +354,8 @@ export function loadProject(root, opts = {}) {
     status: asStr(pdata.status) || 'active', owner: asStr(pdata.owner), layers: layerKeys, layerLabels, zones: zoneKeys, zoneLabels, zone: asStr(pdata.zone).toLowerCase(),
     security: asItems(pdata.security).map(parseMeasure), protected: asList(pdata.protected), tags: asList(pdata.tags),
     links: asItems(pdata.links), docDir, file: pfile, git: gitInfo ? { commit: gitInfo.commit, date: gitInfo.date, dirty: gitInfo.dirty } : null,
+    standard: Number(asStr(pdata.standard)) || 1, standardCurrent: STANDARD,
+    standardNews: STANDARDS.filter((x) => x.n > (Number(asStr(pdata.standard)) || 1)).map((x) => `${x.n}. ${x.text}`),
     components: [], flows: [], decisions: [], changes: [], guides: [], screens: [], issues,
   };
   project.assets = listAssets(root, docDir);
@@ -563,6 +577,8 @@ export function loadProject(root, opts = {}) {
     project.code = analyzeCode(root, project); project.history = readHistory(root, project);
     for (const g of graphGaps(project)) { const c = project.components.find((x) => x.id === g.comp); issues.push({ level: 'warn', file: c ? c.file : docDir, msg: `Grafik unvollständig: ${g.msg}`, code: 'missing-use' }); }
     project.missingScreens = pagesWithoutScreen(project).map((x) => x.label).slice(0, 100);
+    const dg = docGaps(project);
+    project.docGaps = { screens: dg.screens.slice(0, 60), graph: dg.graph.length, flows: dg.flows.slice(0, 60), texts: dg.texts.slice(0, 60), files: dg.files.length, standard: dg.standard };
     if (project.missingScreens.length) issues.push({ level: 'warn', file: `${docDir}/screens/`, msg: `Oberfläche unvollständig: ${project.missingScreens.length} Seite(n) ohne Bildschirm: ${project.missingScreens.slice(0, 12).join(', ')}${project.missingScreens.length > 12 ? ' …' : ''}`, code: 'missing-screen' });
   }
   project.stats = {
@@ -957,6 +973,25 @@ export function uiPages(project) {
     }
   }
   return [...out.values()];
+}
+
+/** Alle Lücken der Doku auf einen Blick (braucht die Code-Analyse): fehlende Bildschirme, Verbindungen, Abläufe, Beschreibungen. */
+export function docGaps(project) {
+  const inFlow = new Set(project.flows.flatMap((f) => [...f.participants, ...f.steps.flatMap((x) => [x.from, x.to, ...(x.over || [])])]).filter(Boolean).map((x) => String(x).toLowerCase()));
+  const real = project.components.filter((c) => !c.external && c.type !== 'external');
+  const noteless = ((project.code && project.code.files) || []).filter((f) => f.component && !f.note && !MANIFESTS.test(f.path) && f.lines > 5 && !(project.code.dirs || []).some((d) => f.path.startsWith(d.path.replace(/\/?$/, '/'))));
+  return {
+    screens: project.missingScreens || pagesWithoutScreen(project).map((x) => x.label),
+    graph: graphGaps(project).map((g) => g.msg),
+    flows: real.filter((c) => !['storage', 'db', 'cache', 'config', 'library', 'queue', 'topic'].includes(c.type) && !inFlow.has(c.id.toLowerCase())).map((c) => c.id),
+    texts: real.filter((c) => String(c.summary || '').length < 25).map((c) => c.id),
+    standard: project.standard < STANDARD ? project.standard : 0,
+    files: noteless.map((f) => f.path),
+  };
+}
+export function formatGaps(g) {
+  return [g.standard && `Vorgaben-Stand ${g.standard} von ${STANDARD}`, g.screens.length && `${g.screens.length} Seite(n) ohne Bildschirm`, g.graph.length && `${g.graph.length} Verbindung(en) fehlen in der Grafik`, g.flows.length && `${g.flows.length} Baustein(e) in keinem Ablauf`,
+    g.texts.length && `${g.texts.length} Baustein(e) ohne Beschreibung`, g.files.length && `${g.files.length} Datei(en) ohne Erklärung`].filter(Boolean).join(', ');
 }
 
 /** Seiten ohne Bildschirm in screens/ (Abgleich über URL, Name, Titel). */
@@ -1482,6 +1517,7 @@ Rückfragen (im Portal zu Meldungen gestellt):
   doku ask                       Offene Rückfragen anzeigen
   doku ask reply <id> "Antwort" [--verdict ok|doku|problem|unklar] [--resolve]
   doku todo [done <id> "Notiz"]  To-dos aus dem Portal, die Claude erledigen soll
+  doku neu                       Was ist neu in den Doku-Vorgaben seit dem Stand dieses Projekts?
 
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
@@ -1551,6 +1587,8 @@ async function main(argv) {
       if (noFlow.length || routes.length) out('Für jede Funktion über mehrere Bausteine einen Ablauf anlegen: doku new flow <id>');
       if ((lp.missingScreens || []).length) out(`Oberfläche: ${lp.missingScreens.length} Seite(n) ohne Bildschirm: ${lp.missingScreens.slice(0, 20).join(', ')}${lp.missingScreens.length > 20 ? ' …' : ''}\n  Aufnehmen: doku screen --crawl http://localhost:<port> (alle verlinkten Seiten) oder doku screen <id> --url … [--click css]…`);
       else if (uiPages(lp).length) out(`Oberfläche: alle ${uiPages(lp).length} erkannten Seiten haben einen Bildschirm.`);
+      const dg = docGaps(lp);
+      if (dg.texts.length || dg.files.length) out(`Beschreibungen: ${dg.texts.length ? `Bausteine ohne Beschreibung: ${dg.texts.join(', ')}. ` : ''}${dg.files.length ? `${dg.files.length} Datei(en) ohne Erklärung in files: (${dg.files.slice(0, 8).join(', ')}${dg.files.length > 8 ? ' …' : ''})` : ''}`);
       const gaps = graphGaps(lp);
       out(gaps.length ? `Grafik: ${gaps.length} Verbindung(en) im Code, die in uses fehlen:\n${gaps.slice(0, 20).map((g) => '  ' + g.msg).join('\n')}${gaps.length > 20 ? '\n  …' : ''}` : 'Grafik: alle im Code erkannten Verbindungen sind dokumentiert.');
       return 0;
@@ -1660,6 +1698,13 @@ async function main(argv) {
       return 0;
     }
     case 'screen': return captureScreen(needRoot(), docDir, pos[0], flags);
+    case 'neu': case 'news': case 'standard': {
+      const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
+      const fresh = STANDARDS.filter((x) => x.n > p.standard);
+      out(fresh.length ? [`Neu in den Doku-Vorgaben seit Stand ${p.standard} (aktuell ${STANDARD}):`, ...fresh.map((x) => `  ${x.n}. (${x.date}) ${x.text}`), `Nachziehen, dann in ${p.docDir}/project.md \`standard: ${STANDARD}\` setzen.`].join('\n')
+        : `Doku entspricht den aktuellen Vorgaben (Stand ${STANDARD}).`);
+      return 0;
+    }
     case 'todo': case 'todos': {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
       return todoCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
@@ -1910,6 +1955,16 @@ async function hook(kind, flags) {
       if (todos.length) out(`doku: ${todos.length} To-do(s) aus dem Portal für Claude (${todos.slice(0, 3).map((t) => `„${String(t.text).slice(0, 60)}“`).join(', ')}${todos.length > 3 ? ' …' : ''}). Erst mit dem Nutzer abstimmen, ob sie jetzt dran sind. Details: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} todo`);
       const qs = await readQuestions(root, p);
       if (qs.length) out(`doku: ${qs.length} Rückfrage(n) aus dem Portal warten auf Antwort (${qs.slice(0, 3).map((q) => `„${String((q.subject && q.subject.title) || q.question).slice(0, 60)}“`).join(', ')}${qs.length > 3 ? ' …' : ''}). Nebenbei beantworten: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} ask`);
+      if (p.components.length && p.standard < STANDARD) {
+        const cliRel = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
+        out([`doku: Neue Doku-Vorgaben seit Stand ${p.standard} dieses Projekts – beim nächsten Dokumentieren für das ganze Projekt nachziehen, dann in ${p.docDir}/project.md \`standard: ${STANDARD}\` setzen:`,
+          ...STANDARDS.filter((x) => x.n > p.standard).map((x) => `  ${x.n}. ${x.text}`), `  Was noch fehlt: node ${cliRel} coverage`].join('\n'));
+      }
+      if (p.components.length) {
+        // Lücken nur ansagen, nicht ungefragt abarbeiten – der Nutzer entscheidet (oder übergibt sie im Portal als To-do)
+        const g = formatGaps(docGaps(loadProject(root, { docDir: flags.dir || DEFAULT_DOC_DIR, checkPaths: false, git: false, code: true })));
+        if (g) out(`doku: Die Doku hat Lücken (${g}). Nicht ungefragt abarbeiten – erwähne es dem Nutzer am Ende kurz; schließen, wenn er es möchte oder ein To-do dafür da ist. Details: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} coverage`);
+      }
       if (!p.components.length) {
         const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
         out([
@@ -2016,7 +2071,7 @@ function init(target, flags) {
   const projectBase = flags.id ? String(flags.id) : path.basename(target);
   const cliRel = '.claude/doku/doku.mjs';
   const fill = (s) => s.replaceAll('{{DOKU}}', `node ${cliRel}`).replaceAll('{{DOKU_PATH}}', cliRel).replaceAll('{{DOC_DIR}}', docDir)
-    .replaceAll('{{PROJECT_ID}}', slug(projectBase)).replaceAll('{{PROJECT_NAME}}', flags.name ? String(flags.name).replace(/[\n:#]/g, ' ').trim() : titleCase(slug(projectBase)));
+    .replaceAll('{{STANDARD}}', String(STANDARD)).replaceAll('{{PROJECT_ID}}', slug(projectBase)).replaceAll('{{PROJECT_NAME}}', flags.name ? String(flags.name).replace(/[\n:#]/g, ' ').trim() : titleCase(slug(projectBase)));
   // CLI (immer aktualisieren)
   put(path.join(target, cliRel), fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'), { overwrite: true });
   try { fs.chmodSync(path.join(target, cliRel), 0o755); } catch { /* egal */ }

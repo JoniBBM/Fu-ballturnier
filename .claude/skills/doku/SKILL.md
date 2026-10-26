@@ -17,6 +17,10 @@ node .claude/doku/doku.mjs context --changed    # welche Doku betrifft meine Än
 node .claude/doku/doku.mjs coverage             # Dateien ohne Baustein
 ```
 
+## Neue Vorgaben (bei jedem Dokumentieren zuerst)
+
+Die Vorgaben für die Doku entwickeln sich weiter. `node .claude/doku/doku.mjs neu` zeigt, was seit dem Stand dieses Projekts (`standard:` in project.md) neu ist – der Start-Hook nennt es auch. Beim Dokumentieren die neuen Punkte für das ganze Projekt nachziehen, danach `standard:` in project.md auf den aktuellen Stand setzen.
+
 ## Wann was aktualisieren
 
 | Änderung | Doku |
