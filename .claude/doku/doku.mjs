@@ -559,7 +559,10 @@ export function loadProject(root, opts = {}) {
   }
 
   project.ignore = [...DEFAULT_IGNORE, ...ignoreExtra, `${docDir}/**`];
-  if (opts.code) { project.code = analyzeCode(root, project); project.history = readHistory(root, project); }
+  if (opts.code) {
+    project.code = analyzeCode(root, project); project.history = readHistory(root, project);
+    for (const g of graphGaps(project)) { const c = project.components.find((x) => x.id === g.comp); issues.push({ level: 'warn', file: c ? c.file : docDir, msg: `Grafik unvollständig: ${g.msg}`, code: 'missing-use' }); }
+  }
   project.stats = {
     components: project.components.length, flows: project.flows.length, decisions: project.decisions.length, changes: project.changes.length, guides: project.guides.length,
     edges: project.components.reduce((n, c) => n + c.uses.length, 0),
@@ -724,7 +727,8 @@ function analyzeText(file, text, lang) {
   if (lang === 'Python' || lang === 'Shell' || lang === 'YAML' || lang === 'TOML') code = code.replace(/(^|\s)#[^\n]*/g, '$1');
   if (JS_LIKE.has(lang)) {
     const specs = [
-      ...allMatches(code, /(?:^|[\n;])\s*import\s+(?:type\s+)?(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"\n]+)['"]/g),
+      // reine Typ-Importe (TypeScript „import type“) sind keine Laufzeit-Abhängigkeit
+      ...allMatches(code, /(?:^|[\n;])\s*import\s+(?!type\s)(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"\n]+)['"]/g),
       ...allMatches(code, /\bexport\s+(?:\*|\{[^}]*\})\s+from\s+['"]([^'"\n]+)['"]/g),
       ...allMatches(code, /\brequire\(\s*['"]([^'"\n]+)['"]\s*\)/g),
       ...allMatches(code, /\bimport\(\s*['"]([^'"\n]+)['"]\s*\)/g),
@@ -824,6 +828,60 @@ function resolveImports(file, lang, raw, fileSet, pyIndex) {
 }
 
 /** Analysiert alle Quelldateien eines Projekts. Ergebnis kommt ins Projektmodell (project.code). */
+// ───────────────────────── Lücken in der Grafik (Code ↔ uses) ─────────────────────────
+
+// Bibliotheken, die eine Verbindung nach außen bedeuten: Art, passende Protokolle, Stichworte für den Zielbaustein
+const LIB_SERVICES = [
+  { re: /^(pg|postgres|mysql2?|sqlite3|better-sqlite3|mongodb|mongoose|prisma|@prisma\/client|sequelize|typeorm|knex|drizzle-orm|psycopg2?|asyncpg|sqlalchemy|pymongo|gorm|database\/sql|github\.com\/lib\/pq|github\.com\/jackc\/pgx.*)$/, kind: 'Datenbank', protos: ['sql', 'db', 'mongo', 'query'], words: ['db', 'database', 'datenbank', 'postgres', 'mysql', 'sqlite', 'mongo'] },
+  { re: /^(redis|ioredis|memcached|redis-py|go-redis|github\.com\/redis\/go-redis.*)$/, kind: 'Cache', protos: ['cache', 'redis'], words: ['redis', 'cache', 'memcache'] },
+  { re: /^(amqplib|kafkajs|bullmq|bull|nats|pika|kafka-python|celery|@aws-sdk\/client-sqs)$/, kind: 'Warteschlange', protos: ['queue', 'event', 'amqp', 'kafka', 'pubsub'], words: ['queue', 'rabbit', 'kafka', 'nats', 'sqs', 'event'] },
+  { re: /^(stripe|@stripe\/stripe-js|paypal.*|@paypal\/.*)$/, kind: 'Zahlungsanbieter', protos: [], words: ['stripe', 'paypal', 'payment', 'zahlung'] },
+  { re: /^(nodemailer|@sendgrid\/mail|postmark|resend|smtplib|mailgun.*)$/, kind: 'E-Mail-Versand', protos: ['smtp'], words: ['mail', 'smtp', 'sendgrid', 'postmark', 'resend', 'mailgun'] },
+  { re: /^(openai|@anthropic-ai\/sdk|anthropic|@google\/generative-ai)$/, kind: 'KI-Dienst', protos: [], words: ['openai', 'anthropic', 'claude', 'gpt', 'gemini', 'ki', 'ai'] },
+  { re: /^(@aws-sdk\/client-s3|aws-sdk|boto3|minio|@google-cloud\/storage)$/, kind: 'Speicherdienst', protos: ['s3', 'file', 'storage'], words: ['s3', 'aws', 'storage', 'bucket', 'minio', 'speicher'] },
+  { re: /^(firebase|firebase-admin|@supabase\/supabase-js|auth0|@auth0\/.*|@clerk\/.*)$/, kind: 'Fremddienst (Auth/Backend)', protos: [], words: ['firebase', 'supabase', 'auth0', 'clerk'] },
+];
+const routeMatcher = (p) => new RegExp('^' + String(p).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/:\w+/g, '[^/]+').replace(/\*/g, '.*') + '/?$');
+
+/** Was der Code zeigt, aber in `uses` fehlt: Importe zwischen Bausteinen, Dienste hinter Bibliotheken, API-Aufrufe. → [{ comp, key, msg }] */
+export function graphGaps(project) {
+  if (!project.code) return [];
+  const files = project.code.files;
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const comps = new Map(project.components.map((c) => [c.id, c]));
+  const usesTo = (c, id) => c.uses.some((u) => !u.project && u.target.toLowerCase() === id.toLowerCase());
+  const gaps = []; const seen = new Set();
+  const add = (cid, key, msg) => { if (!seen.has(cid + key)) { seen.add(cid + key); gaps.push({ comp: cid, key, msg }); } };
+  const routes = files.flatMap((f) => f.routes.map((r) => ({ f, method: r.method, re: routeMatcher(r.path), path: r.path })));
+  for (const f of files) {
+    const c = f.component && comps.get(f.component);
+    if (!c || c.external) continue;
+    for (const t of f.imports) {
+      const tf = byPath.get(t);
+      if (tf && tf.component && tf.component !== c.id && !usesTo(c, tf.component)) add(c.id, 'imp:' + tf.component, `${c.id} importiert Code aus ${tf.component} (${f.path} → ${t}), in uses fehlt „${tf.component}: call …“`);
+    }
+    for (const lib of MANIFESTS.test(f.path) ? [] : f.libs) {   // package.json & Co. listen alle Bibliotheken des Projekts – zählt nicht
+      const svc = LIB_SERVICES.find((x) => x.re.test(lib));
+      if (!svc) continue;
+      const self = `${c.id} ${c.name} ${c.type} ${c.tech.join(' ')}`.toLowerCase();
+      if (['db', 'cache', 'queue', 'topic', 'storage'].includes(c.type) || svc.words.some((w) => self.includes(w))) continue;   // der Baustein ist der Dienst selbst
+      const ok = c.uses.some((u) => {
+        if (svc.protos.includes(String(u.protocol).toLowerCase())) return true;
+        const t = comps.get(u.target); const hay = `${u.target} ${t ? t.name + ' ' + t.tech.join(' ') : ''} ${u.label}`.toLowerCase();
+        return svc.words.some((w) => hay.includes(w));
+      });
+      if (!ok) add(c.id, 'lib:' + svc.kind, `${c.id} nutzt ${lib} (${svc.kind}), in uses fehlt die Verbindung dorthin (Dienst als eigener Baustein, extern: external: true)`);
+    }
+    for (const call of f.calls) {
+      const m = String(call).match(/^(GET|POST|PUT|PATCH|DELETE)?\s*(\/\S*)/i);
+      if (!m) continue;
+      const hit = routes.find((r) => r.re.test(m[2].split('?')[0]) && (!m[1] || r.method === m[1].toUpperCase()));
+      if (hit && hit.f.component && hit.f.component !== c.id && !usesTo(c, hit.f.component)) add(c.id, 'call:' + hit.f.component, `${c.id} ruft ${m[1] ? m[1].toUpperCase() + ' ' : ''}${m[2]} auf (${f.path}), das ist ${hit.f.component} – in uses fehlt „${hit.f.component}: http …“`);
+    }
+  }
+  return gaps;
+}
+
 export function analyzeCode(root, project) {
   const ign = project.ignore.map(compilePattern);
   const own = project.ignore.slice(DEFAULT_IGNORE.length).map(compilePattern); // projekteigene Ausnahmen gelten auch für Manifeste
@@ -1370,6 +1428,8 @@ async function main(argv) {
       const routes = [...new Set(((lp.code && lp.code.files) || []).flatMap((f) => f.routes.map((r) => `${r.method} ${r.path}`)))].filter((r) => !labels.includes(r.split(' ')[1]));
       if (routes.length) out(`Endpunkte in keinem Ablauf (${routes.length}): ${routes.slice(0, 15).join(', ')}${routes.length > 15 ? ' …' : ''}`);
       if (noFlow.length || routes.length) out('Für jede Funktion über mehrere Bausteine einen Ablauf anlegen: doku new flow <id>');
+      const gaps = graphGaps(lp);
+      out(gaps.length ? `Grafik: ${gaps.length} Verbindung(en) im Code, die in uses fehlen:\n${gaps.slice(0, 20).map((g) => '  ' + g.msg).join('\n')}${gaps.length > 20 ? '\n  …' : ''}` : 'Grafik: alle im Code erkannten Verbindungen sind dokumentiert.');
       return 0;
     }
 
@@ -1793,7 +1853,12 @@ async function hook(kind, flags) {
     const pr = await checkProtected(root, p, r.changes.map((c) => c.file), stopRules);
     unapproved = pr.hits.filter((h) => !(h.covered && h.covered.length)).filter((h) => !ack.has(`prot:${h.file}`));
   }
-  if (!errors.length && !stale.length && !uncovered.length && !unapproved.length) return 0;
+  // Verbindungen, die der Code jetzt zeigt, aber in uses fehlen – nur für Bausteine, die in dieser Sitzung geändert wurden
+  let gaps = [];
+  if (r.touched.size) {
+    try { p.code = analyzeCode(root, p); gaps = graphGaps(p).filter((g) => r.touched.has(g.comp) && !ack.has(`gap:${g.comp}:${g.key}`)); } catch { /* egal */ }
+  }
+  if (!errors.length && !stale.length && !uncovered.length && !unapproved.length && !gaps.length) return 0;
   const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
   const L = [`doku: Bitte Architektur-Doku (${p.docDir}/) prüfen. Ist nichts zu tun, einfach erneut beenden.`];
   const cap = (arr, n = 8) => (arr.length > n ? [...arr.slice(0, n), `… +${arr.length - n}`] : arr);
@@ -1801,8 +1866,9 @@ async function hook(kind, flags) {
   if (stale.length) { L.push('Neue/gelöschte Dateien oder Manifeste, Doku unverändert:'); cap(stale.map((s) => `  ${s.comp.id} (${s.comp.file}): ${cap(s.files, 5).join(' ')}`)).forEach((x) => L.push(x)); }
   if (uncovered.length) { L.push('Keiner Komponente zugeordnet (path ergänzen oder neue Komponente):'); L.push('  ' + cap(uncovered, 10).join(' ')); }
   if (unapproved.length) { L.push('Gesperrte oder geschützte Dateien ohne Genehmigung geändert – rückgängig machen (git checkout -- <datei>) und dem Nutzer Bescheid geben, bei "nur mit Antrag" stattdessen Antrag stellen (change new/submit):'); L.push('  ' + cap(unapproved.map((h) => `${h.file}${h.freeze ? ' [gesperrt]' : ''}`), 10).join(' ')); }
+  if (gaps.length) { L.push('Grafik unvollständig – im Code neu, in uses fehlt:'); cap(gaps.map((g) => `  ${g.msg}`), 6).forEach((x) => L.push(x)); }
   L.push(`Hilfe: node ${cli} context <datei> | summary | check`);
-  st.pending = [...stale.flatMap((s) => s.files.map((f) => `stale:${s.comp.id}:${f}`)), ...uncovered.map((f) => `uncovered:${f}`), ...unapproved.map((h) => `prot:${h.file}`)];
+  st.pending = [...gaps.map((g) => `gap:${g.comp}:${g.key}`), ...stale.flatMap((s) => s.files.map((f) => `stale:${s.comp.id}:${f}`)), ...uncovered.map((f) => `uncovered:${f}`), ...unapproved.map((h) => `prot:${h.file}`)];
   writeState(root, st);
   console.error(L.join('\n'));
   return 2;

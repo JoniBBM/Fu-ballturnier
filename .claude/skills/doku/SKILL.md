@@ -55,6 +55,15 @@ Der Nutzer legt im Portal Regeln fest; sie stehen in `.claude/doku/rules.json` u
 - **VORGABE** (instruction): beim Arbeiten in diesem Bereich immer einhalten.
 `rules.json`, Hooks und `.claude/settings.json` nicht anfassen – das kann nur der Nutzer im Portal.
 
+## Vollständige Grafik (Pflicht)
+
+Die Grafik zeigt nur, was in `uses` steht. Deshalb gehört jede Verbindung hinein, die der Code wirklich hat:
+- jede Datenbank, jeder Cache, jede Warteschlange, jeder Dateispeicher (eigener Baustein, `type: db|cache|queue|storage`)
+- jeder Fremddienst: Zahlung, E-Mail, Login-Anbieter, KI, Cloud-APIs (eigener Baustein, `external: true`)
+- jeder Aufruf zwischen Bausteinen (Importe, HTTP-Aufrufe Frontend → Backend) und zwischen Apps (`andere-app:baustein: http …`)
+- Hintergrundjobs, Cronjobs, Webhooks, Tunnel/Proxy davor
+`node .claude/doku/doku.mjs coverage` zeigt Verbindungen, die der Code hat, aber `uses` nicht (Importe, Bibliotheken wie pg/redis/stripe, API-Aufrufe), dazu Bausteine und Endpunkte ohne Ablauf. Lieber feiner schneiden als zu grob: was eigene Aufgabe und eigene Dateien hat, ist ein Baustein.
+
 ## Format
 
 Baustein `docs/doku/components/<id>.md` (Unterordner = Bereich, optional):
@@ -130,9 +139,9 @@ Links im Text: `[[id]]` oder `[[projekt:id]]`. Frontmatter: ` #` startet einen K
 
 ## Neues Projekt dokumentieren
 
-1. `node .claude/doku/doku.mjs coverage` und Ordnerstruktur ansehen, Bausteine schneiden (meist 5–30), Bereiche festlegen.
+1. `node .claude/doku/doku.mjs coverage` und Ordnerstruktur ansehen, Bausteine schneiden (meist 10–40, lieber feiner), Bereiche festlegen.
 2. project.md (name, summary, tech, repo, layers mit Labels, zone/zones, security).
 3. Pro Baustein: Datei mit `uses` (+ Sicherheit), `files:` für jede Datei, `zone`/`security`.
 4. Abläufe für jede Funktion über mehrere Bausteine (Anmelden, Hauptfunktionen, Hintergrundjobs, Schnittstellen nach außen; typisch 5–15), Anleitungen Installation/Betrieb/Aktualisieren/Notfall.
 5. Hat die App eine Oberfläche: App starten und die wichtigsten Bildschirme mit `screen` erfassen, Bereiche mit Bausteinen/Abläufen/Bildschirmen verknüpfen.
-6. `node .claude/doku/doku.mjs check` bis 0 Fehler.
+6. `node .claude/doku/doku.mjs check` bis 0 Fehler und `node .claude/doku/doku.mjs coverage` ohne Lücken in der Grafik.
