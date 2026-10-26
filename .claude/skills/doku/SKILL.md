@@ -24,7 +24,7 @@ node .claude/doku/doku.mjs coverage             # Dateien ohne Baustein
 | neue/entfernte Datei | `files:` des Bausteins (Erklärung 1–2 Sätze), ggf. `path` |
 | neuer Baustein, neue Abhängigkeit, Endpoint, Event, Tabelle | Baustein-Datei: `uses`, `provides` |
 | Anmeldung, Verschlüsselung, Ports, Geheimnisse, Erreichbarkeit | `[tls, auth=…]` an `uses`, `zone`, `exposure`, `security:` |
-| neuer wichtiger Ablauf | `flows/` |
+| neue Funktion, die mehrere Bausteine berührt (Nutzeraktion, Hintergrundjob, Schnittstelle) | Ablauf in `flows/` |
 | Installation, Betrieb, Update, Notfall geändert | `guides/` |
 | Architekturentscheidung | `node .claude/doku/doku.mjs new decision "Titel"` |
 | größere Änderung abgeschlossen | Eintrag in `changes/` mit `status: implemented` (Changelog) |
@@ -89,7 +89,7 @@ Herzstück des Checkouts: legt Bestellungen an und stößt die Zahlung an. Ablau
 `security`-Arten: auth access transport storage network secrets input ratelimit headers logging backup privacy other.
 Optional: `name`, `id`, `summary`, `status` (active planned experimental deprecated), `tags`, `owner`, `links`. Der erste Satz des Texts wird zur Kurzbeschreibung.
 
-Ablauf `docs/doku/flows/<id>.md` (wird Sequenzdiagramm und lässt sich auf dem Graphen abspielen):
+Ablauf `docs/doku/flows/<id>.md` (wird Sequenzdiagramm und lässt sich abspielen). Für Nicht-Programmierer der verständlichste Teil der Doku – lieber ein Ablauf mehr als einer zu wenig. `node .claude/doku/doku.mjs coverage` zeigt Bausteine, die in keinem Ablauf vorkommen:
 ```markdown
 ---
 name: Checkout
@@ -101,7 +101,7 @@ steps:
   - orders ->> worker: order.created     # ->> asynchron, -->> asynchrone Antwort
   - orders --> web: 201                  # --> Antwort
   - note orders: prüft Lagerbestand
-  - == Versand ==                        # Abschnitt
+  - == Versand ==                        # Abschnitt (auch für „Wenn …“ / „Sonst …“)
 ---
 ```
 
@@ -133,6 +133,6 @@ Links im Text: `[[id]]` oder `[[projekt:id]]`. Frontmatter: ` #` startet einen K
 1. `node .claude/doku/doku.mjs coverage` und Ordnerstruktur ansehen, Bausteine schneiden (meist 5–30), Bereiche festlegen.
 2. project.md (name, summary, tech, repo, layers mit Labels, zone/zones, security).
 3. Pro Baustein: Datei mit `uses` (+ Sicherheit), `files:` für jede Datei, `zone`/`security`.
-4. 1–3 wichtige Abläufe, Anleitungen Installation/Betrieb/Aktualisieren/Notfall.
+4. Abläufe für jede Funktion über mehrere Bausteine (Anmelden, Hauptfunktionen, Hintergrundjobs, Schnittstellen nach außen; typisch 5–15), Anleitungen Installation/Betrieb/Aktualisieren/Notfall.
 5. Hat die App eine Oberfläche: App starten und die wichtigsten Bildschirme mit `screen` erfassen, Bereiche mit Bausteinen/Abläufen/Bildschirmen verknüpfen.
 6. `node .claude/doku/doku.mjs check` bis 0 Fehler.

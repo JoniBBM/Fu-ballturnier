@@ -1361,6 +1361,15 @@ async function main(argv) {
       const byDir = new Map();
       for (const f of cov.uncovered) { const d = f.includes('/') ? f.split('/').slice(0, 2).join('/').replace(/\/[^/]*\.[^/]*$/, '') : '.'; byDir.set(d, (byDir.get(d) || 0) + 1); }
       for (const [d, n] of [...byDir].sort()) out(`  ${d}/ (${n})`);
+      // Abläufe: Bausteine (ohne Daten, Konfiguration, externe Dienste) und erkannte Endpunkte, die in keinem Ablauf vorkommen
+      const inFlow = new Set(p.flows.flatMap((f) => [...f.participants, ...f.steps.flatMap((x) => [x.from, x.to, ...(x.over || [])])]).filter(Boolean).map((x) => String(x).toLowerCase()));
+      const noFlow = p.components.filter((c) => !c.external && !['storage', 'db', 'cache', 'config', 'external', 'library'].includes(c.type) && !inFlow.has(c.id.toLowerCase()));
+      out(`Abläufe: ${p.flows.length}${noFlow.length ? ` – Bausteine in keinem Ablauf: ${noFlow.map((c) => c.id).join(', ')}` : ''}`);
+      const labels = p.flows.flatMap((f) => f.steps.map((x) => String(x.label || ''))).join('\n');
+      const lp = loadProject(root, { docDir, checkPaths: false, code: true });
+      const routes = [...new Set(((lp.code && lp.code.files) || []).flatMap((f) => f.routes.map((r) => `${r.method} ${r.path}`)))].filter((r) => !labels.includes(r.split(' ')[1]));
+      if (routes.length) out(`Endpunkte in keinem Ablauf (${routes.length}): ${routes.slice(0, 15).join(', ')}${routes.length > 15 ? ' …' : ''}`);
+      if (noFlow.length || routes.length) out('Für jede Funktion über mehrere Bausteine einen Ablauf anlegen: doku new flow <id>');
       return 0;
     }
 
