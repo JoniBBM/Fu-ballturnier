@@ -562,6 +562,8 @@ export function loadProject(root, opts = {}) {
   if (opts.code) {
     project.code = analyzeCode(root, project); project.history = readHistory(root, project);
     for (const g of graphGaps(project)) { const c = project.components.find((x) => x.id === g.comp); issues.push({ level: 'warn', file: c ? c.file : docDir, msg: `Grafik unvollständig: ${g.msg}`, code: 'missing-use' }); }
+    project.missingScreens = pagesWithoutScreen(project).map((x) => x.label).slice(0, 100);
+    if (project.missingScreens.length) issues.push({ level: 'warn', file: `${docDir}/screens/`, msg: `Oberfläche unvollständig: ${project.missingScreens.length} Seite(n) ohne Bildschirm: ${project.missingScreens.slice(0, 12).join(', ')}${project.missingScreens.length > 12 ? ' …' : ''}`, code: 'missing-screen' });
   }
   project.stats = {
     components: project.components.length, flows: project.flows.length, decisions: project.decisions.length, changes: project.changes.length, guides: project.guides.length,
@@ -721,7 +723,7 @@ const allMatches = (text, re, g = 1) => [...text.matchAll(re)].map((m) => m[g]);
 const pkgName = (spec) => (spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
 
 function analyzeText(file, text, lang) {
-  const r = { imports: [], libs: [], symbols: [], routes: [], calls: [], tables: [], env: [], defines: [], mounts: [] };
+  const r = { imports: [], libs: [], symbols: [], routes: [], calls: [], tables: [], env: [], defines: [], mounts: [], pages: [] };
   let code = text.replace(/\/\*[\s\S]*?\*\//g, ' ');
   if (JS_LIKE.has(lang) || lang === 'Go') code = code.replace(/(^|[^:'"`\\\w])\/\/[^\n]*/g, '$1');
   if (lang === 'Python' || lang === 'Shell' || lang === 'YAML' || lang === 'TOML') code = code.replace(/(^|\s)#[^\n]*/g, '$1');
@@ -753,6 +755,14 @@ function analyzeText(file, text, lang) {
     // Ausgehende HTTP-Aufrufe: fetch('/x'), axios.get('/x'), request<T>('POST', '/x')
     for (const m of code.matchAll(/\b(?:fetch|axios(?:\.\w+)?|request|ky(?:\.\w+)?|\$fetch|useFetch|api\.(?:get|post|put|patch|delete)|http\.(?:get|post|put|patch|delete))(?:<[^>()]*>)?\(\s*(?:['"`](GET|POST|PUT|PATCH|DELETE)['"`]\s*,\s*)?['"`]([^'"`\n$]{1,200})/g)) {
       if (/^(\/|https?:)/.test(m[2])) r.calls.push((m[1] ? m[1] + ' ' : '') + m[2].replace(/\/$/, '/…'));
+    }
+    // Seiten der Oberfläche: Router-Pfade (react-router, vue-router …) und Spiel-Szenen (Phaser)
+    if (/<Route\b|createRouter|createBrowserRouter|new\s+VueRouter|\broutes\s*[:=]\s*\[/.test(code)) {
+      for (const m of code.matchAll(/(?:<Route\b[^>]*\bpath=|\bpath\s*:\s*)['"`](\/[^'"`\n]*)['"`]/g)) if (!/^\/(api|auth|health|static|assets)\b/.test(m[1])) r.pages.push(m[1]);
+    }
+    if (/extends\s+(?:Phaser\.)?Scene\b/.test(code)) {
+      const k = code.match(/super\(\s*(?:\{\s*key\s*:\s*)?['"]([\w -]+)['"]/) || code.match(/class\s+(\w+)\s+extends\s+(?:Phaser\.)?Scene/);
+      if (k) r.pages.push('scene:' + k[1]);
     }
     r.env.push(...allMatches(code, /\bprocess\.env\.([A-Z_][A-Z0-9_]*)/g), ...allMatches(code, /\bprocess\.env\[\s*['"]([A-Z_][A-Z0-9_]*)['"]/g), ...allMatches(code, /\bimport\.meta\.env\.([A-Z_][A-Z0-9_]*)/g));
   } else if (lang === 'Python') {
@@ -904,7 +914,7 @@ export function analyzeCode(root, project) {
     try { const st = fs.statSync(path.join(root, f)); if (st.size <= LIMIT.bytes) text = fs.readFileSync(path.join(root, f), 'utf8'); } catch { /* weg */ }
     if (text.includes('\u0000')) text = '';
     const lines = text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0;
-    const a = text ? analyzeText(f, text, lang) : { imports: [], libs: [], symbols: [], routes: [], calls: [], tables: [], env: [], defines: [], mounts: [] };
+    const a = text ? analyzeText(f, text, lang) : { imports: [], libs: [], symbols: [], routes: [], calls: [], tables: [], env: [], defines: [], mounts: [], pages: [] };
     languages[lang] ||= { files: 0, lines: 0 }; languages[lang].files++; languages[lang].lines += lines; totalLines += lines;
     const owner = ownerOf(project, f);
     return { path: f, lang, lines, component: owner ? owner.id : null, note: notes.get(f) || '', ...a, imports: resolveImports(f, lang, a.imports, fileSet, pyIndex) };
@@ -918,6 +928,53 @@ export function analyzeCode(root, project) {
     delete f.mounts;
   }
   return { files, dirs: dirNotes, languages, totalLines, totalFiles: files.length, truncated };
+}
+
+/** Seiten der Oberfläche laut Code: Seiten-Dateien (Next, SvelteKit, Nuxt, Astro, pages/views/scenes), Router-Pfade, HTML-Dateien, Spiel-Szenen. */
+export function uiPages(project) {
+  if (!project.code) return [];
+  const out = new Map();
+  const add = (key, label, route, file) => { if (!out.has(key)) out.set(key, { key, label, route, file }); };
+  const toRoute = (p) => ('/' + p.replace(/\/?(index|page|\+page)$/, '').replace(/\([^)]*\)\/?/g, '').replace(/\[\.\.\.(\w+)\]/g, '*').replace(/\[(\w+)\]/g, ':$1')).replace(/\/+$/, '') || '/';
+  for (const f of project.code.files) {
+    const p = f.path; let m;
+    if (/(^|\/)(node_modules|dist|build|public|docs|test|tests|__tests__|e2e|vendor)\//.test(p) && !/^public\/[^/]+\.html$/.test(p)) continue;
+    if ((m = p.match(/(?:^|\/)app\/(.*?)\/?page\.[jt]sx?$/))) add('r:' + toRoute(m[1]), toRoute(m[1]), toRoute(m[1]), p);
+    else if ((m = p.match(/(?:^|\/)src\/routes\/(.*?)\/?\+page\.svelte$/))) add('r:' + toRoute(m[1]), toRoute(m[1]), toRoute(m[1]), p);
+    else if ((m = p.match(/(?:^|\/)pages\/(.+)\.(?:[jt]sx?|vue|astro|svelte)$/)) && !/(^|\/)(_app|_document|_error|api\/)/.test(m[1])) {
+      const r = toRoute(m[1]);
+      if (/\.(vue|astro)$|\.[jt]sx$/.test(p) || /(^|\/)(pages)\//.test(p)) add('r:' + r, r, r, p);
+    } else if ((m = p.match(/(?:^|\/)(views|screens|scenes)\/([\w-]+)\.(?:[jt]sx?|vue|svelte|py|html)$/i)) && !/^(index|base|types?|utils?)$/i.test(m[2])) {
+      const name = m[2].replace(/(View|Screen|Scene|Page)$/, '');
+      add('n:' + slug(name), `${m[1].toLowerCase() === 'scenes' ? 'Szene' : 'Ansicht'} ${name}`, null, p);
+    } else if (/\.html$/.test(p) && !/(^|\/)(templates?|partials?|layouts?|components?)\//.test(p)) {
+      const r = toRoute(p.replace(/^(src|public|static|www|site)\//, '').replace(/\.html$/, ''));
+      add('r:' + r, r, r, p);
+    }
+    for (const pg of f.pages || []) {
+      if (pg.startsWith('scene:')) add('n:' + slug(pg.slice(6)), `Szene ${pg.slice(6)}`, null, p);
+      else add('r:' + pg.replace(/\/+$/, '') || '/', pg, pg, p);
+    }
+  }
+  return [...out.values()];
+}
+
+/** Seiten ohne Bildschirm in screens/ (Abgleich über URL, Name, Titel). */
+export function pagesWithoutScreen(project) {
+  const scr = project.screens || [];
+  const urls = scr.map((s) => String(s.url || '').split(/[?]/)[0].replace(/^#/, '').replace(/^\/?#\//, '/').replace(/\.html?$/, '').replace(/\/index$/, '').replace(/\/+$/, '') || '/');
+  const names = new Set(scr.flatMap((s) => [s.id, slug(s.title || ''), ...String(s.url || '').split(/[/#?]/).filter(Boolean).map(slug)]));
+  const pages = uiPages(project);
+  const perComp = new Map();
+  for (const pg of pages) { const o = ownerOf(project, pg.file); if (o) perComp.set(o.id, (perComp.get(o.id) || 0) + 1); }
+  const shown = new Set(scr.flatMap((s) => s.components.map((c) => c.toLowerCase())));
+  return pages.filter((pg) => {
+    const o = ownerOf(project, pg.file);
+    if (o && perComp.get(o.id) === 1 && shown.has(o.id.toLowerCase())) return false;   // Baustein mit nur dieser Seite ist auf einem Bildschirm zu sehen
+    if (pg.route) { const re = routeMatcher(pg.route); const last = slug(pg.route.split('/').filter((x) => x && !x.startsWith(':')).pop() || 'start'); return !urls.some((u) => re.test(u) || u === pg.route) && !names.has(last); }
+    const n = pg.key.slice(2);
+    return ![...names].some((x) => x && (x === n || x.includes(n) || n.includes(x)));
+  });
 }
 
 // ───────────────────────── Änderungen, Schutz, Verlauf ─────────────────────────
@@ -1170,65 +1227,128 @@ function setFrontmatter(text, key, value) {
   const fm = `---\n${lines.join('\n')}\n---`;
   return m ? text.replace(/^---\n[\s\S]*?\n---/, () => fm) : `${fm}\n${text}`;
 }
+const listFlag = (v) => (v == null || v === true ? [] : [].concat(v));
+/** Seite im Browser öffnen (mit Cookies, Klicks, Warten). */
+async function openPage(browser, url, flags) {
+  const width = Number(flags.width) || 1280; const height = Number(flags.height) || 800;
+  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: Number(flags.scale) || 1 });
+  const cookies = listFlag(flags.cookie).map((c) => { const [name, ...v] = String(c).split('='); return { name: name.trim(), value: v.join('=').trim(), url: new URL(url).origin }; });
+  if (cookies.length) await ctx.addCookies(cookies);
+  const page = await ctx.newPage();
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+  return page;
+}
+/** Klickbare Elemente der sichtbaren Seite (mit Ziel-Adresse bei Links). */
+const FIND_CLICKABLE = () => {
+  const out = []; const seen = new Set();
+  const kind = (el) => (el.tagName === 'A' ? 'Link' : /^(INPUT|TEXTAREA)$/.test(el.tagName) ? 'Eingabefeld' : el.tagName === 'SELECT' ? 'Auswahl' : 'Knopf');
+  for (const el of document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=link], summary')) {
+    const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
+    if (r.width < 4 || r.height < 4 || st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) === 0) continue;
+    if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
+    const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || el.name || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    const key = `${Math.round(r.x)}:${Math.round(r.y)}`; if (seen.has(key)) continue; seen.add(key);
+    out.push({ x: r.x, y: r.y, width: r.width, height: r.height, text: `${kind(el)}${label ? ` „${label}“` : ''}`, href: el.tagName === 'A' ? el.href : '' });
+  }
+  return out.slice(0, 40);
+};
+/** Foto + Bereiche eines geöffneten Bildschirms speichern. linkTo(href) → screen-id für Links zu anderen erfassten Seiten. */
+async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => null, title = '' }) {
+  const ext = flags.jpg ? 'jpg' : 'png'; const full = Boolean(flags.full);
+  const dims = await page.evaluate((f) => ({ w: f ? document.documentElement.scrollWidth : innerWidth, h: f ? document.documentElement.scrollHeight : innerHeight }), full);
+  const pct = (r) => {   // Prozent der Bildgröße, auf das Bild beschnitten
+    const cl = (n) => Math.min(100, Math.max(0, n));
+    const x1 = cl(r.x / dims.w * 100); const y1 = cl(r.y / dims.h * 100);
+    return [x1, y1, cl((r.x + r.width) / dims.w * 100) - x1, cl((r.y + r.height) / dims.h * 100) - y1];
+  };
+  const hotspots = [];
+  for (const spec of listFlag(flags.hotspot)) {
+    const [sel, rest = ''] = String(spec).split(/\s*=>\s*/);
+    const [refs = '', text = ''] = rest.split(/\s*\|\s*/);
+    const box = await page.locator(sel).first().boundingBox().catch(() => null);
+    if (!box) { console.error(`Hotspot "${sel}" nicht gefunden – übersprungen.`); continue; }
+    const sc = full ? await page.evaluate(() => ({ x: scrollX, y: scrollY })) : { x: 0, y: 0 };
+    hotspots.push({ box: pct({ x: box.x + sc.x, y: box.y + sc.y, width: box.width, height: box.height }), refs: refs.trim(), text: text.trim() });
+  }
+  const imgRel = `${docDir}/assets/screens/${id}.${ext}`;
+  fs.mkdirSync(path.join(root, path.dirname(imgRel)), { recursive: true });
+  await page.screenshot({ path: path.join(root, imgRel), fullPage: full, type: ext === 'jpg' ? 'jpeg' : 'png', ...(ext === 'jpg' ? { quality: 82 } : {}) });
+  const mdFile = path.join(root, docDir, 'screens', `${id}.md`);
+  const exists = fs.existsSync(mdFile);
+  if (!hotspots.length && (!exists || flags.auto)) {
+    for (const f of await page.evaluate(FIND_CLICKABLE)) { const to = f.href && linkTo(f.href); hotspots.push({ box: pct(f), refs: to && to !== id ? `screen:${to}` : '', text: f.text }); }
+  }
+  const lines = hotspots.map((h) => `${h.box.map(fmtNum).join(',')}:${h.refs ? ' ' + h.refs : ''} "${h.text.replace(/"/g, "'")}"`);
+  const u = new URL(url);
+  let text = exists ? fs.readFileSync(mdFile, 'utf8') : `---\ntitle: ${String(flags.title || title || titleCase(id)).replace(/[\n:#"]/g, ' ').trim()}\nurl: ${u.pathname + u.hash}\ncomponents: []\n---\nWas man auf diesem Bildschirm sieht und tun kann.\n`;
+  text = setFrontmatter(text, 'image', `assets/screens/${id}.${ext}`);
+  if (flags.title && exists) text = setFrontmatter(text, 'title', String(flags.title).replace(/[\n:#]/g, ' '));
+  if (lines.length) text = setFrontmatter(text, 'hotspots', lines);
+  fs.mkdirSync(path.dirname(mdFile), { recursive: true });
+  fs.writeFileSync(mdFile, text);
+  return { id, imgRel, mdRel: path.relative(root, mdFile), hotspots: lines.length, open: hotspots.filter((h) => !h.refs).length, existed: exists };
+}
+
 async function captureScreen(root, docDir, id, flags) {
-  if (!id || !flags.url) { console.error('doku screen <id> --url <adresse> [--hotspot "css => ziel | Erklärung"]…'); return 1; }
+  if (flags.crawl) return crawlScreens(root, docDir, flags);
+  if (!id || !flags.url) { console.error('doku screen <id> --url <adresse> [--click css]… [--hotspot "css => ziel | Erklärung"]…\ndoku screen --crawl <start-adresse> [--max 20]   alle verlinkten Seiten'); return 1; }
   id = slug(id);
   const pw = await loadPlaywright(root);
   if (!pw) { console.error('doku screen braucht Playwright (npm i -D playwright && npx playwright install chromium). Ohne Playwright: Bildschirmfoto selbst nach ' + docDir + '/assets/screens/ legen und screens/' + id + '.md von Hand schreiben.'); return 1; }
-  const list = (v) => (v == null || v === true ? [] : [].concat(v));
-  const width = Number(flags.width) || 1280; const height = Number(flags.height) || 800; const full = Boolean(flags.full);
-  const ext = flags.jpg ? 'jpg' : 'png';
   const browser = await pw.chromium.launch();
   try {
-    const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: Number(flags.scale) || 1 });
-    await page.goto(String(flags.url), { waitUntil: 'networkidle', timeout: 30_000 });
-    for (const sel of list(flags.click)) { await page.locator(String(sel)).first().click(); await page.waitForTimeout(400); }
+    const page = await openPage(browser, String(flags.url), flags);
+    for (const sel of listFlag(flags.click)) { await page.locator(String(sel)).first().click(); await page.waitForTimeout(400); }
     if (flags.wait) await page.locator(String(flags.wait)).first().waitFor({ timeout: 15_000 });
     await page.waitForTimeout(Number(flags.delay) || 500);
-    const dims = await page.evaluate((f) => ({ w: f ? document.documentElement.scrollWidth : innerWidth, h: f ? document.documentElement.scrollHeight : innerHeight, sx: f ? scrollX : 0, sy: f ? scrollY : 0 }), full);
-    const pct = (r) => {   // Prozent der Bildgröße, auf das Bild beschnitten
-      const cl = (n) => Math.min(100, Math.max(0, n));
-      const x1 = cl(r.x / dims.w * 100); const y1 = cl(r.y / dims.h * 100);
-      return [x1, y1, cl((r.x + r.width) / dims.w * 100) - x1, cl((r.y + r.height) / dims.h * 100) - y1];
-    };
-    const hotspots = [];
-    for (const spec of list(flags.hotspot)) {
-      const [sel, rest = ''] = String(spec).split(/\s*=>\s*/);
-      const [refs = '', text = ''] = rest.split(/\s*\|\s*/);
-      const box = await page.locator(sel).first().boundingBox().catch(() => null);
-      if (!box) { console.error(`Hotspot "${sel}" nicht gefunden – übersprungen.`); continue; }
-      hotspots.push({ box: pct({ x: box.x + dims.sx, y: box.y + dims.sy, width: box.width, height: box.height }), refs: refs.trim(), text: text.trim() });
+    const r = await snapScreen(page, { root, docDir, id, url: String(flags.url), flags, title: await page.title() });
+    out(`Bildschirm ${id}: ${r.mdRel} + ${r.imgRel}${r.hotspots ? `, ${r.hotspots} Hotspots` : ' (Hotspots unverändert)'}.`);
+    if (r.open) out('Hotspots ohne Ziel: Baustein-ID, screen:<id> (führt zu Bildschirm) oder flow:<id> vor die Erklärung schreiben, Unwichtiges löschen.');
+    return 0;
+  } finally { await browser.close(); }
+}
+
+/** Alle verlinkten Seiten ab einer Startadresse erfassen; Links zwischen den Seiten werden zu screen:-Zielen. */
+async function crawlScreens(root, docDir, flags) {
+  const start = String(flags.crawl === true ? flags.url || '' : flags.crawl);
+  if (!/^https?:\/\//.test(start)) { console.error('doku screen --crawl http://localhost:<port>[/pfad] [--max 20] [--cookie name=wert]'); return 1; }
+  const pw = await loadPlaywright(root);
+  if (!pw) { console.error('doku screen braucht Playwright (npm i -D playwright && npx playwright install chromium).'); return 1; }
+  const max = Math.max(1, Math.min(100, Number(flags.max) || 20));
+  const origin = new URL(start).origin;
+  // gleiche Seite = gleicher Pfad; bei Hash-Routern (#/…) zählt der Hash mit
+  const norm = (href) => { try { const u = new URL(href, start); if (u.origin !== origin) return null; const h = u.hash.startsWith('#/') ? u.hash : ''; return (u.pathname.replace(/\/+$/, '') || '/') + h; } catch { return null; } };
+  const skip = (k) => /\.(pdf|zip|png|jpe?g|gif|svg|webp|mp4|css|js|json|xml|txt)$/i.test(k.split('#')[0]) || /(^|\/)(logout|abmelden|signout|sign-out)(\/|$)/i.test(k);
+  // vorhandene Bildschirme behalten ihre ID
+  const known = new Map();
+  try { for (const sc of loadProject(root, { docDir, checkPaths: false, git: false }).screens) if (sc.url) known.set(norm(origin + sc.url), sc.id); } catch { /* egal */ }
+  const idFor = (k) => known.get(k) || slug(k === '/' ? 'start' : k.replace(/#\//, '/').replace(/\.html?$/, '').replace(/\/index$/, '').replace(/^\//, '').replace(/[/:]+/g, '-')) || 'start';
+  const browser = await pw.chromium.launch();
+  try {
+    // 1. Seiten finden (Breitensuche über Links)
+    const queue = [norm(start)]; const pages = [];
+    while (queue.length && pages.length < max) {
+      const k = queue.shift();
+      if (!k || pages.some((x) => x.k === k) || skip(k)) continue;
+      let page;
+      try { page = await openPage(browser, origin + k, flags); await page.waitForTimeout(Number(flags.delay) || 300); } catch (e) { console.error(`${k}: ${e.message.split('\n')[0]}`); continue; }
+      const title = (await page.title().catch(() => '')) || (await page.locator('h1').first().textContent({ timeout: 500 }).catch(() => '')) || '';
+      pages.push({ k, id: idFor(k), title: title.trim().slice(0, 80) });
+      for (const href of await page.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => a.href))) { const n = norm(href); if (n && !queue.includes(n) && !pages.some((x) => x.k === n)) queue.push(n); }
+      await page.context().close();
     }
-    const imgRel = `${docDir}/assets/screens/${id}.${ext}`;
-    fs.mkdirSync(path.join(root, path.dirname(imgRel)), { recursive: true });
-    await page.screenshot({ path: path.join(root, imgRel), fullPage: full, type: ext === 'jpg' ? 'jpeg' : 'png', ...(ext === 'jpg' ? { quality: 82 } : {}) });
-    const mdFile = path.join(root, docDir, 'screens', `${id}.md`);
-    const exists = fs.existsSync(mdFile);
-    if (!hotspots.length && (!exists || flags.auto)) {
-      const found = await page.evaluate(() => {
-        const out = []; const seen = new Set();
-        const kind = (el) => (el.tagName === 'A' ? 'Link' : /^(INPUT|TEXTAREA)$/.test(el.tagName) ? 'Eingabefeld' : el.tagName === 'SELECT' ? 'Auswahl' : 'Knopf');
-        for (const el of document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], summary')) {
-          const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
-          if (r.width < 4 || r.height < 4 || st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) === 0) continue;
-          if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
-          const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || el.name || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-          const key = `${Math.round(r.x)}:${Math.round(r.y)}`; if (seen.has(key)) continue; seen.add(key);
-          out.push({ x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height, text: `${kind(el)}${label ? ` „${label}“` : ''}` });
-        }
-        return out.slice(0, 40);
-      });
-      for (const f of found) hotspots.push({ box: pct({ ...f, x: f.x - (full ? 0 : dims.sx), y: f.y - (full ? 0 : dims.sy) }), refs: '', text: f.text });
+    // 2. Fotos und Bereiche; Links zu anderen erfassten Seiten werden zu screen:-Zielen
+    const ids = new Map(pages.map((x) => [x.k, x.id]));
+    const results = [];
+    for (const pg of pages) {
+      const page = await openPage(browser, origin + pg.k, flags);
+      await page.waitForTimeout(Number(flags.delay) || 500);
+      results.push(await snapScreen(page, { root, docDir, id: pg.id, url: origin + pg.k, flags, title: pg.title, linkTo: (href) => ids.get(norm(href)) || null }));
+      await page.context().close();
     }
-    const lines = hotspots.map((h) => `${h.box.map(fmtNum).join(',')}:${h.refs ? ' ' + h.refs : ''} "${h.text.replace(/"/g, "'")}"`);
-    let text = exists ? fs.readFileSync(mdFile, 'utf8') : `---\ntitle: ${String(flags.title || titleCase(id)).replace(/[\n:#]/g, ' ')}\nurl: ${(() => { const u = new URL(String(flags.url)); return u.pathname + u.hash; })()}\ncomponents: []\n---\nWas man auf diesem Bildschirm sieht und tun kann.\n`;
-    text = setFrontmatter(text, 'image', `assets/screens/${id}.${ext}`);
-    if (flags.title && exists) text = setFrontmatter(text, 'title', String(flags.title).replace(/[\n:#]/g, ' '));
-    if (lines.length) text = setFrontmatter(text, 'hotspots', lines);
-    fs.mkdirSync(path.dirname(mdFile), { recursive: true });
-    fs.writeFileSync(mdFile, text);
-    out(`Bildschirm ${id}: ${path.relative(root, mdFile)} + ${imgRel}${lines.length ? `, ${lines.length} Hotspots` : ' (Hotspots unverändert)'}.`);
-    if (lines.length && hotspots.some((h) => !h.refs)) out('Hotspots ohne Ziel: Baustein-ID, screen:<id> (führt zu Bildschirm) oder flow:<id> vor die Erklärung schreiben, Unwichtiges löschen.');
+    out(`${results.length} Bildschirm(e) erfasst (${results.filter((r) => !r.existed).length} neu): ${results.map((r) => r.id).join(', ')}`);
+    if (pages.length >= max) out(`Grenze von ${max} Seiten erreicht – mit --max erhöhen.`);
+    out('Jetzt: in screens/*.md die Bausteine (components:) und Ziele der Bereiche ergänzen, Unwichtiges löschen. Ansichten, die man nur über Knöpfe erreicht (Dialoge, Spielzustände), einzeln mit doku screen <id> --url … --click css aufnehmen.');
     return 0;
   } finally { await browser.close(); }
 }
@@ -1339,6 +1459,7 @@ Schreiben:
   doku new flow <id>  |  doku new decision "<titel>"  |  doku new guide "<titel>"
   doku screen <id> --url <adresse> [--title T] [--click css]… [--hotspot "css => ziel, screen:x | Erklärung"]…
                                   Bildschirmfoto + klickbare Bereiche (braucht Playwright; ohne --hotspot: automatisch erkennen)
+  doku screen --crawl <start-adresse> [--max 20] [--cookie name=wert]   alle verlinkten Seiten auf einmal
 
 Prüfen & Bauen:
   doku check [--changed] [--strict] [--with ../anderes-projekt]…  Validieren (Exit 1 bei Fehlern)
@@ -1428,6 +1549,8 @@ async function main(argv) {
       const routes = [...new Set(((lp.code && lp.code.files) || []).flatMap((f) => f.routes.map((r) => `${r.method} ${r.path}`)))].filter((r) => !labels.includes(r.split(' ')[1]));
       if (routes.length) out(`Endpunkte in keinem Ablauf (${routes.length}): ${routes.slice(0, 15).join(', ')}${routes.length > 15 ? ' …' : ''}`);
       if (noFlow.length || routes.length) out('Für jede Funktion über mehrere Bausteine einen Ablauf anlegen: doku new flow <id>');
+      if ((lp.missingScreens || []).length) out(`Oberfläche: ${lp.missingScreens.length} Seite(n) ohne Bildschirm: ${lp.missingScreens.slice(0, 20).join(', ')}${lp.missingScreens.length > 20 ? ' …' : ''}\n  Aufnehmen: doku screen --crawl http://localhost:<port> (alle verlinkten Seiten) oder doku screen <id> --url … [--click css]…`);
+      else if (uiPages(lp).length) out(`Oberfläche: alle ${uiPages(lp).length} erkannten Seiten haben einen Bildschirm.`);
       const gaps = graphGaps(lp);
       out(gaps.length ? `Grafik: ${gaps.length} Verbindung(en) im Code, die in uses fehlen:\n${gaps.slice(0, 20).map((g) => '  ' + g.msg).join('\n')}${gaps.length > 20 ? '\n  …' : ''}` : 'Grafik: alle im Code erkannten Verbindungen sind dokumentiert.');
       return 0;
@@ -1858,7 +1981,9 @@ async function hook(kind, flags) {
   if (r.touched.size) {
     try { p.code = analyzeCode(root, p); gaps = graphGaps(p).filter((g) => r.touched.has(g.comp) && !ack.has(`gap:${g.comp}:${g.key}`)); } catch { /* egal */ }
   }
-  if (!errors.length && !stale.length && !uncovered.length && !unapproved.length && !gaps.length) return 0;
+  // Oberfläche geändert: Bildschirme, die einen geänderten Baustein zeigen, sind vielleicht veraltet (einmal pro Bildschirm)
+  const oldScreens = (p.screens || []).filter((sc) => [...r.touched.keys()].some((cid) => (r.touched.get(cid) || []).some((f) => !/\.(md|txt|json|ya?ml)$/.test(f)) && (sc.components.includes(cid) || sc.hotspots.some((h) => h.refs.some((x) => x.kind === 'c' && x.id === cid))))).filter((sc) => !ack.has(`screen:${sc.id}`));
+  if (!errors.length && !stale.length && !uncovered.length && !unapproved.length && !gaps.length && !oldScreens.length) return 0;
   const cli = path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/');
   const L = [`doku: Bitte Architektur-Doku (${p.docDir}/) prüfen. Ist nichts zu tun, einfach erneut beenden.`];
   const cap = (arr, n = 8) => (arr.length > n ? [...arr.slice(0, n), `… +${arr.length - n}`] : arr);
@@ -1866,9 +1991,10 @@ async function hook(kind, flags) {
   if (stale.length) { L.push('Neue/gelöschte Dateien oder Manifeste, Doku unverändert:'); cap(stale.map((s) => `  ${s.comp.id} (${s.comp.file}): ${cap(s.files, 5).join(' ')}`)).forEach((x) => L.push(x)); }
   if (uncovered.length) { L.push('Keiner Komponente zugeordnet (path ergänzen oder neue Komponente):'); L.push('  ' + cap(uncovered, 10).join(' ')); }
   if (unapproved.length) { L.push('Gesperrte oder geschützte Dateien ohne Genehmigung geändert – rückgängig machen (git checkout -- <datei>) und dem Nutzer Bescheid geben, bei "nur mit Antrag" stattdessen Antrag stellen (change new/submit):'); L.push('  ' + cap(unapproved.map((h) => `${h.file}${h.freeze ? ' [gesperrt]' : ''}`), 10).join(' ')); }
+  if (oldScreens.length) L.push(`Oberfläche geändert – Bildschirm(e) ggf. neu aufnehmen (App starten): ${oldScreens.map((sc) => `node ${cli} screen ${sc.id} --url http://localhost:<port>${sc.url || '/'}`).slice(0, 4).join(' ; ')}`);
   if (gaps.length) { L.push('Grafik unvollständig – im Code neu, in uses fehlt:'); cap(gaps.map((g) => `  ${g.msg}`), 6).forEach((x) => L.push(x)); }
   L.push(`Hilfe: node ${cli} context <datei> | summary | check`);
-  st.pending = [...gaps.map((g) => `gap:${g.comp}:${g.key}`), ...stale.flatMap((s) => s.files.map((f) => `stale:${s.comp.id}:${f}`)), ...uncovered.map((f) => `uncovered:${f}`), ...unapproved.map((h) => `prot:${h.file}`)];
+  st.pending = [...oldScreens.map((sc) => `screen:${sc.id}`), ...gaps.map((g) => `gap:${g.comp}:${g.key}`), ...stale.flatMap((s) => s.files.map((f) => `stale:${s.comp.id}:${f}`)), ...uncovered.map((f) => `uncovered:${f}`), ...unapproved.map((h) => `prot:${h.file}`)];
   writeState(root, st);
   console.error(L.join('\n'));
   return 2;

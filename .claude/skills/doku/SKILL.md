@@ -28,7 +28,7 @@ node .claude/doku/doku.mjs coverage             # Dateien ohne Baustein
 | Installation, Betrieb, Update, Notfall geändert | `guides/` |
 | Architekturentscheidung | `node .claude/doku/doku.mjs new decision "Titel"` |
 | größere Änderung abgeschlossen | Eintrag in `changes/` mit `status: implemented` (Changelog) |
-| neuer/geänderter Bildschirm (App mit Oberfläche) | `node .claude/doku/doku.mjs screen <id> --url …` erneut ausführen, Ziele der Bereiche prüfen |
+| neue Seite oder geänderte Oberfläche | Bildschirm aufnehmen bzw. neu aufnehmen (`node .claude/doku/doku.mjs screen …`), Ziele der Bereiche prüfen; der Stop-Hook erinnert daran |
 
 Nicht nötig bei: Bugfixes und Refactorings innerhalb einer Datei, Tests, Styling. Der Stop-Hook meldet sich, wenn Dateien neu sind/fehlen und die Doku unverändert ist. Ist nichts zu tun, erneut beenden.
 
@@ -118,7 +118,7 @@ Anleitung `docs/doku/guides/<id>.md`: `title`, `order` (Reihenfolge), `audience`
 
 Bilder: nach `docs/doku/assets/` legen und im Text einbinden: `![Beschreibung](../assets/name.png)`. Sinnvoll für Bildschirmfotos, Skizzen, Netzpläne; `check` meldet fehlende Bilder.
 
-Bildschirm `docs/doku/screens/<id>.md` (Tab „Oberfläche“: zum Durchklicken, für Nicht-Programmierer der Einstieg). Bei Apps mit Oberfläche die wichtigsten 3–10 Bildschirme dokumentieren:
+Bildschirm `docs/doku/screens/<id>.md` (Tab „Oberfläche“: zum Durchklicken, für Nicht-Programmierer der Einstieg). Bei Apps mit Oberfläche **jede Seite und jeden wichtigen Zustand** (Dialoge, Menüs, Spielszenen, Fehlerseiten) als Bildschirm dokumentieren – `node .claude/doku/doku.mjs coverage` listet Seiten aus dem Code, die noch fehlen:
 ```yaml
 title: Anmelden
 image: assets/screens/anmelden.png
@@ -128,7 +128,7 @@ components: [login-ui, auth]           # was dahinter arbeitet
 hotspots:                              # x,y,breite,höhe in Prozent des Bildes
   - 30,40,40,8: auth, flow:login, screen:start "Startet die Anmeldung per Passkey"
 ```
-Ziele eines Bereichs: Baustein-ID, `flow:<id>` (löst Ablauf aus), `screen:<id>` (führt zu Bildschirm). Am einfachsten: App starten, dann `node .claude/doku/doku.mjs screen <id> --url http://localhost:PORT/pfad [--click css]… [--hotspot "css => ziel, screen:x | Erklärung"]…` – macht das Foto und misst die Bereiche (Playwright). Ohne `--hotspot` werden Knöpfe, Links und Felder automatisch erkannt; dann Ziele ergänzen und Unwichtiges löschen. Erneut ausführen erneuert nur das Bild, Bereiche bleiben (mit `--auto` neu erkennen).
+Ziele eines Bereichs: Baustein-ID, `flow:<id>` (löst Ablauf aus), `screen:<id>` (führt zu Bildschirm). Am einfachsten: App starten, dann `node .claude/doku/doku.mjs screen --crawl http://localhost:PORT` – erfasst alle verlinkten Seiten auf einmal und verknüpft Links als `screen:`-Ziele. Ansichten, die man nur über Knöpfe erreicht, einzeln: `node .claude/doku/doku.mjs screen <id> --url http://localhost:PORT/pfad --click "#start" --click "#inventar"` (mehrere Klicks nacheinander); hinter einer Anmeldung mit `--cookie name=wert`. Eigene Bereiche: `--hotspot "css => ziel, screen:x | Erklärung"` (Playwright misst sie). Ohne `--hotspot` werden Knöpfe, Links und Felder automatisch erkannt; dann Ziele ergänzen und Unwichtiges löschen. Erneut ausführen erneuert nur das Bild, Bereiche bleiben (mit `--auto` neu erkennen).
 Änderung `docs/doku/changes/NNNN-titel.md`: `title`, `status` (draft proposed approved rejected implemented cancelled), `date`, `affects: [ids|layer:x]`, `risk`, `implemented`.
 project.md: `name`, `summary`, `tech`, `repo`, `layers: [key: Label]`, `zone`, `zones: [key: Label]`, `security:` (systemweit), `protected:`.
 Links im Text: `[[id]]` oder `[[projekt:id]]`. Frontmatter: ` #` startet einen Kommentar; Werte mit `: ` oder `#` in Anführungszeichen.
