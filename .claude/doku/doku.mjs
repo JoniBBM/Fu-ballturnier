@@ -28,12 +28,13 @@ export const STANDARDS = [
   { n: 5, date: '2026-10-26', text: 'Vollständige Grafik: jede Datenbank, jeder Cache, jede Warteschlange, jeder Fremddienst und jeder Aufruf zwischen Bausteinen/Apps steht in uses; doku coverage zeigt Verbindungen aus dem Code, die fehlen.' },
   { n: 6, date: '2026-10-26', text: 'Bildschirm für jede Seite und jeden wichtigen Zustand (doku screen --crawl, --click); jeder Baustein hat eine Beschreibung (summary), jede Datei eine Erklärung in files:. Ziel: doku coverage ohne Lücken.' },
   { n: 7, date: '2026-11-08', text: 'Oberfläche als echte HTML-Kopie: doku screen speichert jede Seite zusätzlich nach pages/ (HTML+CSS ohne Skripte) – alle Bildschirme einmal neu aufnehmen. Design-Wünsche aus dem Portal (Kommentare, Skizzen, Editor) mit doku design abarbeiten: erst Vorschlag in pages/vorschlag/<id>/, nach Bestätigung im Code.' },
+  { n: 8, date: '2026-11-08', text: 'Unterseiten und Zustände (Dialog, Reiter, Einstellungsbereich) in screens/*.md mit parent: <bildschirm-id> unter ihre Seite hängen – daraus baut das Portal den Seitenbaum der Oberfläche.' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
 const CHANGE_STATUSES = new Set(['draft', 'proposed', 'approved', 'rejected', 'implemented', 'cancelled']);
 const GUIDE_FIELDS = new Set(['id', 'title', 'order', 'audience', 'tags', 'summary']);
-const SCREEN_FIELDS = new Set(['id', 'title', 'image', 'order', 'url', 'components', 'hotspots', 'tags', 'summary']);
+const SCREEN_FIELDS = new Set(['id', 'title', 'image', 'order', 'url', 'components', 'hotspots', 'tags', 'summary', 'parent']);
 const STATUSES = new Set(['active', 'planned', 'experimental', 'deprecated', 'removed']);
 const DECISION_STATUSES = new Set(['proposed', 'accepted', 'rejected', 'deprecated', 'superseded']);
 const ID_RE = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -465,7 +466,7 @@ export function loadProject(root, opts = {}) {
       if (hs) hotspots.push(hs); else issue('error', d.file, `hotspots: "${h}" – erwartet "x,y,b,h: ziel, screen:x, flow:y \"Erklärung\"" (Werte in Prozent)`, 0, 'bad-hotspot');
     }
     project.screens.push({ id: sid, title: asStr(d.data.title) || (d.body.match(/^#\s+(.+)$/m)?.[1] ?? titleCase(sid)), image: resolveDocPath(docDir, rel, asStr(d.data.image)),
-      order: Number(asStr(d.data.order)) || 100, url: asStr(d.data.url), components: asList(d.data.components), tags: asList(d.data.tags), hotspots,
+      order: Number(asStr(d.data.order)) || 100, url: asStr(d.data.url), parent: slug(asStr(d.data.parent) || '') || '', components: asList(d.data.components), tags: asList(d.data.tags), hotspots,
       summary: asStr(d.data.summary) || firstSentence(d.body.replace(/^#\s+.+$/m, '')), body: d.body, file: d.file });
   }
   project.screens.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'de'));
