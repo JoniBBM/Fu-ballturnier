@@ -32,7 +32,7 @@ Die Vorgaben für die Doku entwickeln sich weiter. `node .claude/doku/doku.mjs n
 | Installation, Betrieb, Update, Notfall geändert | `guides/` |
 | Architekturentscheidung | `node .claude/doku/doku.mjs new decision "Titel"` |
 | größere Änderung abgeschlossen | Eintrag in `changes/` mit `status: implemented` (Changelog) |
-| neue Seite oder geänderte Oberfläche | Bildschirm aufnehmen bzw. neu aufnehmen (`node .claude/doku/doku.mjs screen …`), Ziele der Bereiche prüfen; der Stop-Hook erinnert daran |
+| neue Seite oder geänderte Oberfläche | Bildschirm aufnehmen bzw. neu aufnehmen (`node .claude/doku/doku.mjs screen …` – Foto **und** HTML-Kopie der Seite), Ziele der Bereiche prüfen; der Stop-Hook erinnert daran |
 
 Nicht nötig bei: Bugfixes und Refactorings innerhalb einer Datei, Tests, Styling. Der Stop-Hook meldet sich, wenn Dateien neu sind/fehlen und die Doku unverändert ist. Ist nichts zu tun, erneut beenden.
 
@@ -50,6 +50,14 @@ Nie den Status selbst auf approved setzen – die Genehmigung zählt nur im Port
 Die Auffälligkeiten im Portal werden **aus der Doku abgeleitet**, nicht aus dem Code. Bevor du sie als Sicherheitslücke bezeichnest: im Code/der Konfiguration prüfen. Meist fehlt nur eine Angabe (`[local]`, `[tls]`, `zone`, `security:`) – dann die Doku korrigieren und das so sagen. Nur was im Code wirklich so ist, ist ein Risiko.
 Fragen aus dem Portal zeigt der Start-Hook in einer Zeile. Details: `node .claude/doku/doku.mjs ask`; antworten: `node .claude/doku/doku.mjs ask reply <id> "kurze Antwort für Nicht-Programmierer" --verdict ok|doku|problem|unklar` (ok = kein Problem, doku = Doku war falsch und ist korrigiert, problem = echtes Problem). Antwort mitcommitten.
 To-dos, die im Portal Claude zugewiesen wurden, zeigt der Start-Hook ebenfalls in einer Zeile: erst mit dem Nutzer klären, ob sie jetzt dran sind; Details `node .claude/doku/doku.mjs todo`, erledigt melden `node .claude/doku/doku.mjs todo done <id> "was gemacht wurde"`.
+
+## Design-Wünsche aus dem Portal (erst Vorschlag, dann Code)
+
+Im Portal kommentiert der Nutzer Elemente der echten Seiten, zeichnet mit Stift/Finger, verschiebt im Editor Knöpfe und skizziert neue Oberflächen im Skizzenbuch. Gibt er das „an Claude“, nennt es der Start-Hook in einer Zeile. Details: `node .claude/doku/doku.mjs design` (Kommentare mit Element, Editor-Änderungen als Liste, Skizzen als Bild in `.claude/doku/design/` – die Bilder ansehen).
+1. **Vorschlag bauen** (Status „Vorschlag bauen“/„nachbessern“): betroffene Seite `pages/<bildschirm>.html` nach `pages/vorschlag/<id>/<bildschirm>.html` kopieren und dort nur Aussehen ändern (HTML/CSS; Pfade `../../_css/…`); für Skizzen neue Seiten in `pages/vorschlag/<id>/` anlegen. Den echten Code noch **nicht** ändern. Dann `node .claude/doku/doku.mjs design propose <id> "was der Vorschlag ändert"`, committen.
+2. Der Nutzer vergleicht im Portal Original und Vorschlag und bestätigt (oder bessert nach).
+3. **Bestätigt**: Vorschlag in den echten Code übertragen, testen, Bildschirme neu aufnehmen, `pages/vorschlag/<id>/` löschen, Doku anpassen, `node .claude/doku/doku.mjs design done <id> "Notiz"`.
+Wie To-dos: erst mit dem Nutzer klären, ob es jetzt dran ist.
 
 ## Regeln vom Nutzer (verbindlich)
 
@@ -132,6 +140,7 @@ components: [login-ui, auth]           # was dahinter arbeitet
 hotspots:                              # x,y,breite,höhe in Prozent des Bildes
   - 30,40,40,8: auth, flow:login, screen:start "Startet die Anmeldung per Passkey"
 ```
+`screen` speichert zusätzlich zum Foto die **Seite als HTML-Kopie** nach `pages/<id>.html` (gerendertes HTML mit dem echten CSS, Bildern und Schriften in `pages/_css/`, `pages/_files/`; ohne Skripte und Backend). Im Portal klickt man sich damit durch die echte Oberfläche und kommentiert, zeichnet und bearbeitet sie. Seiten-Kopien nie von Hand pflegen, sondern neu aufnehmen.
 Ziele eines Bereichs: Baustein-ID, `flow:<id>` (löst Ablauf aus), `screen:<id>` (führt zu Bildschirm). Am einfachsten: App starten, dann `node .claude/doku/doku.mjs screen --crawl http://localhost:PORT` – erfasst alle verlinkten Seiten auf einmal und verknüpft Links als `screen:`-Ziele. Ansichten, die man nur über Knöpfe erreicht, einzeln: `node .claude/doku/doku.mjs screen <id> --url http://localhost:PORT/pfad --click "#start" --click "#inventar"` (mehrere Klicks nacheinander); hinter einer Anmeldung mit `--cookie name=wert`. Eigene Bereiche: `--hotspot "css => ziel, screen:x | Erklärung"` (Playwright misst sie). Ohne `--hotspot` werden Knöpfe, Links und Felder automatisch erkannt; dann Ziele ergänzen und Unwichtiges löschen. Erneut ausführen erneuert nur das Bild, Bereiche bleiben (mit `--auto` neu erkennen).
 Änderung `docs/doku/changes/NNNN-titel.md`: `title`, `status` (draft proposed approved rejected implemented cancelled), `date`, `affects: [ids|layer:x]`, `risk`, `implemented`.
 project.md: `name`, `summary`, `tech`, `repo`, `layers: [key: Label]`, `zone`, `zones: [key: Label]`, `security:` (systemweit), `protected:`.

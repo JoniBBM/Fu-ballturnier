@@ -27,6 +27,7 @@ export const STANDARDS = [
   { n: 4, date: '2026-10-26', text: 'Abläufe für jede Funktion, die mehrere Bausteine berührt (typisch 5–15 pro App); doku coverage zeigt Bausteine und Endpunkte ohne Ablauf.' },
   { n: 5, date: '2026-10-26', text: 'Vollständige Grafik: jede Datenbank, jeder Cache, jede Warteschlange, jeder Fremddienst und jeder Aufruf zwischen Bausteinen/Apps steht in uses; doku coverage zeigt Verbindungen aus dem Code, die fehlen.' },
   { n: 6, date: '2026-10-26', text: 'Bildschirm für jede Seite und jeden wichtigen Zustand (doku screen --crawl, --click); jeder Baustein hat eine Beschreibung (summary), jede Datei eine Erklärung in files:. Ziel: doku coverage ohne Lücken.' },
+  { n: 7, date: '2026-11-08', text: 'Oberfläche als echte HTML-Kopie: doku screen speichert jede Seite zusätzlich nach pages/ (HTML+CSS ohne Skripte) – alle Bildschirme einmal neu aufnehmen. Design-Wünsche aus dem Portal (Kommentare, Skizzen, Editor) mit doku design abarbeiten: erst Vorschlag in pages/vorschlag/<id>/, nach Bestätigung im Code.' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
@@ -468,6 +469,16 @@ export function loadProject(root, opts = {}) {
       summary: asStr(d.data.summary) || firstSentence(d.body.replace(/^#\s+.+$/m, '')), body: d.body, file: d.file });
   }
   project.screens.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'de'));
+  // HTML-Kopien der Seiten (pages/<id>.html) und Design-Vorschläge von Claude (pages/vorschlag/<wunsch>/<id>.html)
+  for (const sc of project.screens) { const pg = readPageMeta(root, `${docDir}/pages/${sc.id}.html`); if (pg) sc.page = pg; }
+  project.proposals = [];
+  const propDir = path.join(root, docDir, 'pages', 'vorschlag');
+  for (const req of safeReaddir(propDir).filter((n) => /^[\w-]{1,40}$/.test(n))) {
+    for (const f of safeReaddir(path.join(propDir, req)).filter((n) => /^[\w-]+\.html$/.test(n)).slice(0, 50)) {
+      const pg = readPageMeta(root, `${docDir}/pages/vorschlag/${req}/${f}`);
+      if (pg) project.proposals.push({ request: req, screen: f.replace(/\.html$/, ''), ...pg });
+    }
+  }
   project.changes.sort((a, b) => b.id.localeCompare(a.id));
   for (const rel of docFiles) {
     if (rel === 'project.md' || rel === 'README.md' || /^(components|flows|decisions|changes|guides|screens)\//.test(rel)) continue;
@@ -1093,8 +1104,23 @@ export function parseHotspot(raw) {
 }
 export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
 export const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
-export const ASSET_LIMITS = { file: 3 * 1024 * 1024, total: 15 * 1024 * 1024 };
-/** Alle Bilder im Doku-Ordner (Pfade relativ zum Projekt). */
+// Dateien im Doku-Ordner, die das Portal ausliefert: Bilder, dazu die Seiten-Kopien (pages/: HTML, CSS, Schriften)
+export const ASSET_EXT = /\.(png|jpe?g|gif|webp|svg|css|html|woff2?|ttf|otf)$/i;
+export const ASSET_MIME = { ...IMAGE_MIME, css: 'text/css', html: 'text/html', woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf' };
+export const ASSET_LIMITS = { file: 3 * 1024 * 1024, total: 40 * 1024 * 1024 };
+const safeReaddir = (dir) => { try { return fs.readdirSync(dir).sort(); } catch { return []; } };
+/** Kopfdaten einer Seiten-Kopie (<meta name="doku-page" content="{…}">): Adresse, Breite, Höhe, Titel. */
+export function readPageMeta(root, rel) {
+  let head = '';
+  try { const fd = fs.openSync(path.join(root, rel), 'r'); const buf = Buffer.alloc(16384); const n = fs.readSync(fd, buf, 0, buf.length, 0); fs.closeSync(fd); head = buf.slice(0, n).toString('utf8'); } catch { return null; }
+  const m = head.match(/<meta name="doku-page" content="([^"]*)"/);
+  let meta = {};
+  if (m) { try { meta = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')); } catch { /* egal */ } }
+  const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(20000, Math.round(Number(v))) : d);
+  const t = head.match(/<title[^>]*>([^<]{0,200})<\/title>/i);
+  return { file: rel, width: num(meta.width, 1280), height: num(meta.height, 800), shot: num(meta.shot, 0), url: String(meta.url || '').slice(0, 300), at: String(meta.at || '').slice(0, 40), title: (meta.title || (t ? t[1] : '') || '').trim().slice(0, 200) };
+}
+/** Alle Bilder und Seiten-Dateien im Doku-Ordner (Pfade relativ zum Projekt). */
 function listAssets(root, docDir) {
   const out = [];
   const walk = (dir, depth) => {
@@ -1103,7 +1129,7 @@ function listAssets(root, docDir) {
       if (e.name.startsWith('.')) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory() && depth < 6) walk(p, depth + 1);
-      else if (e.isFile() && IMAGE_EXT.test(e.name) && out.length < 500) out.push({ path: path.relative(root, p).split(path.sep).join('/'), size: fs.statSync(p).size });
+      else if (e.isFile() && ASSET_EXT.test(e.name) && out.length < 2000) out.push({ path: path.relative(root, p).split(path.sep).join('/'), size: fs.statSync(p).size });
     }
   };
   walk(path.join(root, docDir), 0);
@@ -1114,7 +1140,7 @@ export function embedAssets(project, root) {
   const out = {}; let total = 0;
   for (const a of project.assets || []) {
     if (a.size > ASSET_LIMITS.file || total + a.size > ASSET_LIMITS.total) continue;
-    try { out[a.path] = `data:${IMAGE_MIME[a.path.split('.').pop().toLowerCase()]};base64,${fs.readFileSync(path.join(root, a.path)).toString('base64')}`; total += a.size; } catch { /* weg */ }
+    try { out[a.path] = `data:${ASSET_MIME[a.path.split('.').pop().toLowerCase()]};base64,${fs.readFileSync(path.join(root, a.path)).toString('base64')}`; total += a.size; } catch { /* weg */ }
   }
   return out;
 }
@@ -1287,6 +1313,154 @@ const FIND_CLICKABLE = () => {
   }
   return out.slice(0, 40);
 };
+// ── Seiten-Kopie: die gerenderte Seite als HTML mit dem echten CSS, ohne Skripte und ohne Backend ──
+/** Im Browser: DOM klonen, Skripte/Ereignisse entfernen, Zustand (Eingaben) übernehmen, Bilder/Stile als Platzhalter für den Download. */
+const SNAPSHOT = (canvasShots) => {
+  const urls = [];
+  const ref = (u) => {
+    if (!u) return '';
+    if (/^data:image\//i.test(u)) return u.length < 200000 ? u : '';
+    if (/^(data|blob|about|javascript):/i.test(u)) return '';
+    let abs; try { abs = new URL(u, document.baseURI).href; } catch { return ''; }
+    let i = urls.indexOf(abs); if (i < 0) { i = urls.length; urls.push(abs); }
+    return `doku-asset:${i}`;
+  };
+  const cssUrls = (txt) => String(txt).replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (m, q, u) => `url("${ref(u)}")`);
+  const orig = [...document.documentElement.querySelectorAll('*')];
+  const clone = document.documentElement.cloneNode(true);
+  const copy = [...clone.querySelectorAll('*')];
+  const placeholder = (o, c, text) => {
+    const r = o.getBoundingClientRect(); const d = document.createElement('div');
+    d.setAttribute('style', `width:${Math.round(r.width)}px;height:${Math.round(r.height)}px;display:${getComputedStyle(o).display === 'inline' ? 'inline-block' : 'block'};background:repeating-linear-gradient(45deg,#eee,#eee 10px,#f7f7f7 10px,#f7f7f7 20px);color:#888;font:12px sans-serif;text-align:center;line-height:${Math.round(r.height)}px;overflow:hidden`);
+    if (o.className && typeof o.className === 'string') d.className = o.className;
+    d.textContent = text; c.replaceWith(d);
+  };
+  let ci = 0;
+  for (let i = 0; i < orig.length; i++) {
+    const o = orig[i]; const c = copy[i]; const tag = o.tagName;
+    if (tag === 'SCRIPT' || tag === 'NOSCRIPT' || tag === 'BASE' || (tag === 'META' && (o.httpEquiv || o.hasAttribute('charset'))) || (tag === 'LINK' && !/icon/i.test(o.rel)) || tag === 'STYLE') { c.remove(); continue; }
+    if (tag === 'IFRAME' || tag === 'OBJECT' || tag === 'EMBED' || tag === 'FRAME') { placeholder(o, c, 'Eingebettete Seite'); continue; }
+    if (tag === 'CANVAS') {
+      const shot = canvasShots[ci++]; const r = o.getBoundingClientRect();
+      if (!shot) { placeholder(o, c, 'Grafik'); continue; }
+      const img = document.createElement('img'); img.src = shot; img.alt = '';
+      img.setAttribute('style', `${o.getAttribute('style') || ''};width:${Math.round(r.width)}px;height:${Math.round(r.height)}px`);
+      if (o.className && typeof o.className === 'string') img.className = o.className; if (o.id) img.id = o.id;
+      c.replaceWith(img); continue;
+    }
+    for (const a of [...c.attributes]) { if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) c.removeAttribute(a.name); }
+    if (c.hasAttribute('style')) c.setAttribute('style', cssUrls(c.getAttribute('style')));
+    if (tag === 'A' && o.href) { if (/^https?:/i.test(o.href)) c.setAttribute('href', o.href); else c.removeAttribute('href'); }
+    if (tag === 'FORM') c.removeAttribute('action');
+    if (tag === 'IMG') { c.setAttribute('src', ref(o.currentSrc || o.src)); c.removeAttribute('srcset'); c.removeAttribute('sizes'); c.removeAttribute('loading'); }
+    if (tag === 'SOURCE') { c.remove(); continue; }
+    if (tag === 'VIDEO' || tag === 'AUDIO') { c.removeAttribute('src'); c.removeAttribute('autoplay'); if (o.poster) c.setAttribute('poster', ref(o.poster)); }
+    if (tag === 'image' || tag === 'use') { for (const k of ['href', 'xlink:href']) { const v = c.getAttribute(k); if (v && !v.startsWith('#')) c.setAttribute(k, ref(v)); } }
+    if (tag === 'INPUT') {
+      if (o.type === 'checkbox' || o.type === 'radio') { if (o.checked) c.setAttribute('checked', ''); else c.removeAttribute('checked'); }
+      else if (o.type === 'password') c.setAttribute('value', o.value ? 'geheim12' : '');
+      else if (o.type !== 'file') c.setAttribute('value', o.value);
+    }
+    if (tag === 'TEXTAREA') c.textContent = o.value;
+    if (tag === 'OPTION') { if (o.selected) c.setAttribute('selected', ''); else c.removeAttribute('selected'); }
+    if (tag === 'DIALOG' && o.open) c.setAttribute('open', '');
+    if (tag === 'DETAILS' && o.open) c.setAttribute('open', '');
+  }
+  const sheets = [];
+  for (const sh of [...document.styleSheets, ...(document.adoptedStyleSheets || [])]) {
+    if (sh.disabled) continue;
+    let text = null;
+    try { text = [...sh.cssRules].map((r) => r.cssText).join('\n'); } catch { /* andere Domain: lädt Node */ }
+    sheets.push({ href: sh.href || null, text, media: sh.media && sh.media.mediaText && sh.media.mediaText !== 'all' ? sh.media.mediaText : '' });
+  }
+  return { html: clone.outerHTML, urls, sheets, base: document.baseURI, width: innerWidth, height: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0), title: document.title };
+};
+const FILE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'font/woff2': 'woff2', 'font/woff': 'woff', 'application/font-woff': 'woff', 'font/ttf': 'ttf', 'font/otf': 'otf', 'application/x-font-ttf': 'ttf' };
+const attrEsc = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+async function replaceAsync(str, re, fn) {
+  const parts = []; let last = 0;
+  for (const m of str.matchAll(re)) { parts.push(str.slice(last, m.index), fn(...m)); last = m.index + m[0].length; }
+  parts.push(str.slice(last));
+  return (await Promise.all(parts)).join('');
+}
+/** Geöffnete Seite als HTML-Kopie nach pages/<id>.html speichern; Stile nach pages/_css/, Bilder und Schriften nach pages/_files/ (gemeinsam genutzt). */
+export async function capturePage(page, { root, docDir, id, url, shot = 0, outRel = null }) {
+  const pagesDir = path.join(root, docDir, 'pages');
+  fs.mkdirSync(path.join(pagesDir, '_css'), { recursive: true }); fs.mkdirSync(path.join(pagesDir, '_files'), { recursive: true });
+  const hash = (b) => crypto.createHash('sha1').update(b).digest('hex').slice(0, 16);
+  let total = 0; const saved = new Map();
+  const get = async (u) => {
+    try { const r = await page.request.get(u, { timeout: 15_000 }); if (!r.ok()) return null; const buf = await r.body(); if (buf.length > ASSET_LIMITS.file || total + buf.length > 30 * 1024 * 1024) return null; total += buf.length; return { buf, type: String(r.headers()['content-type'] || '').split(';')[0].trim().toLowerCase() }; } catch { return null; }
+  };
+  const saveFile = async (u) => {
+    if (saved.has(u)) return saved.get(u);
+    saved.set(u, null);
+    const got = await get(u); if (!got) return null;
+    let ext = (new URL(u).pathname.match(/\.(png|jpe?g|gif|webp|svg|woff2?|ttf|otf)$/i) || [])[1];
+    ext = (ext || FILE_TYPES[got.type] || '').toLowerCase().replace('jpeg', 'jpg');
+    if (!ext) return null;
+    const name = `_files/${hash(got.buf)}.${ext}`;
+    if (!fs.existsSync(path.join(pagesDir, name))) fs.writeFileSync(path.join(pagesDir, name), got.buf);
+    saved.set(u, name); return name;
+  };
+  const css = async (text, base, depth = 0) => {
+    text = await replaceAsync(text, /@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)['"]?\s*\)?([^;]*);/g, async (m, u, media) => {
+      if (depth > 3) return '';
+      let abs; try { abs = new URL(u, base).href; } catch { return ''; }
+      const got = await get(abs); if (!got) return '';
+      const inner = await css(got.buf.toString('utf8'), abs, depth + 1);
+      return media.trim() ? `@media ${media.trim()} {\n${inner}\n}` : inner;
+    });
+    return replaceAsync(text, /url\(\s*(['"]?)([^'")]+)\1\s*\)/g, async (m, q, u) => {
+      if (/^(data:|#|about:)/i.test(u)) return m;
+      let abs; try { abs = new URL(u, base).href; } catch { return 'url("")'; }
+      const rel = await saveFile(abs); return rel ? `url("../${rel}")` : 'url("")';
+    });
+  };
+  // Zeichenflächen (Spiele, Diagramme) als Bild – WebGL lässt sich nur per Bildschirmfoto abgreifen
+  const canvasShots = [];
+  const canvases = page.locator('canvas');
+  for (let i = 0, n = Math.min(await canvases.count().catch(() => 0), 20); i < n; i++) {
+    let rel = '';
+    try { const buf = await canvases.nth(i).screenshot({ timeout: 5000 }); rel = `_files/${hash(buf)}.png`; if (!fs.existsSync(path.join(pagesDir, rel))) fs.writeFileSync(path.join(pagesDir, rel), buf); } catch { /* unsichtbar */ }
+    canvasShots.push(rel ? `doku-file:${rel}` : '');
+  }
+  const snap = await page.evaluate(SNAPSHOT, canvasShots);
+  const links = [];
+  for (const sh of snap.sheets) {
+    let text = sh.text; let base = sh.href || snap.base;
+    if (sh.href && text == null) { const got = await get(sh.href); if (!got) continue; text = got.buf.toString('utf8'); }
+    if (!text || !text.trim()) continue;
+    const out = await css(text, base);
+    const name = `_css/${hash(out)}.css`;
+    if (!fs.existsSync(path.join(pagesDir, name))) fs.writeFileSync(path.join(pagesDir, name), out);
+    links.push(`<link rel="stylesheet" href="${name}"${sh.media ? ` media="${attrEsc(sh.media)}"` : ''}>`);
+  }
+  const rels = await Promise.all(snap.urls.map((u) => saveFile(u)));
+  const depth = outRel ? outRel.split('/').length - 1 : 0;
+  const up = '../'.repeat(depth);
+  let html = snap.html.replace(/doku-asset:(\d+)/g, (m, i) => (rels[Number(i)] ? up + rels[Number(i)] : '')).replace(/doku-file:(_files\/[\w.]+)/g, (m, f) => up + f);
+  const meta = { url, width: snap.width, height: snap.height, shot, at: new Date().toISOString(), title: snap.title };
+  const head = `<meta charset="utf-8">\n<meta name="doku-page" content="${attrEsc(JSON.stringify(meta))}">\n${links.map((l) => l.replace('href="', `href="${up}`)).join('\n')}\n`;
+  html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}\n${head}`) : head + html;
+  html = `<!doctype html>\n<!-- doku: Kopie von ${url.replace(/--/g, '')} – nur Aussehen, ohne Skripte und Backend. Neu aufnehmen: doku screen ${id} -->\n${html}`;
+  if (html.length > 6 * 1024 * 1024) { console.error(`Seite ${id}: Kopie zu groß (${Math.round(html.length / 1e6)} MB) – übersprungen.`); return null; }
+  const rel = outRel || `${id}.html`;
+  fs.mkdirSync(path.dirname(path.join(pagesDir, rel)), { recursive: true });
+  fs.writeFileSync(path.join(pagesDir, rel), html);
+  return { file: path.relative(root, path.join(pagesDir, rel)), size: html.length, files: rels.filter(Boolean).length, sheets: links.length };
+}
+/** Nicht mehr benutzte Stile/Dateien in pages/_css und pages/_files löschen. */
+export function prunePageFiles(root, docDir) {
+  const pagesDir = path.join(root, docDir, 'pages');
+  const used = new Set();
+  const walk = (dir) => { for (const n of safeReaddir(dir)) { const f = path.join(dir, n); let st; try { st = fs.statSync(f); } catch { continue; }
+    if (st.isDirectory()) walk(f); else if (/\.(html|css)$/.test(n)) for (const m of fs.readFileSync(f, 'utf8').matchAll(/_(?:css|files)\/[\w]+\.\w+/g)) used.add(m[0]); } };
+  walk(pagesDir);
+  let n = 0;
+  for (const d of ['_css', '_files']) for (const f of safeReaddir(path.join(pagesDir, d))) if (!used.has(`${d}/${f}`)) { fs.rmSync(path.join(pagesDir, d, f), { force: true }); n++; }
+  return n;
+}
 /** Foto + Bereiche eines geöffneten Bildschirms speichern. linkTo(href) → screen-id für Links zu anderen erfassten Seiten. */
 async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => null, title = '' }) {
   const ext = flags.jpg ? 'jpg' : 'png'; const full = Boolean(flags.full);
@@ -1321,7 +1495,9 @@ async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => n
   if (lines.length) text = setFrontmatter(text, 'hotspots', lines);
   fs.mkdirSync(path.dirname(mdFile), { recursive: true });
   fs.writeFileSync(mdFile, text);
-  return { id, imgRel, mdRel: path.relative(root, mdFile), hotspots: lines.length, open: hotspots.filter((h) => !h.refs).length, existed: exists };
+  let pageRes = null;
+  if (!flags['no-html']) { try { pageRes = await capturePage(page, { root, docDir, id, url, shot: dims.h }); } catch (e) { console.error(`Seite ${id}: HTML-Kopie fehlgeschlagen – ${e.message.split('\n')[0]}`); } }
+  return { id, imgRel, mdRel: path.relative(root, mdFile), hotspots: lines.length, open: hotspots.filter((h) => !h.refs).length, existed: exists, page: pageRes };
 }
 
 async function captureScreen(root, docDir, id, flags) {
@@ -1337,7 +1513,8 @@ async function captureScreen(root, docDir, id, flags) {
     if (flags.wait) await page.locator(String(flags.wait)).first().waitFor({ timeout: 15_000 });
     await page.waitForTimeout(Number(flags.delay) || 500);
     const r = await snapScreen(page, { root, docDir, id, url: String(flags.url), flags, title: await page.title() });
-    out(`Bildschirm ${id}: ${r.mdRel} + ${r.imgRel}${r.hotspots ? `, ${r.hotspots} Hotspots` : ' (Hotspots unverändert)'}.`);
+    prunePageFiles(root, docDir);
+    out(`Bildschirm ${id}: ${r.mdRel} + ${r.imgRel}${r.page ? ` + ${r.page.file} (HTML-Kopie, ${Math.round(r.page.size / 1024)} KB)` : ''}${r.hotspots ? `, ${r.hotspots} Hotspots` : ' (Hotspots unverändert)'}.`);
     if (r.open) out('Hotspots ohne Ziel: Baustein-ID, screen:<id> (führt zu Bildschirm) oder flow:<id> vor die Erklärung schreiben, Unwichtiges löschen.');
     return 0;
   } finally { await browser.close(); }
@@ -1381,7 +1558,8 @@ async function crawlScreens(root, docDir, flags) {
       results.push(await snapScreen(page, { root, docDir, id: pg.id, url: origin + pg.k, flags, title: pg.title, linkTo: (href) => ids.get(norm(href)) || null }));
       await page.context().close();
     }
-    out(`${results.length} Bildschirm(e) erfasst (${results.filter((r) => !r.existed).length} neu): ${results.map((r) => r.id).join(', ')}`);
+    prunePageFiles(root, docDir);
+    out(`${results.length} Bildschirm(e) erfasst (${results.filter((r) => !r.existed).length} neu, ${results.filter((r) => r.page).length} als HTML-Kopie in ${docDir}/pages/): ${results.map((r) => r.id).join(', ')}`);
     if (pages.length >= max) out(`Grenze von ${max} Seiten erreicht – mit --max erhöhen.`);
     out('Jetzt: in screens/*.md die Bausteine (components:) und Ziele der Bereiche ergänzen, Unwichtiges löschen. Ansichten, die man nur über Knöpfe erreicht (Dialoge, Spielzustände), einzeln mit doku screen <id> --url … --click css aufnehmen.');
     return 0;
@@ -1519,6 +1697,12 @@ Rückfragen (im Portal zu Meldungen gestellt):
   doku todo [done <id> "Notiz"]  To-dos aus dem Portal, die Claude erledigen soll
   doku neu                       Was ist neu in den Doku-Vorgaben seit dem Stand dieses Projekts?
 
+Design-Wünsche (im Portal kommentiert, skizziert, im Editor geändert):
+  doku design                    Was zu tun ist (Kommentare, Skizzen als Bild, Editor-Änderungen)
+  doku design propose <id> "Notiz"   Vorschlag liegt in pages/vorschlag/<id>/ bereit
+  doku design done <id> "Notiz"      Bestätigtes Design ist im Code umgesetzt
+  doku screen <id> --url …       nimmt jetzt auch die Seite als HTML-Kopie auf (pages/<id>.html; --no-html: nur Foto)
+
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
 function out(s) { process.stdout.write(s.endsWith('\n') ? s : s + '\n'); }
@@ -1628,7 +1812,7 @@ async function main(argv) {
       const url = (flags.url || process.env.DOKU_URL || '').replace(/\/+$/, '');
       const token = flags.token || process.env.DOKU_TOKEN;
       if (!url || !token) { console.error('doku push braucht --url und --token (oder DOKU_URL / DOKU_TOKEN).'); return 1; }
-      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...p, ...(flags['no-assets'] ? {} : { assetData: embedAssets(p, root) }), answers: readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [], todosDone: readJsonFile(path.join(root, ANSWERS_FILE), {}).todos || [] }) });
+      const res = await fetch(`${url}/api/ingest`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...p, ...(flags['no-assets'] ? {} : { assetData: embedAssets(p, root) }), answers: readJsonFile(path.join(root, ANSWERS_FILE), {}).answers || [], todosDone: readJsonFile(path.join(root, ANSWERS_FILE), {}).todos || [], design: readJsonFile(path.join(root, ANSWERS_FILE), {}).design || [] }) });
       const txt = await res.text();
       if (!res.ok) { console.error(`Push fehlgeschlagen (${res.status}): ${txt}`); return 1; }
       out(`Gesendet: ${p.id} → ${url} (${p.stats.components} Komponenten, ${p.stats.errors} Fehler)`);
@@ -1713,6 +1897,10 @@ async function main(argv) {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
       return askCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
     }
+    case 'design': {
+      const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
+      return designCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
+    }
     case 'hook': return hook(pos[0], flags);
     default: console.error(`Unbekannter Befehl "${cmd}".\n\n${HELP}`); return 1;
   }
@@ -1781,6 +1969,83 @@ async function todoCommand(root, project, pos, flags, cli) {
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, JSON.stringify(data, null, 1) + '\n');
   out(`To-do ${id} in ${ANSWERS_FILE} als erledigt vermerkt. Mit committen – das Portal übernimmt es, sobald der Commit im Hauptzweig ist.`);
+  return 0;
+}
+// ── Design-Wünsche aus dem Portal: erst Vorschlag in der Doku (pages/vorschlag/<id>/), nach Bestätigung im Code ──
+export const DESIGN_FILE = '.claude/doku/design.json';
+export const DESIGN_DIR = '.claude/doku/design';
+/** Offene Design-Wünsche: aus design.json (vom Server) bzw. – mit Portal-Token – live, inkl. Bilder nach .claude/doku/design/. */
+export async function readDesign(root, project, { live = true } = {}) {
+  let list = readJsonFile(path.join(root, DESIGN_FILE), {}).requests || [];
+  const cfg = portalConfig(root);
+  if (live && cfg.url && cfg.token) {
+    try {
+      list = (await portal(root, 'GET', `/api/design/${encodeURIComponent(project.id)}/claude`)).requests || [];
+      const dir = path.join(root, DESIGN_DIR);
+      for (const r of list) for (const it of r.items || []) {
+        if (it.imageData && /^[\w-]+\.png$/.test(it.image || '')) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, it.image), Buffer.from(it.imageData.split(',')[1] || '', 'base64')); }
+        if (typeof it.htmlData === 'string' && /^[\w-]+\.html$/.test(it.html || '')) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, it.html), it.htmlData); }
+        delete it.imageData; delete it.htmlData;
+      }
+    } catch { /* offline: Datei gilt */ }
+  }
+  const sent = readJsonFile(path.join(root, ANSWERS_FILE), {}).design || [];
+  // lokal schon gemeldet (noch nicht im Portal angekommen) → nicht nochmal anzeigen
+  return list.filter((r) => !sent.some((d) => d.request === r.id && d.at >= (r.updatedAt || 0) && ((d.status === 'proposed' && r.status !== 'accepted') || (d.status === 'done' && r.status === 'accepted'))));
+}
+const FRAME_NAMES = { phone: 'Handy', tablet: 'Tablet', laptop: 'Laptop', free: 'frei' };
+function formatDesign(r, root, project, cli) {
+  const doc = project.docDir; const L = [];
+  const todo = { sent: 'Vorschlag in der Doku bauen', rework: 'Vorschlag nachbessern', accepted: 'BESTÄTIGT – jetzt im echten Code umsetzen' }[r.status] || r.status;
+  L.push(`### ${r.id} – „${r.title}“ → ${todo}${r.createdBy ? ` (von ${r.createdBy})` : ''}`);
+  if (r.note) L.push(`Wunsch: ${r.note}`);
+  for (const m of (r.messages || []).filter((x) => x.role === 'human').slice(-3)) L.push(`${m.by}${m.action === 'rework' ? ' (nachbessern)' : m.action === 'accept' ? ' (bestätigt)' : ''}: ${m.text}`);
+  const by = new Map(); for (const it of r.items || []) by.set(it.screen, (by.get(it.screen) || []).concat(it));
+  for (const [key, its] of by) {
+    if (key.startsWith('board:')) { const b = (r.boards || []).find((x) => 'board:' + x.id === key) || {}; L.push(`Skizze „${b.title || key}“ (${FRAME_NAMES[b.frame] || b.frame || ''} ${b.w || ''}×${b.h || ''}) – neue Oberfläche:`); }
+    else { const sc = project.screens.find((x) => x.id === key); L.push(`Bildschirm ${key}${sc && sc.page ? `: ${sc.page.file}` : sc && sc.image ? ` (nur Bild ${sc.image})` : ''}:`); }
+    for (const it of its) {
+      if (it.kind === 'comment') { L.push(`- Kommentar an ${it.target ? it.target.label : 'Stelle'}${it.target && it.target.sel ? ` (${it.target.sel})` : ''}: „${it.text}“`); for (const m of it.messages || []) L.push(`  ${m.by}: ${m.text}`); continue; }
+      L.push(`- Variante ${it.variant}${it.text ? `: ${it.text}` : ''}`);
+      for (const o of it.ops || []) L.push(`  · ${o.desc || o.op}${o.sel ? ` [${o.sel}]` : ''}`);
+      if ((it.elements || []).length) L.push(`  · Elemente (x,y Breite×Höhe in px): ${it.elements.map((e) => `${e.type}${e.text ? ` „${e.text.replace(/\n/g, ' / ')}“` : ''} ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.w)}×${Math.round(e.h)}${e.color ? ' ' + e.color : ''}`).join('; ')}`);
+      if (it.image) L.push(`  · Skizze als Bild: ${DESIGN_DIR}/${it.image}${it.strokes ? ` (${it.strokes} Striche${(it.texts || []).length ? `, Beschriftung: ${it.texts.map((t) => `„${t}“`).join(', ')}` : ''})` : ''} – ansehen!`);
+      if (it.html) L.push(`  · Bearbeitete Seite (nur <body>): ${DESIGN_DIR}/${it.html}`);
+    }
+  }
+  if (r.status === 'accepted') L.push(`Umsetzen: Vorlage ${doc}/pages/vorschlag/${r.id}/ in den echten Code übertragen und testen. Danach Bildschirme neu aufnehmen (doku screen …), Ordner ${doc}/pages/vorschlag/${r.id}/ löschen, Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
+  else L.push(`Vorschlag: ${(r.items || []).some((it) => !it.screen.startsWith('board:')) ? `betroffene Seite aus ${doc}/pages/<bildschirm>.html nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html kopieren und dort das Aussehen ändern (nur HTML/CSS; Pfade dann ../../_css/…, ../../_files/…; eigene Stile in <style>). ` : ''}${(r.items || []).some((it) => it.screen.startsWith('board:')) ? `Für Skizzen neue Seiten ${doc}/pages/vorschlag/${r.id}/<name>.html anlegen (vollständiges HTML mit <style>, Kopfzeile <meta name="doku-page" content='{"width":…,"height":…,"title":"…"}'>). ` : ''}Noch NICHT den echten Code ändern. Dann: node ${cli} design propose ${r.id} "was der Vorschlag ändert"`);
+  return L.join('\n');
+}
+async function designCommand(root, project, pos, flags, cli) {
+  const sub = pos[0];
+  if (sub !== 'propose' && sub !== 'done') {
+    const list = await readDesign(root, project);
+    if (!list.length) { out('Keine offenen Design-Wünsche.'); return 0; }
+    out([`${list.length} Design-Wunsch/-Wünsche aus dem Portal. Ablauf: erst Vorschlag in der Doku (Nutzer sieht und bestätigt ihn im Portal), erst danach den Code ändern.`, '', ...list.flatMap((r) => [formatDesign(r, root, project, cli), ''])].join('\n'));
+    return 0;
+  }
+  const id = pos[1]; const text = pos.slice(2).join(' ').trim() || (typeof flags.text === 'string' ? flags.text : '');
+  if (!/^w[0-9a-f]{6}$/.test(id || '')) { console.error(`doku design ${sub} <id> "Notiz"   (id wie w1a2b3c, siehe doku design)`); return 1; }
+  const status = sub === 'propose' ? 'proposed' : 'done';
+  if (status === 'proposed') {
+    const dir = path.join(root, project.docDir, 'pages', 'vorschlag', id);
+    const files = safeReaddir(dir).filter((n) => n.endsWith('.html'));
+    if (!files.length) { console.error(`Kein Vorschlag gefunden: ${path.relative(root, dir)}/<bildschirm>.html anlegen (siehe doku design).`); return 1; }
+  }
+  const req = (await readDesign(root, project)).find((r) => r.id === id);
+  const cfg = portalConfig(root);
+  if (cfg.url && cfg.token) {
+    try { await portal(root, 'POST', `/api/design/${encodeURIComponent(project.id)}/claude/${id}`, { status, text }); out(`Design-Wunsch ${id} im Portal als ${status === 'proposed' ? '„Vorschlag da“' : '„umgesetzt“'} gemeldet.${status === 'proposed' ? ' Den Vorschlag committen und pushen, damit er im Portal erscheint.' : ''}`); return 0; }
+    catch (e) { console.error(`${e.message} – speichere im Repository.`); }
+  }
+  const f = path.join(root, ANSWERS_FILE);
+  const data = readJsonFile(f, {});
+  data.design = (data.design || []).filter((d) => !(d.request === id && d.status === status)).concat({ request: id, status, text: text.slice(0, 4000), aid: 'a' + crypto.randomBytes(6).toString('hex'), at: Date.now() }).slice(-100);
+  for (const t of (req && req.todos) || []) if (!(data.todos || []).some((d) => d.id === t)) data.todos = (data.todos || []).concat({ id: t, note: `Design ${id}: ${status === 'proposed' ? 'Vorschlag bereit' : 'umgesetzt'}`, at: Date.now() }).slice(-200);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(data, null, 1) + '\n');
+  out(`Design-Wunsch ${id}: ${status === 'proposed' ? 'Vorschlag' : 'Umsetzung'} in ${ANSWERS_FILE} vermerkt. Mit committen und pushen – das Portal übernimmt es, sobald der Commit im Hauptzweig ist.`);
   return 0;
 }
 function formatQuestion(q) {
@@ -1953,6 +2218,8 @@ async function hook(kind, flags) {
       if (rules.length) out(formatRules(rules, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')));
       const todos = await readTodos(root, p);
       if (todos.length) out(`doku: ${todos.length} To-do(s) aus dem Portal für Claude (${todos.slice(0, 3).map((t) => `„${String(t.text).slice(0, 60)}“`).join(', ')}${todos.length > 3 ? ' …' : ''}). Erst mit dem Nutzer abstimmen, ob sie jetzt dran sind. Details: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} todo`);
+      const ds = await readDesign(root, p);
+      if (ds.length) out(`doku: ${ds.length} Design-Wunsch/-Wünsche aus dem Portal (${ds.slice(0, 3).map((r) => `„${String(r.title).slice(0, 50)}“ ${r.status === 'accepted' ? '(bestätigt → Code)' : r.status === 'rework' ? '(nachbessern)' : '(Vorschlag bauen)'}`).join(', ')}). Mit dem Nutzer abstimmen, ob jetzt dran. Details: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} design`);
       const qs = await readQuestions(root, p);
       if (qs.length) out(`doku: ${qs.length} Rückfrage(n) aus dem Portal warten auf Antwort (${qs.slice(0, 3).map((q) => `„${String((q.subject && q.subject.title) || q.question).slice(0, 60)}“`).join(', ')}${qs.length > 3 ? ' …' : ''}). Nebenbei beantworten: node ${path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/')} ask`);
       if (p.components.length && p.standard < STANDARD) {
