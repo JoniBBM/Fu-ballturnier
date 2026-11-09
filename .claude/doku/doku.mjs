@@ -29,6 +29,7 @@ export const STANDARDS = [
   { n: 6, date: '2026-10-26', text: 'Bildschirm für jede Seite und jeden wichtigen Zustand (doku screen --crawl, --click); jeder Baustein hat eine Beschreibung (summary), jede Datei eine Erklärung in files:. Ziel: doku coverage ohne Lücken.' },
   { n: 7, date: '2026-11-08', text: 'Oberfläche als echte HTML-Kopie: doku screen speichert jede Seite zusätzlich nach pages/ (HTML+CSS ohne Skripte) – alle Bildschirme einmal neu aufnehmen. Design-Wünsche aus dem Portal (Kommentare, Skizzen, Editor) mit doku design abarbeiten: erst Vorschlag in pages/vorschlag/<id>/, nach Bestätigung im Code.' },
   { n: 8, date: '2026-11-08', text: 'Unterseiten und Zustände (Dialog, Reiter, Einstellungsbereich) in screens/*.md mit parent: <bildschirm-id> unter ihre Seite hängen – daraus baut das Portal den Seitenbaum der Oberfläche.' },
+  { n: 9, date: '2026-11-08', text: 'Offene Menüs und Zustände: doku screen nimmt aufklappbare Menüs, Reiter und Aufklapper jetzt mit auf (pages/<id>.s<n>.html); Dialoge, die nur ein Knopf öffnet, mit --state "css | Name" ergänzen. Danach die Design-Vorlage erzeugen: doku kit (Knöpfe, Felder, Karten … der App als Palette im Editor).' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
@@ -471,7 +472,14 @@ export function loadProject(root, opts = {}) {
   }
   project.screens.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, 'de'));
   // HTML-Kopien der Seiten (pages/<id>.html) und Design-Vorschläge von Claude (pages/vorschlag/<wunsch>/<id>.html)
-  for (const sc of project.screens) { const pg = readPageMeta(root, `${docDir}/pages/${sc.id}.html`); if (pg) sc.page = pg; }
+  const pageFiles = safeReaddir(path.join(root, docDir, 'pages'));
+  for (const sc of project.screens) {
+    const pg = readPageMeta(root, `${docDir}/pages/${sc.id}.html`); if (pg) sc.page = pg;
+    // offene Menüs/Zustände: pages/<id>.s<n>.html
+    sc.states = pageFiles.map((f) => f.match(new RegExp(`^${sc.id.replace(/[.]/g, '\\.')}\\.s(\\d{1,2})\\.html$`))).filter(Boolean).sort((a, b) => a[1] - b[1])
+      .map((m) => { const meta = readPageMeta(root, `${docDir}/pages/${m[0]}`); return meta && meta.state ? { key: `${sc.id}.s${m[1]}`, ...meta } : null; }).filter(Boolean);
+  }
+  project.kit = readKit(root, docDir);
   project.proposals = [];
   const propDir = path.join(root, docDir, 'pages', 'vorschlag');
   for (const req of safeReaddir(propDir).filter((n) => /^[\w-]{1,40}$/.test(n))) {
@@ -1119,7 +1127,21 @@ export function readPageMeta(root, rel) {
   if (m) { try { meta = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')); } catch { /* egal */ } }
   const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(20000, Math.round(Number(v))) : d);
   const t = head.match(/<title[^>]*>([^<]{0,200})<\/title>/i);
-  return { file: rel, width: num(meta.width, 1280), height: num(meta.height, 800), shot: num(meta.shot, 0), url: String(meta.url || '').slice(0, 300), at: String(meta.at || '').slice(0, 40), title: (meta.title || (t ? t[1] : '') || '').trim().slice(0, 200) };
+  const state = meta.state && typeof meta.state === 'object' ? { trigger: String(meta.state.trigger || '').slice(0, 400), label: String(meta.state.label || '').slice(0, 120) } : null;
+  return { file: rel, width: num(meta.width, 1280), height: num(meta.height, 800), shot: num(meta.shot, 0), url: String(meta.url || '').slice(0, 300), at: String(meta.at || '').slice(0, 40), title: (meta.title || (t ? t[1] : '') || '').trim().slice(0, 200), ...(state ? { state } : {}) };
+}
+/** Design-Vorlage (pages/_kit.html): Bausteine der App mit Namen, Gruppe und Vorschaubild. */
+export function readKit(root, docDir) {
+  const rel = `${docDir}/pages/_kit.html`;
+  let html = ''; try { html = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { return null; }
+  const items = [];
+  for (const m of html.matchAll(/<[a-z][^>]*\bdata-kit="([\w-]{1,40})"[^>]*>/gi)) {
+    const tag = m[0]; const a = (n) => { const x = tag.match(new RegExp(`\\b${n}="([^"]*)"`)); return x ? x[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&') : ''; };
+    const img = a('data-kit-img');
+    items.push({ id: m[1], name: a('data-kit-name').slice(0, 120) || m[1], group: a('data-kit-group').slice(0, 60) || 'Bausteine', img: /^_files\/[\w]+\.png$/.test(img) ? `${docDir}/pages/${img}` : '', w: Math.min(2000, Number(a('data-kit-w')) || 0), h: Math.min(2000, Number(a('data-kit-h')) || 0) });
+    if (items.length >= 120) break;
+  }
+  return { file: rel, items };
 }
 /** Alle Bilder und Seiten-Dateien im Doku-Ordner (Pfade relativ zum Projekt). */
 function listAssets(root, docDir) {
@@ -1385,7 +1407,7 @@ async function replaceAsync(str, re, fn) {
   return (await Promise.all(parts)).join('');
 }
 /** Geöffnete Seite als HTML-Kopie nach pages/<id>.html speichern; Stile nach pages/_css/, Bilder und Schriften nach pages/_files/ (gemeinsam genutzt). */
-export async function capturePage(page, { root, docDir, id, url, shot = 0, outRel = null }) {
+export async function capturePage(page, { root, docDir, id, url, shot = 0, outRel = null, extra = null }) {
   const pagesDir = path.join(root, docDir, 'pages');
   fs.mkdirSync(path.join(pagesDir, '_css'), { recursive: true }); fs.mkdirSync(path.join(pagesDir, '_files'), { recursive: true });
   const hash = (b) => crypto.createHash('sha1').update(b).digest('hex').slice(0, 16);
@@ -1441,7 +1463,7 @@ export async function capturePage(page, { root, docDir, id, url, shot = 0, outRe
   const depth = outRel ? outRel.split('/').length - 1 : 0;
   const up = '../'.repeat(depth);
   let html = snap.html.replace(/doku-asset:(\d+)/g, (m, i) => (rels[Number(i)] ? up + rels[Number(i)] : '')).replace(/doku-file:(_files\/[\w.]+)/g, (m, f) => up + f);
-  const meta = { url, width: snap.width, height: snap.height, shot, at: new Date().toISOString(), title: snap.title };
+  const meta = { url, width: snap.width, height: snap.height, shot, at: new Date().toISOString(), title: snap.title, ...(extra || {}) };
   const head = `<meta charset="utf-8">\n<meta name="doku-page" content="${attrEsc(JSON.stringify(meta))}">\n${links.map((l) => l.replace('href="', `href="${up}`)).join('\n')}\n`;
   html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}\n${head}`) : head + html;
   html = `<!doctype html>\n<!-- doku: Kopie von ${url.replace(/--/g, '')} – nur Aussehen, ohne Skripte und Backend. Neu aufnehmen: doku screen ${id} -->\n${html}`;
@@ -1450,6 +1472,140 @@ export async function capturePage(page, { root, docDir, id, url, shot = 0, outRe
   fs.mkdirSync(path.dirname(path.join(pagesDir, rel)), { recursive: true });
   fs.writeFileSync(path.join(pagesDir, rel), html);
   return { file: path.relative(root, path.join(pagesDir, rel)), size: html.length, files: rels.filter(Boolean).length, sheets: links.length };
+}
+// ── Zustände: aufklappbare Menüs, Reiter, Aufklapper (in der Kopie gibt es keine Skripte – deshalb jede offene Fassung als eigene Kopie) ──
+const TRIGGER_JS = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 3 && r.height > 3 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
+  const cssEsc = (x) => (window.CSS && CSS.escape ? CSS.escape(x) : x);
+  const sel = (el) => { const parts = []; for (let e = el; e && e !== document.body && parts.length < 7; e = e.parentElement) {
+    if (e.id && document.querySelectorAll('#' + cssEsc(e.id)).length === 1) { parts.unshift('#' + cssEsc(e.id)); break; }
+    let s = e.tagName.toLowerCase(); const sib = e.parentElement ? [...e.parentElement.children].filter((x) => x.tagName === e.tagName) : [];
+    if (sib.length > 1) s += ':nth-of-type(' + (sib.indexOf(e) + 1) + ')'; parts.unshift(s); } return parts.join(' > '); };
+  const label = (el) => { const t = (el.getAttribute('aria-label') || el.innerText || el.title || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+    const k = el.getAttribute('role') === 'tab' ? 'Reiter' : 'Menü'; return k + (t ? ' „' + t + '“' : ''); };
+  const out = []; const seen = new Set();
+  const q = '[aria-haspopup]:not([aria-haspopup=false]), [aria-expanded=false], [data-toggle], [data-bs-toggle], .dropdown-toggle, .navbar-toggler, .menu-toggle, .hamburger, [role=tab]:not([aria-selected=true]), button[aria-controls], [popovertarget]';
+  for (const el of document.querySelectorAll(q)) {
+    if (!vis(el)) continue; const a = el.closest('a[href]'); if (a && !/^#/.test(a.getAttribute('href') || '')) continue;
+    const s = sel(el); if (seen.has(s)) continue; seen.add(s); out.push({ sel: s, label: label(el) }); if (out.length >= 10) break;
+  }
+  return out;
+})()`;
+const VIS_SIG = () => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
+  return { n: [...document.body.querySelectorAll('*')].filter(vis).length, pop: [...document.querySelectorAll('[role=menu], [role=listbox], [role=dialog], dialog[open], [role=menuitem], .dropdown-menu, [aria-expanded=true], [role=tabpanel]')].filter(vis).length };
+};
+/** Aufklappbare Zustände einer Seite als pages/<id>.s<n>.html aufnehmen. reopen() liefert die Seite frisch im Ausgangszustand. */
+async function captureStates(page, { root, docDir, id, url, flags, reopen }) {
+  const pagesDir = path.join(root, docDir, 'pages');
+  for (const f of safeReaddir(pagesDir)) if (new RegExp(`^${id.replace(/[.]/g, '\\.')}\\.s\\d{1,2}\\.html$`).test(f)) fs.rmSync(path.join(pagesDir, f), { force: true });
+  const explicit = listFlag(flags.state).map((x) => { const [sel, name = ''] = String(x).split(/\s*\|\s*/); return { sel: sel.trim(), label: name.trim() || sel.trim(), explicit: true }; }).filter((x) => x.sel);
+  const auto = flags['no-states'] ? [] : await page.evaluate(TRIGGER_JS).catch(() => []);
+  const triggers = explicit.concat(auto.filter((a) => !explicit.some((e) => e.sel === a.sel))).slice(0, 12);
+  const out = []; let k = 0;
+  for (const t of triggers) {
+    let pg = null;
+    try {
+      pg = await reopen();
+      const before = await pg.evaluate(VIS_SIG); const u0 = pg.url();
+      await pg.locator(t.sel).first().click({ timeout: 3000 });
+      await pg.waitForTimeout(Number(flags['state-delay']) || 450);
+      if (pg.url().split('#')[0] !== u0.split('#')[0] && !t.explicit) continue;   // führt woandershin: kein Zustand
+      const after = await pg.evaluate(VIS_SIG);
+      if (!t.explicit && !(after.n - before.n >= 2 || after.pop > before.pop)) continue;
+      k++;
+      const r = await capturePage(pg, { root, docDir, id, url, outRel: `${id}.s${k}.html`, extra: { state: { trigger: t.sel, label: t.label } } });
+      if (r) out.push({ key: `${id}.s${k}`, label: t.label });
+    } catch (e) { if (t.explicit) console.error(`Zustand „${t.label}“ (${t.sel}): ${e.message.split('\n')[0]}`); }
+    finally { if (pg && pg !== page) await pg.context().close().catch(() => {}); }
+  }
+  return out;
+}
+
+// ── Design-Vorlage (doku kit): Bausteine der App aus den Seiten-Kopien, mit Vorschaubild ──
+const KIT_JS = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 6 && r.height > 6 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
+  const txt = (el) => (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('placeholder') || el.getAttribute('alt') || '').trim().replace(/\\s+/g, ' ').slice(0, 30);
+  const groups = [
+    ['Knöpfe', 'Knopf', 'button, [role=button], input[type=submit], input[type=button], a[class*=btn i], a[class*=button i]', 10, 3000],
+    ['Eingabefelder', 'Feld', 'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), select, textarea', 6, 3000],
+    ['Leisten', 'Leiste', 'header, nav', 3, 15000],
+    ['Reiter', 'Reiter', '[role=tablist]', 2, 8000],
+    ['Karten', 'Karte', 'article, section, div, li', 6, 15000],
+    ['Abzeichen', 'Abzeichen', 'span, small, mark, em', 6, 1500],
+    ['Überschriften', 'Überschrift', 'h1, h2, h3', 3, 1500],
+    ['Tabellen', 'Tabelle', 'table', 2, 15000],
+    ['Listen', 'Liste', 'ul[class], ol[class]', 3, 8000],
+  ];
+  const isCard = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); const framed = (parseFloat(s.borderTopWidth) > 0 || s.boxShadow !== 'none') && parseFloat(s.borderTopLeftRadius) >= 4;
+    return framed && r.width > 120 && r.width < 820 && r.height > 50 && r.height < 600 && el.children.length >= 2; };
+  const isBadge = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return r.height <= 28 && r.height >= 12 && parseFloat(s.borderTopLeftRadius) >= 4 && s.backgroundColor !== 'rgba(0, 0, 0, 0)' && (el.innerText || '').trim().length > 0 && (el.innerText || '').trim().length < 24; };
+  const out = []; let idx = 0;
+  for (const [group, one, q, max, maxLen] of groups) {
+    let n = 0;
+    for (const el of document.querySelectorAll(q)) {
+      if (n >= max || !vis(el)) continue;
+      if (group === 'Karten' && !isCard(el)) continue;
+      if (group === 'Abzeichen' && !isBadge(el)) continue;
+      if (group === 'Listen' && el.children.length < 3) continue;
+      const html = el.outerHTML; if (html.length > maxLen) continue;
+      const cls = [...el.classList].filter((c) => !/^(active|is-|has-|show|open|selected|focus|hover|disabled)/.test(c)).sort().join('.');
+      const sig = group + ':' + el.tagName + '.' + cls + (cls ? '' : ':' + getComputedStyle(el).backgroundColor);
+      const r = el.getBoundingClientRect(); const t = txt(el);
+      el.setAttribute('data-doku-kit', String(idx));
+      out.push({ idx: idx++, group, name: one + (t ? ' „' + t + '“' : cls ? ' (' + cls.replace(/\\./g, ' ') + ')' : ''), sig, html, w: Math.round(r.width), h: Math.round(r.height) });
+      n++;
+    }
+  }
+  return out;
+})()`;
+async function kitCommand(root, docDir) {
+  const p = loadProject(root, { docDir, checkPaths: false, git: false });
+  const pages = p.screens.filter((sc) => sc.page);
+  if (!pages.length) { console.error('Noch keine Seiten-Kopien – erst die Bildschirme aufnehmen: doku screen --crawl http://localhost:<port>'); return 1; }
+  const pw = await loadPlaywright(root);
+  if (!pw) { console.error('doku kit braucht Playwright (npm i -D playwright && npx playwright install chromium).'); return 1; }
+  const pagesDir = path.join(root, docDir, 'pages');
+  const hash = (b) => crypto.createHash('sha1').update(b).digest('hex').slice(0, 16);
+  const items = []; const sigs = new Set(); const css = [];
+  const browser = await pw.chromium.launch();
+  try {
+    for (const sc of pages) {
+      const file = path.join(root, sc.page.file);
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(/<link rel="stylesheet" href="(_css\/\w+\.css)"(?: media="([^"]*)")?>/g)) if (!css.some((c) => c[0] === m[1])) css.push([m[1], m[2] || '']);
+      const ctx = await browser.newContext({ viewport: { width: sc.page.width || 1280, height: 900 } });
+      const page = await ctx.newPage();
+      try {
+        await page.goto(pathToFileURL(file).href, { waitUntil: 'load', timeout: 20_000 });
+        for (const f of await page.evaluate(KIT_JS)) {
+          if (sigs.has(f.sig) || items.length >= 60) continue;
+          sigs.add(f.sig);
+          let img = '';
+          try { const buf = await page.locator(`[data-doku-kit="${f.idx}"]`).first().screenshot({ timeout: 4000, animations: 'disabled' }); img = `_files/kit${hash(buf)}.png`; if (!fs.existsSync(path.join(pagesDir, img))) fs.writeFileSync(path.join(pagesDir, img), buf); } catch { /* unsichtbar */ }
+          items.push({ ...f, img, id: 'k' + (items.length + 1), html: f.html.replace(/ data-doku-kit="\d+"/g, '') });
+        }
+      } finally { await ctx.close(); }
+    }
+  } finally { await browser.close(); }
+  const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const groups = [...new Set(items.map((x) => x.group))];
+  const html = `<!doctype html>
+<!-- doku: Design-Vorlage – Bausteine der App für den Editor im Portal. Neu erzeugen: doku kit. Eigene Bausteine: Element mit data-kit="id" data-kit-name="Name" data-kit-group="Gruppe" ergänzen. -->
+<html><head><meta charset="utf-8">
+<meta name="doku-page" content="${esc(JSON.stringify({ width: 1280, height: 1600, title: 'Design-Vorlage', kit: true, at: new Date().toISOString() }))}">
+${css.map(([h, m]) => `<link rel="stylesheet" href="${h}"${m ? ` media="${esc(m)}"` : ''}>`).join('\n')}
+<style>.doku-kit{padding:28px;display:grid;gap:28px}.doku-kit-group>h2{margin:0 0 12px;font:600 12px/1.2 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#6b7280}.doku-kit-row{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}.doku-kit-item{max-width:100%}</style>
+<title>Design-Vorlage</title></head><body><main class="doku-kit">
+${groups.map((g) => `<section class="doku-kit-group"><h2>${esc(g)}</h2><div class="doku-kit-row">
+${items.filter((x) => x.group === g).map((x) => `<div class="doku-kit-item" data-kit="${x.id}" data-kit-name="${esc(x.name)}" data-kit-group="${esc(g)}" data-kit-img="${x.img}" data-kit-w="${x.w}" data-kit-h="${x.h}">${x.html}</div>`).join('\n')}
+</div></section>`).join('\n')}
+</main></body></html>
+`;
+  fs.writeFileSync(path.join(pagesDir, '_kit.html'), html);
+  prunePageFiles(root, docDir);
+  out(`Design-Vorlage: ${path.relative(root, path.join(pagesDir, '_kit.html'))} mit ${items.length} Baustein(en) (${groups.map((g) => `${g} ${items.filter((x) => x.group === g).length}`).join(', ')}).`);
+  out('Prüfen: Namen in data-kit-name verständlich machen, Doppeltes löschen, fehlende Bausteine (z. B. Dialog, Fehlermeldung) mit echten Klassen aus dem Code ergänzen.');
+  return 0;
 }
 /** Nicht mehr benutzte Stile/Dateien in pages/_css und pages/_files löschen. */
 export function prunePageFiles(root, docDir) {
@@ -1463,7 +1619,7 @@ export function prunePageFiles(root, docDir) {
   return n;
 }
 /** Foto + Bereiche eines geöffneten Bildschirms speichern. linkTo(href) → screen-id für Links zu anderen erfassten Seiten. */
-async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => null, title = '' }) {
+async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => null, title = '', reopen = null }) {
   const ext = flags.jpg ? 'jpg' : 'png'; const full = Boolean(flags.full);
   const dims = await page.evaluate((f) => ({ w: f ? document.documentElement.scrollWidth : innerWidth, h: f ? document.documentElement.scrollHeight : innerHeight }), full);
   const pct = (r) => {   // Prozent der Bildgröße, auf das Bild beschnitten
@@ -1497,8 +1653,12 @@ async function snapScreen(page, { root, docDir, id, url, flags, linkTo = () => n
   fs.mkdirSync(path.dirname(mdFile), { recursive: true });
   fs.writeFileSync(mdFile, text);
   let pageRes = null;
-  if (!flags['no-html']) { try { pageRes = await capturePage(page, { root, docDir, id, url, shot: dims.h }); } catch (e) { console.error(`Seite ${id}: HTML-Kopie fehlgeschlagen – ${e.message.split('\n')[0]}`); } }
-  return { id, imgRel, mdRel: path.relative(root, mdFile), hotspots: lines.length, open: hotspots.filter((h) => !h.refs).length, existed: exists, page: pageRes };
+  let states = [];
+  if (!flags['no-html']) {
+    try { pageRes = await capturePage(page, { root, docDir, id, url, shot: dims.h }); } catch (e) { console.error(`Seite ${id}: HTML-Kopie fehlgeschlagen – ${e.message.split('\n')[0]}`); }
+    if (pageRes && reopen) { try { states = await captureStates(page, { root, docDir, id, url, flags, reopen }); } catch (e) { console.error(`Seite ${id}: Zustände nicht aufgenommen – ${e.message.split('\n')[0]}`); } }
+  }
+  return { id, imgRel, mdRel: path.relative(root, mdFile), hotspots: lines.length, open: hotspots.filter((h) => !h.refs).length, existed: exists, page: pageRes, states };
 }
 
 async function captureScreen(root, docDir, id, flags) {
@@ -1513,9 +1673,17 @@ async function captureScreen(root, docDir, id, flags) {
     for (const sel of listFlag(flags.click)) { await page.locator(String(sel)).first().click(); await page.waitForTimeout(400); }
     if (flags.wait) await page.locator(String(flags.wait)).first().waitFor({ timeout: 15_000 });
     await page.waitForTimeout(Number(flags.delay) || 500);
-    const r = await snapScreen(page, { root, docDir, id, url: String(flags.url), flags, title: await page.title() });
+    const reopen = async () => {
+      const pg = await openPage(browser, String(flags.url), flags);
+      for (const sel of listFlag(flags.click)) { await pg.locator(String(sel)).first().click(); await pg.waitForTimeout(400); }
+      if (flags.wait) await pg.locator(String(flags.wait)).first().waitFor({ timeout: 15_000 });
+      await pg.waitForTimeout(Number(flags.delay) || 500);
+      return pg;
+    };
+    const r = await snapScreen(page, { root, docDir, id, url: String(flags.url), flags, title: await page.title(), reopen });
     prunePageFiles(root, docDir);
     out(`Bildschirm ${id}: ${r.mdRel} + ${r.imgRel}${r.page ? ` + ${r.page.file} (HTML-Kopie, ${Math.round(r.page.size / 1024)} KB)` : ''}${r.hotspots ? `, ${r.hotspots} Hotspots` : ' (Hotspots unverändert)'}.`);
+    if (r.states.length) out(`Zustände: ${r.states.map((x) => x.label).join(', ')}`);
     if (r.open) out('Hotspots ohne Ziel: Baustein-ID, screen:<id> (führt zu Bildschirm) oder flow:<id> vor die Erklärung schreiben, Unwichtiges löschen.');
     return 0;
   } finally { await browser.close(); }
@@ -1556,11 +1724,14 @@ async function crawlScreens(root, docDir, flags) {
     for (const pg of pages) {
       const page = await openPage(browser, origin + pg.k, flags);
       await page.waitForTimeout(Number(flags.delay) || 500);
-      results.push(await snapScreen(page, { root, docDir, id: pg.id, url: origin + pg.k, flags, title: pg.title, linkTo: (href) => ids.get(norm(href)) || null }));
+      const reopen = async () => { const p2 = await openPage(browser, origin + pg.k, flags); await p2.waitForTimeout(Number(flags.delay) || 500); return p2; };
+      results.push(await snapScreen(page, { root, docDir, id: pg.id, url: origin + pg.k, flags, title: pg.title, linkTo: (href) => ids.get(norm(href)) || null, reopen }));
       await page.context().close();
     }
     prunePageFiles(root, docDir);
     out(`${results.length} Bildschirm(e) erfasst (${results.filter((r) => !r.existed).length} neu, ${results.filter((r) => r.page).length} als HTML-Kopie in ${docDir}/pages/): ${results.map((r) => r.id).join(', ')}`);
+    const st = results.flatMap((r) => r.states.map((x) => `${r.id}: ${x.label}`)); if (st.length) out(`Zustände (offene Menüs/Reiter): ${st.join(', ')}`);
+    out('Danach die Design-Vorlage erzeugen: doku kit');
     if (pages.length >= max) out(`Grenze von ${max} Seiten erreicht – mit --max erhöhen.`);
     out('Jetzt: in screens/*.md die Bausteine (components:) und Ziele der Bereiche ergänzen, Unwichtiges löschen. Ansichten, die man nur über Knöpfe erreicht (Dialoge, Spielzustände), einzeln mit doku screen <id> --url … --click css aufnehmen.');
     return 0;
@@ -1703,6 +1874,8 @@ Design-Wünsche (im Portal kommentiert, skizziert, im Editor geändert):
   doku design propose <id> "Notiz"   Vorschlag liegt in pages/vorschlag/<id>/ bereit
   doku design done <id> "Notiz"      Bestätigtes Design ist im Code umgesetzt
   doku screen <id> --url …       nimmt jetzt auch die Seite als HTML-Kopie auf (pages/<id>.html; --no-html: nur Foto)
+                                 samt offenen Menüs/Reitern (pages/<id>.s<n>.html; --state "css | Name" für Dialoge; --no-states)
+  doku kit                       Design-Vorlage aus den Seiten-Kopien (pages/_kit.html) – Palette im Editor
 
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
 
@@ -1898,6 +2071,7 @@ async function main(argv) {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
       return askCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
     }
+    case 'kit': return kitCommand(needRoot(), docDir);
     case 'design': {
       const root = needRoot(); const p = loadProject(root, { docDir, checkPaths: false, git: false });
       return designCommand(root, p, pos, flags, path.relative(root, fileURLToPath(import.meta.url)).split(path.sep).join('/'));
@@ -2009,7 +2183,7 @@ function formatDesign(r, root, project, cli) {
       if (it.kind === 'comment') { L.push(`- Kommentar an ${it.target ? it.target.label : 'Stelle'}${it.target && it.target.sel ? ` (${it.target.sel})` : ''}: „${it.text}“`); for (const m of it.messages || []) L.push(`  ${m.by}: ${m.text}`); continue; }
       L.push(`- Variante ${it.variant}${it.text ? `: ${it.text}` : ''}`);
       for (const o of it.ops || []) L.push(`  · ${o.desc || o.op}${o.sel ? ` [${o.sel}]` : ''}`);
-      if ((it.elements || []).length) L.push(`  · Elemente (x,y Breite×Höhe in px): ${it.elements.map((e) => `${e.type}${e.text ? ` „${e.text.replace(/\n/g, ' / ')}“` : ''} ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.w)}×${Math.round(e.h)}${e.color ? ' ' + e.color : ''}`).join('; ')}`);
+      if ((it.elements || []).length) L.push(`  · Elemente (x,y Breite×Höhe in px): ${it.elements.map((e) => `${e.type === 'kit' ? `Baustein „${e.name || e.kit}“ (Vorlage ${e.kit})` : e.type}${e.text ? ` „${e.text.replace(/\n/g, ' / ')}“` : ''} ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.w)}×${Math.round(e.h)}${e.color ? ' ' + e.color : ''}`).join('; ')}`);
       if (it.image) L.push(`  · Skizze als Bild: ${DESIGN_DIR}/${it.image}${it.strokes ? ` (${it.strokes} Striche${(it.texts || []).length ? `, Beschriftung: ${it.texts.map((t) => `„${t}“`).join(', ')}` : ''})` : ''} – ansehen!`);
       if (it.html) L.push(`  · Bearbeitete Seite (nur <body>): ${DESIGN_DIR}/${it.html}`);
     }
