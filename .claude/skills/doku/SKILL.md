@@ -58,6 +58,7 @@ Im Portal kommentiert der Nutzer Elemente der echten Seiten, zeichnet mit Stift/
 2. Der Nutzer vergleicht im Portal Original und Vorschlag und bestätigt (oder bessert nach).
 3. **Bestätigt**: Vorschlag in den echten Code übertragen, testen, Bildschirme neu aufnehmen, `pages/vorschlag/<id>/` löschen, Doku anpassen, `node .claude/doku/doku.mjs design done <id> "Notiz"`.
 **Im Portal gestaltet** („FERTIG GESTALTET“, `.claude/doku/design/<id>-gen.html`): Das ist die abgestimmte Vorlage. Steht „direkt freigegeben“ dabei, entfällt der Vorschlag: gleich wie Schritt 3 umsetzen. Neue Seiten dort anbinden, wo „erreichbar von … über …“ steht (Route, Menüpunkt, Knopf), vorhandene Komponenten und Stile der App nutzen.
+**Seitenplan:** „VERKNÜPFUNG“ heißt: auf der genannten Seite einen Knopf/Link (vorhandenen nutzen oder neu einbauen) zur Zielseite. Unter „Seitenplan“ stehen Wünsche für neue Seiten. „ENTFERNEN (Bereich abgedeckt)“ und „ausgeblendet“ heißen: dieses Element soll weg.
 Wie To-dos: erst mit dem Nutzer klären, ob es jetzt dran ist.
 
 ## Regeln vom Nutzer (verbindlich)
