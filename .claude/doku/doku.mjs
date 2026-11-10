@@ -30,6 +30,7 @@ export const STANDARDS = [
   { n: 7, date: '2026-11-08', text: 'Oberfläche als echte HTML-Kopie: doku screen speichert jede Seite zusätzlich nach pages/ (HTML+CSS ohne Skripte) – alle Bildschirme einmal neu aufnehmen. Design-Wünsche aus dem Portal (Kommentare, Skizzen, Editor) mit doku design abarbeiten: erst Vorschlag in pages/vorschlag/<id>/, nach Bestätigung im Code.' },
   { n: 8, date: '2026-11-08', text: 'Unterseiten und Zustände (Dialog, Reiter, Einstellungsbereich) in screens/*.md mit parent: <bildschirm-id> unter ihre Seite hängen – daraus baut das Portal den Seitenbaum der Oberfläche.' },
   { n: 9, date: '2026-11-08', text: 'Offene Menüs und Zustände: doku screen nimmt aufklappbare Menüs, Reiter und Aufklapper jetzt mit auf (pages/<id>.s<n>.html); Dialoge, die nur ein Knopf öffnet, mit --state "css | Name" ergänzen. Danach die Design-Vorlage erzeugen: doku kit (Knöpfe, Felder, Karten … der App als Palette im Editor).' },
+  { n: 10, date: '2026-11-10', text: 'Im Portal gestaltete Seiten: doku design zeigt sie als FERTIG GESTALTET (.claude/doku/design/<id>-gen.html) – das ist die Vorlage. „Direkt freigegeben“ heißt: ohne Vorschlag gleich im Code umsetzen; neue Seiten dort anbinden, wo „erreichbar von … über …“ steht.' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
@@ -2160,7 +2161,8 @@ export async function readDesign(root, project, { live = true } = {}) {
       for (const r of list) for (const it of r.items || []) {
         if (it.imageData && /^[\w-]+\.png$/.test(it.image || '')) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, it.image), Buffer.from(it.imageData.split(',')[1] || '', 'base64')); }
         if (typeof it.htmlData === 'string' && /^[\w-]+\.html$/.test(it.html || '')) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, it.html), it.htmlData); }
-        delete it.imageData; delete it.htmlData;
+        if (typeof it.genData === 'string' && /^[\w-]+\.html$/.test(it.gen || '')) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, it.gen), it.genData); }
+        delete it.imageData; delete it.htmlData; delete it.genData;
       }
     } catch { /* offline: Datei gilt */ }
   }
@@ -2177,7 +2179,12 @@ function formatDesign(r, root, project, cli) {
   for (const m of (r.messages || []).filter((x) => x.role === 'human').slice(-3)) L.push(`${m.by}${m.action === 'rework' ? ' (nachbessern)' : m.action === 'accept' ? ' (bestätigt)' : ''}: ${m.text}`);
   const by = new Map(); for (const it of r.items || []) by.set(it.screen, (by.get(it.screen) || []).concat(it));
   for (const [key, its] of by) {
-    if (key.startsWith('board:')) { const b = (r.boards || []).find((x) => 'board:' + x.id === key) || {}; L.push(`Skizze „${b.title || key}“ (${FRAME_NAMES[b.frame] || b.frame || ''} ${b.w || ''}×${b.h || ''}) – neue Oberfläche:`); }
+    if (key.startsWith('board:')) {
+      const b = (r.boards || []).find((x) => 'board:' + x.id === key) || {};
+      const from = b.from && project.screens.find((x) => x.id === b.from.screen);
+      L.push(`Neue Seite „${b.title || key}“ (${FRAME_NAMES[b.frame] || b.frame || ''} ${b.w || ''}×${b.h || ''})${b.from ? ` – erreichbar von Bildschirm ${b.from.screen}${from && from.url ? ` (${from.url})` : ''}${b.from.via ? ` über ${b.from.via}` : ''}` : ''}:`);
+      if (b.desc) L.push(`  Beschreibung: ${b.desc.replace(/\n+/g, ' ')}`);
+    }
     else { const sc = project.screens.find((x) => x.id === key); L.push(`Bildschirm ${key}${sc && sc.page ? `: ${sc.page.file}` : sc && sc.image ? ` (nur Bild ${sc.image})` : ''}:`); }
     for (const it of its) {
       if (it.kind === 'comment') { L.push(`- Kommentar an ${it.target ? it.target.label : 'Stelle'}${it.target && it.target.sel ? ` (${it.target.sel})` : ''}: „${it.text}“`); for (const m of it.messages || []) L.push(`  ${m.by}: ${m.text}`); continue; }
@@ -2185,11 +2192,13 @@ function formatDesign(r, root, project, cli) {
       for (const o of it.ops || []) L.push(`  · ${o.desc || o.op}${o.sel ? ` [${o.sel}]` : ''}`);
       if ((it.elements || []).length) L.push(`  · Elemente (x,y Breite×Höhe in px): ${it.elements.map((e) => `${e.type === 'kit' ? `Baustein „${e.name || e.kit}“ (Vorlage ${e.kit})` : e.type}${e.text ? ` „${e.text.replace(/\n/g, ' / ')}“` : ''} ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.w)}×${Math.round(e.h)}${e.color ? ' ' + e.color : ''}`).join('; ')}`);
       if (it.image) L.push(`  · Skizze als Bild: ${DESIGN_DIR}/${it.image}${it.strokes ? ` (${it.strokes} Striche${(it.texts || []).length ? `, Beschriftung: ${it.texts.map((t) => `„${t}“`).join(', ')}` : ''})` : ''} – ansehen!`);
-      if (it.html) L.push(`  · Bearbeitete Seite (nur <body>): ${DESIGN_DIR}/${it.html}`);
+      if (it.gen) L.push(`  · FERTIG GESTALTET im Portal (von Claude, vom Nutzer abgestimmt): ${DESIGN_DIR}/${it.gen} – das ist die Vorlage, so soll es aussehen${it.html ? '; Feinschliff danach im <body> von ' + DESIGN_DIR + '/' + it.html : ''}`);
+      else if (it.html) L.push(`  · Bearbeitete Seite (nur <body>): ${DESIGN_DIR}/${it.html}`);
     }
   }
-  if (r.status === 'accepted') L.push(`Umsetzen: Vorlage ${doc}/pages/vorschlag/${r.id}/ in den echten Code übertragen und testen. Danach Bildschirme neu aufnehmen (doku screen …), Ordner ${doc}/pages/vorschlag/${r.id}/ löschen, Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
-  else L.push(`Vorschlag: ${(r.items || []).some((it) => !it.screen.startsWith('board:')) ? `betroffene Seite aus ${doc}/pages/<bildschirm>.html nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html kopieren und dort das Aussehen ändern (nur HTML/CSS; Pfade dann ../../_css/…, ../../_files/…; eigene Stile in <style>). ` : ''}${(r.items || []).some((it) => it.screen.startsWith('board:')) ? `Für Skizzen neue Seiten ${doc}/pages/vorschlag/${r.id}/<name>.html anlegen (vollständiges HTML mit <style>, Kopfzeile <meta name="doku-page" content='{"width":…,"height":…,"title":"…"}'>). ` : ''}Noch NICHT den echten Code ändern. Dann: node ${cli} design propose ${r.id} "was der Vorschlag ändert"`);
+  if (r.status === 'accepted' && r.direct) L.push(`Umsetzen: Der Nutzer hat das Design im Portal fertig gestaltet und direkt freigegeben – kein Vorschlag nötig. Die gestalteten Seiten (${DESIGN_DIR}/*-gen.html) in den echten Code übertragen (vorhandene Komponenten, Routen und Stile der App nutzen, neue Seiten an der genannten Stelle anbinden) und testen. Danach Bildschirme neu aufnehmen (doku screen …), Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
+  else if (r.status === 'accepted') L.push(`Umsetzen: Vorlage ${doc}/pages/vorschlag/${r.id}/ in den echten Code übertragen und testen. Danach Bildschirme neu aufnehmen (doku screen …), Ordner ${doc}/pages/vorschlag/${r.id}/ löschen, Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
+  else L.push(`Vorschlag: ${(r.items || []).some((it) => it.gen) ? `Für Seiten mit „FERTIG GESTALTET“ die Datei ${DESIGN_DIR}/<id>-gen.html als Vorschlag übernehmen (nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html, Pfade ../../_css/… anpassen). ` : ''}${(r.items || []).some((it) => !it.screen.startsWith('board:')) ? `betroffene Seite aus ${doc}/pages/<bildschirm>.html nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html kopieren und dort das Aussehen ändern (nur HTML/CSS; Pfade dann ../../_css/…, ../../_files/…; eigene Stile in <style>). ` : ''}${(r.items || []).some((it) => it.screen.startsWith('board:')) ? `Für Skizzen neue Seiten ${doc}/pages/vorschlag/${r.id}/<name>.html anlegen (vollständiges HTML mit <style>, Kopfzeile <meta name="doku-page" content='{"width":…,"height":…,"title":"…"}'>). ` : ''}Noch NICHT den echten Code ändern. Dann: node ${cli} design propose ${r.id} "was der Vorschlag ändert"`);
   return L.join('\n');
 }
 async function designCommand(root, project, pos, flags, cli) {

@@ -57,6 +57,7 @@ Im Portal kommentiert der Nutzer Elemente der echten Seiten, zeichnet mit Stift/
 1. **Vorschlag bauen** (Status „Vorschlag bauen“/„nachbessern“): betroffene Seite `pages/<bildschirm>.html` nach `pages/vorschlag/<id>/<bildschirm>.html` kopieren und dort nur Aussehen ändern (HTML/CSS; Pfade `../../_css/…`); für Skizzen neue Seiten in `pages/vorschlag/<id>/` anlegen. Den echten Code noch **nicht** ändern. Dann `node .claude/doku/doku.mjs design propose <id> "was der Vorschlag ändert"`, committen.
 2. Der Nutzer vergleicht im Portal Original und Vorschlag und bestätigt (oder bessert nach).
 3. **Bestätigt**: Vorschlag in den echten Code übertragen, testen, Bildschirme neu aufnehmen, `pages/vorschlag/<id>/` löschen, Doku anpassen, `node .claude/doku/doku.mjs design done <id> "Notiz"`.
+**Im Portal gestaltet** („FERTIG GESTALTET“, `.claude/doku/design/<id>-gen.html`): Das ist die abgestimmte Vorlage. Steht „direkt freigegeben“ dabei, entfällt der Vorschlag: gleich wie Schritt 3 umsetzen. Neue Seiten dort anbinden, wo „erreichbar von … über …“ steht (Route, Menüpunkt, Knopf), vorhandene Komponenten und Stile der App nutzen.
 Wie To-dos: erst mit dem Nutzer klären, ob es jetzt dran ist.
 
 ## Regeln vom Nutzer (verbindlich)
