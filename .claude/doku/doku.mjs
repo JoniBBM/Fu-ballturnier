@@ -955,7 +955,9 @@ export function analyzeCode(root, project) {
     const a = text ? analyzeText(f, text, lang) : { imports: [], libs: [], symbols: [], routes: [], calls: [], tables: [], env: [], defines: [], mounts: [], pages: [] };
     languages[lang] ||= { files: 0, lines: 0 }; languages[lang].files++; languages[lang].lines += lines; totalLines += lines;
     const owner = ownerOf(project, f);
-    return { path: f, lang, lines, component: owner ? owner.id : null, note: notes.get(f) || '', ...a, imports: resolveImports(f, lang, a.imports, fileSet, pyIndex) };
+    // files: darf kurze Namen relativ zum path des Bausteins enthalten (admin.html statt server/public/admin.html)
+    const short = !notes.has(f) && owner ? (owner.files || []).find((fn) => !fn.dir && fn.note && f.endsWith('/' + fn.path.replace(/^\.\//, '').replace(/^\/+/, ''))) : null;
+    return { path: f, lang, lines, component: owner ? owner.id : null, note: notes.get(f) || (short ? short.note : ''), ...a, imports: resolveImports(f, lang, a.imports, fileSet, pyIndex) };
   });
   // Routen-Präfixe aus app.use('/x', router) auf die Dateien übertragen, die den Router exportieren
   const mounts = new Map();
