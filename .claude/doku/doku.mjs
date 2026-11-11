@@ -2197,7 +2197,7 @@ function formatDesign(r, root, project, cli) {
         continue;
       }
       if (it.kind === 'comment') { L.push(`- ${key === '_plan' ? 'Wunsch' : `Kommentar an ${it.target ? it.target.label : 'Stelle'}${it.target && it.target.sel ? ` (${it.target.sel})` : ''}`}: „${it.text}“`); for (const m of it.messages || []) L.push(`  ${m.by}: ${m.text}`); continue; }
-      L.push(`- Variante ${it.variant}${it.text ? `: ${it.text}` : ''}`);
+      L.push(`- Variante ${it.variant}${it.text ? `: ${it.text}` : ''}${it.style && it.style !== 'app' ? ` [Stil: ${{ standard: 'Standard (macOS/GNOME)', apple: 'macOS/iOS', gnome: 'GNOME', material: 'Android Material 3', fluent: 'Windows Fluent' }[it.style] || `wie App ${it.style.replace(/^app:/, '')}`}${it.styleNote ? ` – ${it.styleNote}` : ''}]` : it.styleNote ? ` [Stil-Wunsch: ${it.styleNote}]` : ''}`);
       for (const o of it.ops || []) L.push(`  · ${o.desc || o.op}${o.sel ? ` [${o.sel}]` : ''}`);
       if ((it.elements || []).length) L.push(`  · Elemente (x,y Breite×Höhe in px): ${it.elements.map((e) => `${e.type === 'kit' ? `Baustein „${e.name || e.kit}“ (Vorlage ${e.kit})` : e.type === 'cover' ? 'ENTFERNEN (Bereich abgedeckt)' : e.type}${e.text ? ` „${e.text.replace(/\n/g, ' / ')}“` : ''} ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.w)}×${Math.round(e.h)}${e.color ? ' ' + e.color : ''}`).join('; ')}`);
       if (it.image) L.push(`  · Skizze als Bild: ${DESIGN_DIR}/${it.image}${it.strokes ? ` (${it.strokes} Striche${(it.texts || []).length ? `, Beschriftung: ${it.texts.map((t) => `„${t}“`).join(', ')}` : ''})` : ''} – ansehen!`);
