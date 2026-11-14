@@ -2185,7 +2185,7 @@ function formatDesign(r, root, project, cli) {
     if (key.startsWith('board:')) {
       const b = (r.boards || []).find((x) => 'board:' + x.id === key) || {};
       const from = b.from && project.screens.find((x) => x.id === b.from.screen);
-      L.push(`Neue Seite „${b.title || key}“ (${FRAME_NAMES[b.frame] || b.frame || ''} ${b.w || ''}×${b.h || ''})${b.from ? ` – erreichbar von Bildschirm ${b.from.screen}${from && from.url ? ` (${from.url})` : ''}${b.from.via ? ` über ${b.from.via}` : ''}` : ''}:`);
+      L.push(`${b.replaces ? `NEUGESTALTUNG von Bildschirm ${b.replaces} – ersetzt ihn (altes Design: ${doc}/pages/${b.replaces}.html, Inhalte und Funktionen übernehmen): ` : ''}Neue Seite „${b.title || key}“ (${FRAME_NAMES[b.frame] || b.frame || ''} ${b.w || ''}×${b.h || ''})${b.from ? ` – erreichbar von Bildschirm ${b.from.screen}${from && from.url ? ` (${from.url})` : ''}${b.from.via ? ` über ${b.from.via}` : ''}` : ''}:`);
       if (b.desc) L.push(`  Beschreibung: ${b.desc.replace(/\n+/g, ' ')}`);
     }
     else if (key === '_plan') L.push('Seitenplan (neue Seiten und Verknüpfungen, die es geben soll):');
