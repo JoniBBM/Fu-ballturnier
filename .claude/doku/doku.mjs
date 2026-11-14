@@ -33,6 +33,7 @@ export const STANDARDS = [
   { n: 10, date: '2026-11-10', text: 'Im Portal gestaltete Seiten: doku design zeigt sie als FERTIG GESTALTET (.claude/doku/design/<id>-gen.html) – das ist die Vorlage. „Direkt freigegeben“ heißt: ohne Vorschlag gleich im Code umsetzen; neue Seiten dort anbinden, wo „erreichbar von … über …“ steht.' },
   { n: 11, date: '2026-11-10', text: 'Seitenplan aus dem Portal: doku design zeigt VERKNÜPFUNG (auf der Seite einen Knopf/Link zur Zielseite einbauen bzw. vorhandenen nutzen), Seitenplan-Wünsche (neue Seiten) und ENTFERNEN/ausgeblendet (Element soll weg).' },
   { n: 12, date: '2026-11-14', text: 'Popups und Dialoge: doku screen öffnet jetzt auch Fenster, die ein gewöhnlicher Knopf öffnet, und nimmt sie als Zustände auf (nie Knöpfe wie Löschen/Senden/Abmelden). Alle Bildschirme einmal neu aufnehmen; was fehlt, mit --state "css | Name" ergänzen – Wünsche dazu kommen als To-do aus dem Portal. In Vorschlägen Popups als versteckte <dialog>/role=dialog mit data-target am Knopf einbauen, im Code als echte Dialoge.' },
+  { n: 13, date: '2026-11-14', text: 'Popups wie in echt: doku screen merkt sich jetzt Modal-Dialoge und die Fensterhöhe, damit Popups im Portal über dem sichtbaren Bereich liegen statt unter der Seite. Bildschirme mit Popups noch einmal aufnehmen (doku screen <id> --url …).' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
@@ -1132,8 +1133,8 @@ export function readPageMeta(root, rel) {
   if (m) { try { meta = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')); } catch { /* egal */ } }
   const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(20000, Math.round(Number(v))) : d);
   const t = head.match(/<title[^>]*>([^<]{0,200})<\/title>/i);
-  const state = meta.state && typeof meta.state === 'object' ? { trigger: String(meta.state.trigger || '').slice(0, 400), label: String(meta.state.label || '').slice(0, 120) } : null;
-  return { file: rel, width: num(meta.width, 1280), height: num(meta.height, 800), shot: num(meta.shot, 0), url: String(meta.url || '').slice(0, 300), at: String(meta.at || '').slice(0, 40), title: (meta.title || (t ? t[1] : '') || '').trim().slice(0, 200), ...(state ? { state } : {}) };
+  const state = meta.state && typeof meta.state === 'object' ? { trigger: String(meta.state.trigger || '').slice(0, 400), label: String(meta.state.label || '').slice(0, 120), ...(meta.state.overlay ? { overlay: true } : {}) } : null;
+  return { file: rel, width: num(meta.width, 1280), height: num(meta.height, 800), ...(num(meta.vh, 0) ? { vh: num(meta.vh, 0) } : {}), shot: num(meta.shot, 0), url: String(meta.url || '').slice(0, 300), at: String(meta.at || '').slice(0, 40), title: (meta.title || (t ? t[1] : '') || '').trim().slice(0, 200), ...(state ? { state } : {}) };
 }
 /** Design-Vorlage (pages/_kit.html): Bausteine der App mit Namen, Gruppe und Vorschaubild. */
 export function readKit(root, docDir) {
@@ -1391,7 +1392,8 @@ const SNAPSHOT = (canvasShots) => {
     }
     if (tag === 'TEXTAREA') c.textContent = o.value;
     if (tag === 'OPTION') { if (o.selected) c.setAttribute('selected', ''); else c.removeAttribute('selected'); }
-    if (tag === 'DIALOG' && o.open) c.setAttribute('open', '');
+    if (tag === 'DIALOG' && o.open) { c.setAttribute('open', ''); try { if (o.matches(':modal')) c.setAttribute('data-doku-modal', ''); } catch { /* alter Browser */ } }
+    try { if (o.hasAttribute('popover') && o.matches(':popover-open')) c.setAttribute('data-doku-popover', ''); } catch { /* alter Browser */ }
     if (tag === 'DETAILS' && o.open) c.setAttribute('open', '');
   }
   const sheets = [];
@@ -1401,7 +1403,7 @@ const SNAPSHOT = (canvasShots) => {
     try { text = [...sh.cssRules].map((r) => r.cssText).join('\n'); } catch { /* andere Domain: lädt Node */ }
     sheets.push({ href: sh.href || null, text, media: sh.media && sh.media.mediaText && sh.media.mediaText !== 'all' ? sh.media.mediaText : '' });
   }
-  return { html: clone.outerHTML, urls, sheets, base: document.baseURI, width: innerWidth, height: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0), title: document.title };
+  return { html: clone.outerHTML, urls, sheets, base: document.baseURI, width: innerWidth, vh: innerHeight, height: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0), title: document.title };
 };
 const FILE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'font/woff2': 'woff2', 'font/woff': 'woff', 'application/font-woff': 'woff', 'font/ttf': 'ttf', 'font/otf': 'otf', 'application/x-font-ttf': 'ttf' };
 const attrEsc = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1468,7 +1470,7 @@ export async function capturePage(page, { root, docDir, id, url, shot = 0, outRe
   const depth = outRel ? outRel.split('/').length - 1 : 0;
   const up = '../'.repeat(depth);
   let html = snap.html.replace(/doku-asset:(\d+)/g, (m, i) => (rels[Number(i)] ? up + rels[Number(i)] : '')).replace(/doku-file:(_files\/[\w.]+)/g, (m, f) => up + f);
-  const meta = { url, width: snap.width, height: snap.height, shot, at: new Date().toISOString(), title: snap.title, ...(extra || {}) };
+  const meta = { url, width: snap.width, height: snap.height, vh: snap.vh, shot, at: new Date().toISOString(), title: snap.title, ...(extra || {}) };
   const head = `<meta charset="utf-8">\n<meta name="doku-page" content="${attrEsc(JSON.stringify(meta))}">\n${links.map((l) => l.replace('href="', `href="${up}`)).join('\n')}\n`;
   html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}\n${head}`) : head + html;
   html = `<!doctype html>\n<!-- doku: Kopie von ${url.replace(/--/g, '')} – nur Aussehen, ohne Skripte und Backend. Neu aufnehmen: doku screen ${id} -->\n${html}`;
@@ -1548,7 +1550,8 @@ async function captureStates(page, { root, docDir, id, url, flags, reopen }) {
       if (!t.explicit && !opened(before, after, t)) continue;
       if (t.popup && ++popups > 10) continue;
       k++;
-      const r = await capturePage(pg, { root, docDir, id, url, outRel: `${id}.s${k}.html`, extra: { state: { trigger: t.sel, label: t.label } } });
+      const overlay = Boolean(t.popup || after.dlg > before.dlg || after.fix > before.fix);   // Fenster über der Seite (nicht nur aufgeklappt)
+      const r = await capturePage(pg, { root, docDir, id, url, outRel: `${id}.s${k}.html`, extra: { state: { trigger: t.sel, label: t.label, ...(overlay ? { overlay: true } : {}) } } });
       if (r) out.push({ key: `${id}.s${k}`, label: t.label });
     } catch (e) { if (t.explicit) console.error(`Zustand „${t.label}“ (${t.sel}): ${e.message.split('\n')[0]}`); }
     finally { if (pg && pg !== page) await pg.context().close().catch(() => {}); }
