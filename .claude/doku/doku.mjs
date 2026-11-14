@@ -32,6 +32,7 @@ export const STANDARDS = [
   { n: 9, date: '2026-11-08', text: 'Offene Menüs und Zustände: doku screen nimmt aufklappbare Menüs, Reiter und Aufklapper jetzt mit auf (pages/<id>.s<n>.html); Dialoge, die nur ein Knopf öffnet, mit --state "css | Name" ergänzen. Danach die Design-Vorlage erzeugen: doku kit (Knöpfe, Felder, Karten … der App als Palette im Editor).' },
   { n: 10, date: '2026-11-10', text: 'Im Portal gestaltete Seiten: doku design zeigt sie als FERTIG GESTALTET (.claude/doku/design/<id>-gen.html) – das ist die Vorlage. „Direkt freigegeben“ heißt: ohne Vorschlag gleich im Code umsetzen; neue Seiten dort anbinden, wo „erreichbar von … über …“ steht.' },
   { n: 11, date: '2026-11-10', text: 'Seitenplan aus dem Portal: doku design zeigt VERKNÜPFUNG (auf der Seite einen Knopf/Link zur Zielseite einbauen bzw. vorhandenen nutzen), Seitenplan-Wünsche (neue Seiten) und ENTFERNEN/ausgeblendet (Element soll weg).' },
+  { n: 12, date: '2026-11-14', text: 'Popups und Dialoge: doku screen öffnet jetzt auch Fenster, die ein gewöhnlicher Knopf öffnet, und nimmt sie als Zustände auf (nie Knöpfe wie Löschen/Senden/Abmelden). Alle Bildschirme einmal neu aufnehmen; was fehlt, mit --state "css | Name" ergänzen – Wünsche dazu kommen als To-do aus dem Portal. In Vorschlägen Popups als versteckte <dialog>/role=dialog mit data-target am Knopf einbauen, im Code als echte Dialoge.' },
 ];
 export const STANDARD = STANDARDS[STANDARDS.length - 1].n;
 const CHANGE_FIELDS = new Set(['id', 'title', 'status', 'date', 'affects', 'risk', 'requested', 'implemented', 'commits', 'tags', 'summary', 'kind']);
@@ -1495,17 +1496,45 @@ const TRIGGER_JS = `(() => {
   }
   return out;
 })()`;
+// Knöpfe, die vielleicht ein Popup/Dialog öffnen – nie solche, die etwas auslösen (löschen, senden, bezahlen, abmelden, Formular absenden)
+const POPUP_JS = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 3 && r.height > 3 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
+  const cssEsc = (x) => (window.CSS && CSS.escape ? CSS.escape(x) : x);
+  const sel = (el) => { const parts = []; for (let e = el; e && e !== document.body && parts.length < 7; e = e.parentElement) {
+    if (e.id && document.querySelectorAll('#' + cssEsc(e.id)).length === 1) { parts.unshift('#' + cssEsc(e.id)); break; }
+    let s = e.tagName.toLowerCase(); const sib = e.parentElement ? [...e.parentElement.children].filter((x) => x.tagName === e.tagName) : [];
+    if (sib.length > 1) s += ':nth-of-type(' + (sib.indexOf(e) + 1) + ')'; parts.unshift(s); } return parts.join(' > '); };
+  const risky = /l(ö|oe)sch|delete|entfern|remove|abmeld|logout|log out|sign ?out|senden|send|speicher|save|kauf|buy|bezahl|pay|bestell|order|submit|absend|best(ä|ae)tig|confirm|reset|zur(ü|ue)cksetz|archiv|ablehn|reject|genehmig|approve|freigeb|widerruf|revoke|sperr|kündig|cancel subscription|upload|hochlad|import|export|download|herunterlad|drucken|print/i;
+  const out = []; const seen = new Set();
+  for (const el of document.querySelectorAll('button, [role=button], a[href="#"], a:not([href])[onclick], [data-bs-toggle=modal], [data-toggle=modal]')) {
+    if (!vis(el) || el.disabled) continue;
+    const t = (el.getAttribute('aria-label') || el.innerText || el.title || '').trim().replace(/\\s+/g, ' ');
+    if (!t || risky.test(t) || risky.test(el.className || '')) continue;
+    if (el.closest('form') && el.tagName === 'BUTTON' && (el.getAttribute('type') || 'submit') === 'submit') continue;
+    const s = sel(el); if (seen.has(s)) continue; seen.add(s);
+    out.push({ sel: s, label: 'Fenster „' + t.slice(0, 40) + '“', popup: true }); if (out.length >= 24) break;
+  }
+  return out;
+})()`;
 const VIS_SIG = () => {
   const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
-  return { n: [...document.body.querySelectorAll('*')].filter(vis).length, pop: [...document.querySelectorAll('[role=menu], [role=listbox], [role=dialog], dialog[open], [role=menuitem], .dropdown-menu, [aria-expanded=true], [role=tabpanel]')].filter(vis).length };
+  const big = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height > 30000; };
+  return { n: [...document.body.querySelectorAll('*')].filter(vis).length, pop: [...document.querySelectorAll('[role=menu], [role=listbox], [role=dialog], dialog[open], [role=menuitem], .dropdown-menu, [aria-expanded=true], [role=tabpanel]')].filter(vis).length,
+    dlg: [...document.querySelectorAll('[role=dialog], [role=alertdialog], dialog[open], [aria-modal=true], .modal.show, .modal.open, .modal.is-open')].filter(vis).length,
+    fix: [...document.body.querySelectorAll('*')].filter((el) => vis(el) && big(el) && ['fixed', 'absolute'].includes(getComputedStyle(el).position) && Number(getComputedStyle(el).zIndex || 0) >= 10).length };
 };
+/** Hat der Klick ein Popup geöffnet (Dialog, Fenster, Überlagerung)? */
+const opened = (b, a, t) => (t.popup ? a.dlg > b.dlg || a.fix > b.fix : a.n - b.n >= 2 || a.pop > b.pop || a.dlg > b.dlg);
 /** Aufklappbare Zustände einer Seite als pages/<id>.s<n>.html aufnehmen. reopen() liefert die Seite frisch im Ausgangszustand. */
 async function captureStates(page, { root, docDir, id, url, flags, reopen }) {
   const pagesDir = path.join(root, docDir, 'pages');
   for (const f of safeReaddir(pagesDir)) if (new RegExp(`^${id.replace(/[.]/g, '\\.')}\\.s\\d{1,2}\\.html$`).test(f)) fs.rmSync(path.join(pagesDir, f), { force: true });
   const explicit = listFlag(flags.state).map((x) => { const [sel, name = ''] = String(x).split(/\s*\|\s*/); return { sel: sel.trim(), label: name.trim() || sel.trim(), explicit: true }; }).filter((x) => x.sel);
   const auto = flags['no-states'] ? [] : await page.evaluate(TRIGGER_JS).catch(() => []);
-  const triggers = explicit.concat(auto.filter((a) => !explicit.some((e) => e.sel === a.sel))).slice(0, 12);
+  const pops = flags['no-states'] || flags['no-popups'] ? [] : await page.evaluate(POPUP_JS).catch(() => []);
+  const known = new Set(explicit.concat(auto).map((x) => x.sel));
+  const triggers = explicit.concat(auto.filter((a) => !explicit.some((e) => e.sel === a.sel))).slice(0, 12).concat(pops.filter((x) => !known.has(x.sel))).slice(0, 30);
+  let popups = 0;
   const out = []; let k = 0;
   for (const t of triggers) {
     let pg = null;
@@ -1516,7 +1545,8 @@ async function captureStates(page, { root, docDir, id, url, flags, reopen }) {
       await pg.waitForTimeout(Number(flags['state-delay']) || 450);
       if (pg.url().split('#')[0] !== u0.split('#')[0] && !t.explicit) continue;   // führt woandershin: kein Zustand
       const after = await pg.evaluate(VIS_SIG);
-      if (!t.explicit && !(after.n - before.n >= 2 || after.pop > before.pop)) continue;
+      if (!t.explicit && !opened(before, after, t)) continue;
+      if (t.popup && ++popups > 10) continue;
       k++;
       const r = await capturePage(pg, { root, docDir, id, url, outRel: `${id}.s${k}.html`, extra: { state: { trigger: t.sel, label: t.label } } });
       if (r) out.push({ key: `${id}.s${k}`, label: t.label });
@@ -1878,7 +1908,7 @@ Design-Wünsche (im Portal kommentiert, skizziert, im Editor geändert):
   doku design propose <id> "Notiz"   Vorschlag liegt in pages/vorschlag/<id>/ bereit
   doku design done <id> "Notiz"      Bestätigtes Design ist im Code umgesetzt
   doku screen <id> --url …       nimmt jetzt auch die Seite als HTML-Kopie auf (pages/<id>.html; --no-html: nur Foto)
-                                 samt offenen Menüs/Reitern (pages/<id>.s<n>.html; --state "css | Name" für Dialoge; --no-states)
+                                 samt offenen Menüs, Reitern und Popups (pages/<id>.s<n>.html; --state "css | Name" für Fehlende; --no-popups; --no-states)
   doku kit                       Design-Vorlage aus den Seiten-Kopien (pages/_kit.html) – Palette im Editor
 
 Optionen: --root <pfad>  --dir <doku-ordner> (Standard docs/doku)`;
@@ -2205,7 +2235,7 @@ function formatDesign(r, root, project, cli) {
       else if (it.html) L.push(`  · Bearbeitete Seite (nur <body>): ${DESIGN_DIR}/${it.html}`);
     }
   }
-  if (r.status === 'accepted' && r.direct) L.push(`Umsetzen: Der Nutzer hat das Design im Portal fertig gestaltet und direkt freigegeben – kein Vorschlag nötig. Die gestalteten Seiten (${DESIGN_DIR}/*-gen.html) in den echten Code übertragen (vorhandene Komponenten, Routen und Stile der App nutzen, neue Seiten an der genannten Stelle anbinden) und testen. Danach Bildschirme neu aufnehmen (doku screen …), Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
+  if (r.status === 'accepted' && r.direct) L.push(`Umsetzen: Der Nutzer hat das Design im Portal fertig gestaltet und direkt freigegeben – kein Vorschlag nötig. Die gestalteten Seiten (${DESIGN_DIR}/*-gen.html) in den echten Code übertragen (vorhandene Komponenten, Routen und Stile der App nutzen, neue Seiten an der genannten Stelle anbinden; versteckte Popups/Dialoge der Vorlage – <dialog>/role=dialog mit data-target am Knopf – als echte Dialoge umsetzen) und testen. Danach Bildschirme neu aufnehmen (doku screen …), Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
   else if (r.status === 'accepted') L.push(`Umsetzen: Vorlage ${doc}/pages/vorschlag/${r.id}/ in den echten Code übertragen und testen. Danach Bildschirme neu aufnehmen (doku screen …), Ordner ${doc}/pages/vorschlag/${r.id}/ löschen, Doku anpassen, dann: node ${cli} design done ${r.id} "was umgesetzt wurde"`);
   else L.push(`Vorschlag: ${(r.items || []).some((it) => it.screen === '_plan') ? `Seitenplan-Wünsche: neue Seiten als ${doc}/pages/vorschlag/${r.id}/<name>.html anlegen und auf den Ausgangsseiten die Knöpfe/Links dorthin einbauen (Kopie nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html). ` : ''}${(r.items || []).some((it) => it.gen) ? `Für Seiten mit „FERTIG GESTALTET“ die Datei ${DESIGN_DIR}/<id>-gen.html als Vorschlag übernehmen (nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html, Pfade ../../_css/… anpassen). ` : ''}${(r.items || []).some((it) => !it.screen.startsWith('board:')) ? `betroffene Seite aus ${doc}/pages/<bildschirm>.html nach ${doc}/pages/vorschlag/${r.id}/<bildschirm>.html kopieren und dort das Aussehen ändern (nur HTML/CSS; Pfade dann ../../_css/…, ../../_files/…; eigene Stile in <style>). ` : ''}${(r.items || []).some((it) => it.screen.startsWith('board:')) ? `Für Skizzen neue Seiten ${doc}/pages/vorschlag/${r.id}/<name>.html anlegen (vollständiges HTML mit <style>, Kopfzeile <meta name="doku-page" content='{"width":…,"height":…,"title":"…"}'>). ` : ''}Noch NICHT den echten Code ändern. Dann: node ${cli} design propose ${r.id} "was der Vorschlag ändert"`);
   return L.join('\n');
